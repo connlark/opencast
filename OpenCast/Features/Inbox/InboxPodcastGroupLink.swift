@@ -8,14 +8,16 @@ import SwiftUI
 struct InboxPodcastGroupLink<Content: View>: View {
     let group: InboxPodcastGroup
     let episodeListOverride: PodcastEpisodeListOverride
+    var selectionStyle: TwoPaneRootSelectionStyle = .listRow
     @ViewBuilder let content: Content
 
     var body: some View {
-        NavigationLink(
-            value: AppRoute.podcastDetail(
+        TwoPaneRootLink(
+            route: .podcastDetail(
                 feedURL: group.subscription.feedURL,
                 episodeListOverride: episodeListOverride
-            )
+            ),
+            selectionStyle: selectionStyle
         ) {
             content
         }

@@ -28,11 +28,11 @@ extension LibraryStore {
         for index in releaseOrder {
             let episode = episodes[index]
             guard let publishedAt = episode.publishedAt,
-                  publishedAt <= releaseDates.upperBound
+                  publishedAt.timeIntervalSinceReferenceDate <= releaseDates.upperBound.timeIntervalSinceReferenceDate
             else {
                 continue
             }
-            guard publishedAt >= releaseDates.lowerBound else {
+            guard publishedAt.timeIntervalSinceReferenceDate >= releaseDates.lowerBound.timeIntervalSinceReferenceDate else {
                 break
             }
             if !progressSummary(for: episode).isCompleted {
@@ -51,7 +51,7 @@ extension LibraryStore {
         return episodeReleaseOrderByPodcastID[podcastID]?
             .lazy
             .compactMap { episodes[$0].publishedAt }
-            .first { $0 <= asOf }
+            .first { $0.timeIntervalSinceReferenceDate <= asOf.timeIntervalSinceReferenceDate }
     }
 
     /// The show's newest cached episode released by `asOf`; nil when it has
@@ -61,7 +61,7 @@ extension LibraryStore {
         return episodeReleaseOrderByPodcastID[podcastID]?
             .lazy
             .map { episodes[$0] }
-            .first { ($0.publishedAt ?? .distantFuture) <= asOf }
+            .first { ($0.publishedAt ?? .distantFuture).timeIntervalSinceReferenceDate <= asOf.timeIntervalSinceReferenceDate }
     }
 
     /// The show's cached episodes released after `publishedAfter` and by
@@ -76,7 +76,9 @@ extension LibraryStore {
         var released: [EpisodeListItemSnapshot] = []
         for index in episodeReleaseOrderByPodcastID[podcastID] ?? [] {
             let episode = episodes[index]
-            guard let publishedAt = episode.publishedAt, publishedAt <= asOf else {
+            guard let publishedAt = episode.publishedAt,
+                  publishedAt.timeIntervalSinceReferenceDate <= asOf.timeIntervalSinceReferenceDate
+            else {
                 continue
             }
             guard publishedAt > publishedAfter else {

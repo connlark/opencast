@@ -13,7 +13,8 @@ struct NowPlayingSoundLabActionRow: View {
     let phase: EpisodeAdFreePassPresentationPhase
     let isEnabled: Bool
     let isIconOnly: Bool
-    let rowHeight: CGFloat
+    /// Nil fits the row to its label, which then wraps instead of truncating.
+    let rowHeight: CGFloat?
     let accessibilityValueText: String
     let accessibilityID: String
     let action: () -> Void
@@ -29,7 +30,7 @@ struct NowPlayingSoundLabActionRow: View {
                 if !isIconOnly {
                     Text(title)
                         .font(.subheadline)
-                        .lineLimit(1)
+                        .lineLimit(rowHeight == nil ? nil : 1)
                         .layoutPriority(1)
                         .contentTransition(.opacity)
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: title)

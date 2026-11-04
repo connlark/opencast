@@ -191,7 +191,7 @@ final class LargeFeedDeviceUITests: XCTestCase {
         XCTAssertTrue(viewDetails.waitForExistence(timeout: 5))
         viewDetails.tap()
         XCTAssertTrue(app.buttons["Episode Actions"].waitForExistence(timeout: 15))
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tapBackButton(in: app)
 
         // Bring the lazy header back into consideration before waiting. A
         // nonexistence check while it remains recycled would pass even if the

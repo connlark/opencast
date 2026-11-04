@@ -81,7 +81,8 @@ public struct DirectoryFeedCandidateResolver: Sendable {
         guard let primaryNewest = primary.newestEpisodeDate else {
             return true
         }
-        return alternateNewest >= primaryNewest.addingTimeInterval(-stalenessTolerance)
+        return alternateNewest.timeIntervalSinceReferenceDate
+            >= primaryNewest.addingTimeInterval(-stalenessTolerance).timeIntervalSinceReferenceDate
     }
 
     private func hasConflictingGUID(

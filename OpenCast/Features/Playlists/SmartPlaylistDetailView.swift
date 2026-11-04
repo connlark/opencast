@@ -79,7 +79,7 @@ struct SmartPlaylistDetailView: View {
         .background(alignment: .top) {
             PlaylistTintGlowBackground(tint: (summary.tint ?? .blue).color)
         }
-        .contentMargins(.bottom, 72, for: .scrollContent)
+        .tabAccessoryBottomClearance()
         .animation(listAnimation, value: visibleEpisodes.map(\.episodeID))
         .navigationTitle(summary.name)
         .navigationBarTitleDisplayMode(.inline)

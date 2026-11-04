@@ -598,7 +598,7 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
             // trailing tab-bar element beside the main group. A tap on a
             // scroll-minimized bar only un-minimizes it, so arrival must be
             // verified — a pushed detail similarly needs a second tap to pop.
-            let tabButton = app.tabBars.buttons[title].firstMatch
+            let tabButton = sectionItem(title, in: app).firstMatch
             if tabButton.waitForExistence(timeout: 5), tabButton.isHittable {
                 tabButton.tap()
             } else {
@@ -627,14 +627,14 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
     /// the iPad keeps a selected top-bar Search button.
     @MainActor
     private func hasArrived(at title: String, in app: XCUIApplication) -> Bool {
-        if app.navigationBars[title].exists {
+        if waitForScreen(title, in: app, timeout: 0) {
             return true
         }
         if title == "Search" {
             if app.searchFields.firstMatch.exists {
                 return true
             }
-            let tabButton = app.tabBars.buttons[title].firstMatch
+            let tabButton = sectionItem(title, in: app).firstMatch
             if app.tabBars.firstMatch.exists, !tabButton.exists {
                 return true
             }
@@ -762,7 +762,7 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         // Coordinate tap: the glass toolbar button's AX frame can miss the
         // real hit target on device, making element taps silent no-ops.
         let candidates = [
-            app.navigationBars["Library"].buttons["Add"].firstMatch,
+            toolbarButton("Add", in: "Library", of: app).firstMatch,
             app.navigationBars["opencast"].buttons["Add"].firstMatch,
             app.buttons["Add"].firstMatch
         ]
@@ -1117,9 +1117,7 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
                 pause.tap()
             }
             // Drag the card down to return to the tab UI.
-            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.24))
-            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.74))
-            start.press(forDuration: 0.05, thenDragTo: end)
+            dragNowPlayingCard(overlay, travelling: 0.50)
             _ = app.buttons["Open Now Playing"].waitForExistence(timeout: 8)
             didPlay = true
             break
@@ -1141,7 +1139,7 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         XCTAssertTrue(deleteDataRow.waitForExistence(timeout: 10), "Delete Data row should exist")
         walkClearOfBottomAccessories(deleteDataRow, in: app)
         deleteDataRow.tap()
-        XCTAssertTrue(app.navigationBars["Delete Data"].waitForExistence(timeout: 10), "Delete Data screen should push")
+        XCTAssertTrue(waitForScreen("Delete Data", in: app, timeout: 10), "Delete Data screen should push")
 
         let clearButton = app.buttons["Clear History for Unfollowed Shows"].firstMatch
         XCTAssertTrue(clearButton.waitForExistence(timeout: 10), "manual clear action should exist")
@@ -1165,9 +1163,7 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         guard overlay.exists else {
             return
         }
-        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.24))
-        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.74))
-        start.press(forDuration: 0.05, thenDragTo: end)
+        dragNowPlayingCard(overlay, travelling: 0.50)
         _ = app.buttons["Open Now Playing"].waitForExistence(timeout: 8)
     }
 
@@ -1197,8 +1193,8 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
     @MainActor
     private func openSettingsHub(in app: XCUIApplication) {
         openTab("Settings", in: app)
-        if !app.navigationBars["Settings"].waitForExistence(timeout: 2) {
-            let settingsTab = app.tabBars.buttons["Settings"].firstMatch
+        if !waitForScreen("Settings", in: app, timeout: 2) {
+            let settingsTab = sectionItem("Settings", in: app).firstMatch
             if settingsTab.exists, settingsTab.isHittable {
                 settingsTab.tap()
             }
@@ -1219,7 +1215,7 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         walkClearOfBottomAccessories(diagnosticsLink, in: app)
         diagnosticsLink.tap()
         XCTAssertTrue(
-            app.navigationBars["Diagnostics"].waitForExistence(timeout: 10),
+            waitForScreen("Diagnostics", in: app, timeout: 10),
             "Diagnostics screen should push"
         )
     }

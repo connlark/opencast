@@ -26,8 +26,9 @@ struct InboxPodcastGroupGrid<Header: View>: View {
         // already has its final column count.
         GeometryReader { proxy in
             let metrics = LibraryGridMetrics.resolve(
-                containerWidth: proxy.size.width,
-                isCompact: horizontalSizeClass == .compact || verticalSizeClass == .compact,
+                in: proxy,
+                horizontalSizeClass: horizontalSizeClass,
+                verticalSizeClass: verticalSizeClass,
                 isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
             )
 
@@ -37,7 +38,11 @@ struct InboxPodcastGroupGrid<Header: View>: View {
 
                     LazyVGrid(columns: metrics.columns, spacing: metrics.rowSpacing) {
                         ForEach(groups) { group in
-                            InboxPodcastGroupLink(group: group, episodeListOverride: episodeListOverride) {
+                            InboxPodcastGroupLink(
+                                group: group,
+                                episodeListOverride: episodeListOverride,
+                                selectionStyle: .tile
+                            ) {
                                 SubscriptionTileView(
                                     subscription: group.subscription,
                                     metrics: metrics,
@@ -47,12 +52,13 @@ struct InboxPodcastGroupGrid<Header: View>: View {
                             .buttonStyle(.plain)
                         }
                     }
+                    .libraryGridPlacement(metrics)
                     .padding(.vertical, 8)
                 }
             }
             .accessibilityIdentifier("Inbox Podcast Grid")
             .contentMargins(.horizontal, metrics.horizontalMargin, for: .scrollContent)
-            .contentMargins(.bottom, 72, for: .scrollContent)
+            .tabAccessoryBottomClearance(rowSpacing: metrics.rowSpacing)
         }
     }
 }

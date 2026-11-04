@@ -368,7 +368,7 @@ final class NotificationSecurityUITests: XCTestCase {
     @MainActor
     private func tapAddPodcastButton(in app: XCUIApplication) {
         let addButtons = [
-            app.navigationBars["Library"].buttons["Add"],
+            toolbarButton("Add", in: "Library", of: app),
             app.navigationBars["opencast"].buttons["Add"],
             app.buttons["Add"].firstMatch
         ]

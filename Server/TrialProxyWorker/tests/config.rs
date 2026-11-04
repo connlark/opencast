@@ -301,7 +301,7 @@ fn failures(kind: Kind, sections: &Sections) -> Vec<String> {
             AlertLane::Production,
             "production",
             50_000_000,
-            300,
+            900,
             8_000_000,
         ),
     ];

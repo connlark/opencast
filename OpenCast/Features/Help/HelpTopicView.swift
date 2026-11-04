@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct HelpTopicView: View {
+    /// Between the topic's blocks, and above the tab accessory at the end.
+    nonisolated static let blockSpacing = 20.0
+
     @Environment(OpenCastAppModel.self) private var appModel
 
     let topicID: String
@@ -14,12 +17,12 @@ struct HelpTopicView: View {
                 missingTopic
             }
         }
-        .settingsSubscreen(title: topic?.title ?? "Help")
+        .settingsSubscreen(title: topic?.title ?? "Help", rowSpacing: Self.blockSpacing)
     }
 
     private func topicContent(_ topic: HelpTopic) -> some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 20) {
+            LazyVStack(alignment: .leading, spacing: Self.blockSpacing) {
                 HelpTopicHeaderView(topic: topic)
 
                 ForEach(topic.identifiedBlocks) { block in

@@ -6,6 +6,7 @@ import SwiftUI
 /// mini player then takes over.
 struct UpNextAccessoryView: View {
     @Environment(OpenCastAppModel.self) private var appModel
+    @Environment(TabAccessoryGeometryStore.self) private var accessoryStore: TabAccessoryGeometryStore?
     @Environment(\.modelContext) private var modelContext
     @Environment(\.tabViewBottomAccessoryPlacement) private var tabAccessoryPlacement
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -17,20 +18,25 @@ struct UpNextAccessoryView: View {
     var body: some View {
         if let episode = appModel.upNextAccessoryEpisode {
             let queuedCount = appModel.upNextQueue.items.count
-            HStack(spacing: isInline ? 4 : 8) {
+            let isDense = TabAccessoryRow(geometry: accessoryGeometry, isInline: isInline) == .dense
+            // Nothing is playing, so there is no scrubber: the wide row is the
+            // standard row, its spare width going to the title.
+            let metrics = isDense ? TabAccessoryRow.dense.metrics : TabAccessoryRow.standard.metrics
+            HStack(spacing: isInline ? 4 : metrics.controlSpacing) {
                 Button(action: onOpenQueue) {
-                    HStack(spacing: 10) {
+                    HStack(spacing: isInline ? 10 : metrics.artworkTitleSpacing) {
                         ArtworkPlaceholder(
                             title: episode.podcastTitle,
                             imageURL: episode.artworkURL,
-                            size: isInline ? 30 : 38,
+                            size: isInline ? 30 : metrics.artworkSide,
                             cacheKind: .episode
                         )
                         .accessibilityHidden(true)
 
                         MiniPlayerMetadataView(
                             title: episode.title,
-                            podcastTitle: UpNextAccessoryText.subtitle(queuedCount: queuedCount)
+                            podcastTitle: UpNextAccessoryText.subtitle(queuedCount: queuedCount),
+                            showsSecondaryLine: !isDense
                         )
                     }
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -52,17 +58,27 @@ struct UpNextAccessoryView: View {
                 .buttonStyle(.plain)
                 .accessibilityInputLabels(["Play Up Next", "Play"])
             }
-            .padding(.horizontal, isInline ? 8 : 12)
-            .padding(.vertical, isInline ? 0 : 6)
+            .padding(.horizontal, isInline ? 8 : metrics.horizontalPadding)
+            .padding(.vertical, isInline ? 0 : metrics.verticalPadding)
             .sensoryFeedback(.impact(flexibility: .soft), trigger: playFeedback)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier(isInline ? "up-next-accessory-inline" : "up-next-accessory-expanded")
             .accessibilityHidden(appModel.isNowPlayingPresented)
+            .onChange(of: accessoryGeometry, initial: true) { _, geometry in
+                TabAccessoryRow.log(accessory: "up-next", geometry: geometry, isInline: isInline)
+            }
+            .tabAccessoryRowContainer()
         }
     }
 
     private var isInline: Bool {
         tabAccessoryPlacement == .inline
+    }
+
+    /// The accessory's own measured geometry, published by the tab root;
+    /// absent outside the tab view.
+    private var accessoryGeometry: TabAccessoryGeometry {
+        accessoryStore?.geometry ?? .absent
     }
 
     private func playUpNext() {

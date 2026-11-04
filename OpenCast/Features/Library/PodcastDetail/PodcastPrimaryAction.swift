@@ -35,7 +35,8 @@ enum PodcastPrimaryAction: Equatable {
                 continue
             }
 
-            if let resumeUpdatedAt, record.updatedAt <= resumeUpdatedAt {
+            if let resumeUpdatedAt,
+               record.updatedAt.timeIntervalSinceReferenceDate <= resumeUpdatedAt.timeIntervalSinceReferenceDate {
                 continue
             }
             resumeEpisode = episode

@@ -5,8 +5,14 @@ import SwiftData
 import SwiftUI
 
 struct EpisodeDetailView: View {
+    /// Between the page's sections, and above the tab accessory at the end.
+    nonisolated static let contentSpacing = 24.0
+
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
+    /// Set when this page is a two-pane split's detail root, where `dismiss`
+    /// cannot remove it.
+    @Environment(\.twoPaneRootClose) private var rootClose
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -32,6 +38,16 @@ struct EpisodeDetailView: View {
         appModel.episodeSnapshot(for: episodeID)
     }
 
+    /// A pushed page pops; a two-pane split's detail root clears its
+    /// section's path, since `dismiss` cannot remove a stack's root.
+    private func goBack() {
+        if let rootClose, rootClose.route == .episodeDetail(id: episodeID) {
+            rootClose.close()
+        } else {
+            dismiss()
+        }
+    }
+
     var body: some View {
         let episode = episode
         let progressSummary = episode.map { appModel.library.progressSummary(for: $0) }
@@ -51,7 +67,7 @@ struct EpisodeDetailView: View {
                 ContentUnavailableView {
                     Label("Episode Not Found", systemImage: "questionmark.circle")
                 } actions: {
-                    Button("Go Back", systemImage: "chevron.backward", action: dismiss.callAsFunction)
+                    Button("Go Back", systemImage: "chevron.backward", action: goBack)
                 }
             }
         }
@@ -197,7 +213,7 @@ struct EpisodeDetailView: View {
         )
 
         return ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: Self.contentSpacing) {
                 EpisodeHeroHeaderView(
                     episode: episode,
                     chips: chips,
@@ -340,7 +356,7 @@ struct EpisodeDetailView: View {
         .background(alignment: .top) {
             EpisodeArtworkGlowBackground(preview: episode.artworkPreview)
         }
-        .contentMargins(.bottom, 72, for: .scrollContent)
+        .tabAccessoryBottomClearance(rowSpacing: Self.contentSpacing)
     }
 
     private func openPlaylists(for episode: EpisodeListItemSnapshot) {

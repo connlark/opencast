@@ -6,6 +6,7 @@ struct InboxView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.modelContext) private var modelContext
+    @Environment(SceneLibraryLayouts.self) private var sceneLibraryLayouts: SceneLibraryLayouts?
     @State private var visibleEpisodeCount = EpisodeCatalogContinuation.pageSize
 
     let onAdd: () -> Void
@@ -13,7 +14,10 @@ struct InboxView: View {
     var onOpenAdDetectionQueue: () -> Void = {}
 
     private var groupedLayout: LibraryLayout {
-        appModel.inboxEpisodeListSettings.groupedLayout.resolved(isRegularWidth: horizontalSizeClass == .regular)
+        let preference = appModel.inboxEpisodeListSettings.groupedLayout
+        let isRegularWidth = horizontalSizeClass == .regular
+        return sceneLibraryLayouts?.layout(of: .inboxGroups, for: preference, isRegularWidth: isRegularWidth)
+            ?? preference.resolved(isRegularWidth: isRegularWidth)
     }
 
     var body: some View {
@@ -87,6 +91,9 @@ struct InboxView: View {
         .refreshable {
             await appModel.library.refreshAll(modelContext: modelContext)
         }
+        .onChange(of: appModel.inboxEpisodeListSettings.groupedLayout, initial: true) { _, preference in
+            sceneLibraryLayouts?.observe(preference, on: .inboxGroups, isRegularWidth: horizontalSizeClass == .regular)
+        }
     }
 
     /// The grid is its own scroll view, so each branch brings its container
@@ -156,6 +163,7 @@ struct InboxView: View {
                         onOpenEpisode: onOpenEpisode
                     )
                     .modifier(PodcastEpisodeSwipeActionsModifier(episode: episode))
+                    .twoPaneRootSelection(.episodeDetail(id: episode.episodeID))
                 }
                 EpisodeCatalogContinuation(hasMore: model.hasMore, visibleCount: $visibleEpisodeCount)
             }
@@ -168,7 +176,7 @@ struct InboxView: View {
             content()
         }
         .listSectionSpacing(12)
-        .contentMargins(.horizontal, horizontalSizeClass == .regular ? 32 : nil, for: .scrollContent)
+        .safeAreaHorizontalContentMargins(regular: 32)
     }
 
     @ViewBuilder

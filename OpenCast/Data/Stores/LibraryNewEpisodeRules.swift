@@ -12,7 +12,7 @@ nonisolated enum LibraryNewEpisodeRules {
     /// outside the range until they are released.
     static func eligibleReleaseDates(subscribedAt: Date, asOf: Date) -> ClosedRange<Date>? {
         let lowerBound = max(subscribedAt, asOf.addingTimeInterval(-recencyWindow))
-        guard lowerBound <= asOf else {
+        guard lowerBound.timeIntervalSinceReferenceDate <= asOf.timeIntervalSinceReferenceDate else {
             return nil
         }
 

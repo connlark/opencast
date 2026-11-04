@@ -148,6 +148,28 @@ async function newestReservation(action) {
   return { result, row: await newReservation(before) };
 }
 
+// The Worker's `trial_forward` lines seen by a spy on `console.log`.
+function forwardEvents(log) {
+  return log.mock.calls
+    .map((call) => call.join(" "))
+    .filter((line) => line.includes('"event":"trial_forward"'))
+    .map((line) => JSON.parse(line));
+}
+
+// The day's mirror row once it holds the object's current version: a flush
+// can find another still running, so one call does not prove it landed.
+async function flushedMirrorDay(day) {
+  const current = ((await dumpLedger()).days ?? []).find((row) => row.day === day);
+  if (current === undefined) return { forwards: 0, provider_failures: 0 };
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    await flush();
+    const mirrored = await env.TRIAL_DB.prepare("SELECT * FROM trial_day WHERE day = ?1").bind(day).first();
+    if (mirrored?.version === current.version) return mirrored;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`the mirror never reached version ${current.version} of day ${day}`);
+}
+
 // ---------------------------------------------------------------- App Attest
 
 async function sha256Bytes(value) {
@@ -503,6 +525,7 @@ describe("the forward", () => {
   });
 
   it("times out inside the device's budget and keeps the whole reservation", async () => {
+    const log = vi.spyOn(console, "log");
     generateReplies.push(
       () => new Promise((resolve) => setTimeout(() => resolve(reply(REPLY)()), 6_000)),
     );
@@ -515,7 +538,60 @@ describe("the forward", () => {
     expect(Date.now() - started).toBeLessThan(6_000);
     expect(row.outcome).toBe("timeout");
     expect(row.charged_micros).toBe(row.reserved_micros);
+    expect(forwardEvents(log).at(-1)).toMatchObject({ outcome: "timeout", detail: "client_budget" });
+    log.mockRestore();
   }, 15_000);
+
+  it("counts a timeout under a shortened budget as a forward, not a provider failure", async () => {
+    const log = vi.spyOn(console, "log");
+    const msPerDay = 86_400_000;
+    const today = Math.floor(Date.now() / msPerDay);
+    const baseline = await flushedMirrorDay(today);
+    generateReplies.push(
+      () => new Promise((resolve) => setTimeout(() => resolve(reply(REPLY)()), 34_000)),
+    );
+    const { result: response, row } = await newestReservation(() =>
+      bearerAnalyze(wrapper(DEVICE_BODY, { timeout_seconds: 34 })),
+    );
+    expect(outbound.filter((call) => call.url === GENERATE_URL)).toHaveLength(1);
+    expect(response.status).toBe(504);
+    expect(await response.json()).toEqual({ error: "provider_timeout" });
+    expect(forwardEvents(log).at(-1)).toMatchObject({
+      outcome: "timeout",
+      detail: "client_budget",
+      admitted: true,
+      charged_micros: row.reserved_micros,
+    });
+    expect(row.outcome).toBe("timeout");
+    expect(row.charged_micros).toBe(row.reserved_micros);
+    // The forward counts on the day it settled, which a run across midnight
+    // would start from zero.
+    const settledDay = Math.floor(row.finalized_at / msPerDay);
+    const before = settledDay === today ? baseline : { forwards: 0, provider_failures: 0 };
+    const after = await flushedMirrorDay(settledDay);
+    expect(after.forwards).toBe(before.forwards + 1);
+    expect(after.provider_failures).toBe(before.provider_failures);
+    log.mockRestore();
+  }, 45_000);
+
+  it("marks only a dispatched timeout, however short the budget", async () => {
+    const log = vi.spyOn(console, "log");
+    generateReplies.push(() => {
+      throw new Error("network down");
+    });
+    const unreachable = await bearerAnalyze(wrapper(DEVICE_BODY, { timeout_seconds: 34 }));
+    expect(unreachable.status).toBe(502);
+    expect(forwardEvents(log).at(-1)).toMatchObject({ outcome: "unreachable", detail: null });
+    // One second leaves nothing to forward in: nothing reserved or sent.
+    const spent = await bearerAnalyze(wrapper(DEVICE_BODY, { timeout_seconds: 1 }));
+    expect(spent.status).toBe(504);
+    expect(forwardEvents(log).at(-1)).toMatchObject({
+      outcome: "timeout",
+      detail: "budget_spent_before_forward",
+      admitted: false,
+    });
+    log.mockRestore();
+  });
 });
 
 describe("status", () => {

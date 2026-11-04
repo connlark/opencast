@@ -6,7 +6,8 @@ struct NowPlayingSoundLabToggle: View {
     let tint: Color
     let isEnabled: Bool
     let isIconOnly: Bool
-    let rowHeight: CGFloat
+    /// Nil fits the row to its label, which then wraps instead of truncating.
+    let rowHeight: CGFloat?
     @Binding var isOn: Bool
 
     var body: some View {
@@ -19,7 +20,7 @@ struct NowPlayingSoundLabToggle: View {
 
                 Text(title)
                     .font(.subheadline)
-                    .lineLimit(1)
+                    .lineLimit(rowHeight == nil ? nil : 1)
                     .layoutPriority(1)
                     .frame(width: isIconOnly ? 0 : nil)
                     .opacity(isIconOnly ? 0 : 1)

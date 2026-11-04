@@ -11,6 +11,10 @@ struct EpisodeNotesLibraryView: View {
 
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
+    /// Inside a two-pane root, the visit ledger above its containers: it
+    /// keeps the search query through a fold or rotation that rebuilds this
+    /// page, as the show page's search.
+    @Environment(\.twoPaneRootVisit) private var rootVisit
     @State private var actions = EpisodeNotesActions()
     @State private var notes: [EpisodeNoteRecord] = []
     /// Set by the first fetch that succeeds and never reset; the empty state
@@ -20,12 +24,34 @@ struct EpisodeNotesLibraryView: View {
     /// dismissing the alert never brings back an empty state it contradicts.
     @State private var loadError: String?
     @State private var groups: [EpisodeNotesLibraryGroup] = []
-    @State private var searchText = ""
+    /// The query in the page's own state: the truth without a two-pane root,
+    /// a mirror of the ledger's with one.
+    @State private var localSearchText = ""
     @State private var sortOrder = EpisodeNotesLibrarySortOrder.recent
     @State private var playErrorMessage: String?
     @State private var loadErrorMessage: String?
 
     let onOpenEpisode: (String) -> Void
+
+    private var ledgerSearchText: String? {
+        rootVisit?.notesSearchQuery(for: .notes)
+    }
+
+    private var searchText: String {
+        ledgerSearchText ?? localSearchText
+    }
+
+    private var searchTextBinding: Binding<String> {
+        Binding(
+            get: { searchText },
+            set: { query in
+                localSearchText = query
+                if ledgerSearchText != nil {
+                    rootVisit?.setNotesSearchQuery(query, for: .notes)
+                }
+            }
+        )
+    }
 
     var body: some View {
         List {
@@ -40,7 +66,7 @@ struct EpisodeNotesLibraryView: View {
         // can strand the system's search dismissal. A short list only tucks
         // the field away until the listener pulls down.
         .searchable(
-            text: $searchText,
+            text: searchTextBinding,
             placement: .navigationBarDrawer(
                 displayMode: notes.count > Self.searchThreshold ? .always : .automatic
             ),
@@ -68,6 +94,11 @@ struct EpisodeNotesLibraryView: View {
         }
         .task(id: groupingKey) {
             regroup()
+        }
+        .onChange(of: ledgerSearchText, initial: true) { _, ledgerSearchText in
+            if let ledgerSearchText {
+                localSearchText = ledgerSearchText
+            }
         }
     }
 

@@ -104,7 +104,7 @@ struct NowPlayingSoundLabAdFreePassRowModelTests {
         #expect(NowPlayingSoundLabPanel.collapsesToIconOnly(rowAreaWidth: 120, isAccessibilitySize: false))
         #expect(NowPlayingSoundLabPanel.collapsesToIconOnly(rowAreaWidth: 190, isAccessibilitySize: true))
         #expect(NowPlayingSoundLabPanel.collapsesToIconOnly(rowAreaWidth: 190, isAccessibilitySize: false))
-        #expect(!NowPlayingSoundLabPanel.collapsesToIconOnly(rowAreaWidth: 200, isAccessibilitySize: false))
+        #expect(!NowPlayingSoundLabPanel.collapsesToIconOnly(rowAreaWidth: 205, isAccessibilitySize: false))
     }
 
     @Test("Artwork rail derives from panel geometry and preserves default text space")

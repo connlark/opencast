@@ -2,6 +2,9 @@ import SwiftUI
 
 struct OpenCastRootLayerView<Content: View>: View {
     @Environment(OpenCastAppModel.self) private var appModel
+    /// The scene's fold latch and Library layout memory, owned here so the
+    /// tab root's content and the Now Playing overlay read one value.
+    @State private var sceneLibraryLayouts = SceneLibraryLayouts()
 
     let onDismissNowPlaying: () -> Void
     let onOpenCurrentEpisode: () -> Void
@@ -67,6 +70,16 @@ struct OpenCastRootLayerView<Content: View>: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
             }
             #endif
+        }
+        .environment(sceneLibraryLayouts)
+        .background {
+            GeometryReader { proxy in
+                Color.clear
+                    .onChange(of: SceneLibraryLayouts.divisionRegions(in: proxy), initial: true) { _, regions in
+                        sceneLibraryLayouts.markFoldable(ifReported: regions)
+                    }
+            }
+            .ignoresSafeArea()
         }
     }
 }

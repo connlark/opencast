@@ -46,6 +46,6 @@ struct PlaylistTombstoneIndex {
         else {
             return false
         }
-        return addedAt <= clearedAt
+        return addedAt.timeIntervalSinceReferenceDate <= clearedAt.timeIntervalSinceReferenceDate
     }
 }

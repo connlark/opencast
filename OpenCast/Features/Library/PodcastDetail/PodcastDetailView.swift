@@ -11,25 +11,29 @@ struct PodcastDetailView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
+    /// Set when this page is a two-pane split's detail root, where `dismiss`
+    /// cannot remove it.
+    @Environment(\.twoPaneRootClose) private var rootClose
+    /// Inside a two-pane root, the visit ledger above its containers.
+    @Environment(\.twoPaneRootVisit) private var rootVisit
     @State private var feedMigrationErrorMessage: String?
     @State private var isShowingFeedMigrationError = false
     @State private var isConfirmingUnsubscribe = false
     @State private var isConfirmingAdAutoDetect = false
     @State private var isConfirmingMarkAllPlayed = false
     @State private var isConfirmingDeleteAllDownloads = false
-    @State private var searchQuery = ""
-    @State private var isSearchVisible = false
     @State private var isSearchPresented = false
-    @State private var searchMode: EpisodeSearchMode = .episodes
     @State private var searchSession = EpisodeSearchSession()
     @State private var sheetDestination: SheetDestination?
-    /// The Inbox settings a Group by Podcast tap opened this visit under.
-    /// They win over the show's stored filter without being written to it,
-    /// and end with the first filter pick here.
-    @State private var episodeListOverride: PodcastEpisodeListOverride?
+    /// This visit's settings in the page's own state: the truth when no
+    /// two-pane root holds the visit, a mirror of the ledger's when one does.
+    @State private var localVisit: PodcastDetailVisit
 
     let feedURL: String
     let onOpenEpisode: (String) -> Void
+    /// The route this page was opened with: its identity, and the key of
+    /// its visit in a two-pane root's ledger.
+    private let route: AppRoute
 
     init(
         feedURL: String,
@@ -38,7 +42,66 @@ struct PodcastDetailView: View {
     ) {
         self.feedURL = feedURL
         self.onOpenEpisode = onOpenEpisode
-        _episodeListOverride = State(initialValue: episodeListOverride)
+        let route = AppRoute.podcastDetail(feedURL: feedURL, episodeListOverride: episodeListOverride)
+        self.route = route
+        _localVisit = State(initialValue: PodcastDetailVisit(route: route))
+    }
+
+    /// The visit as a two-pane root's ledger holds it, above its containers,
+    /// so a fold or rotation that rebuilds this page keeps it. Nil outside a
+    /// two-pane root, and while the path holds this route more than once.
+    private var ledgerVisit: PodcastDetailVisit? {
+        rootVisit?.podcastDetailVisit(for: route)
+    }
+
+    private var visit: PodcastDetailVisit {
+        ledgerVisit ?? localVisit
+    }
+
+    private func updateVisit(_ change: (inout PodcastDetailVisit) -> Void) {
+        var updated = visit
+        change(&updated)
+        localVisit = updated
+        if ledgerVisit != nil {
+            rootVisit?.setPodcastDetailVisit(updated, for: route)
+        }
+    }
+
+    /// The Inbox settings a Group by Podcast tap opened this visit under.
+    /// They win over the show's stored filter without being written to it,
+    /// and end with the first filter pick here.
+    private var episodeListOverride: PodcastEpisodeListOverride? {
+        visit.episodeListOverride
+    }
+
+    private var isSearchVisible: Bool {
+        visit.search != nil
+    }
+
+    private var searchQuery: String {
+        visit.search?.query ?? ""
+    }
+
+    private var searchMode: EpisodeSearchMode {
+        visit.search?.mode ?? .episodes
+    }
+
+    private var searchQueryBinding: Binding<String> {
+        Binding(
+            get: { searchQuery },
+            set: { query in
+                updateVisit { $0.search?.query = query }
+            }
+        )
+    }
+
+    private var searchModeBinding: Binding<EpisodeSearchMode> {
+        Binding(
+            get: { searchMode },
+            set: { mode in
+                updateVisit { $0.search?.mode = mode }
+            }
+        )
     }
 
     private var filter: PodcastEpisodeFilter {
@@ -235,7 +298,7 @@ struct PodcastDetailView: View {
                 .background(alignment: .top) {
                     EpisodeArtworkGlowBackground(preview: podcastArtworkPreview)
                 }
-                .contentMargins(.bottom, 72, for: .scrollContent)
+                .tabAccessoryBottomClearance()
                 .animation(listAnimation, value: Array(model.animationKey.prefix(visibleEpisodeCount)))
                 .animation(listAnimation, value: appModel.library.state)
                 .onScrollGeometryChange(for: Bool.self) { geometry in
@@ -251,7 +314,7 @@ struct PodcastDetailView: View {
                 } description: {
                     Text("This subscription is no longer in your library.")
                 } actions: {
-                    Button("Go Back", systemImage: "chevron.backward", action: dismiss.callAsFunction)
+                    Button("Go Back", systemImage: "chevron.backward", action: close)
                 }
             }
         }
@@ -264,15 +327,29 @@ struct PodcastDetailView: View {
             EpisodeSearchPresentationModifier(
                 isSearchVisible: isSearchVisible,
                 prompt: searchPrompt,
-                searchQuery: $searchQuery,
+                searchQuery: searchQueryBinding,
                 isSearchPresented: $isSearchPresented,
-                searchMode: $searchMode,
+                searchMode: searchModeBinding,
                 isFullTextSearchAvailable: !searchSession.isIndexedSearchUnavailable
             )
         )
         .onChange(of: isSearchPresented) { _, isPresented in
             if !isPresented {
                 hideSearch()
+            }
+        }
+        .onChange(of: ledgerVisit, initial: true) { _, ledgerVisit in
+            // The page's own state follows the ledger's visit, so it holds
+            // the visit's settings should the ledger stop holding this route.
+            if let ledgerVisit {
+                localVisit = ledgerVisit
+            }
+        }
+        .onAppear {
+            // A search this visit kept through a rebuild (a two-pane switch)
+            // comes back active, as it was.
+            if isSearchVisible, !isSearchPresented {
+                isSearchPresented = true
             }
         }
         .alert("Feed Address Update Failed", isPresented: $isShowingFeedMigrationError) {
@@ -389,7 +466,7 @@ struct PodcastDetailView: View {
 
     /// A pick here ends the visit's Inbox settings, Hide Up Next included.
     private func setFilter(_ filter: PodcastEpisodeFilter) {
-        episodeListOverride = nil
+        updateVisit { $0.episodeListOverride = nil }
         appModel.podcastEpisodeListSettings.setFilter(
             filter,
             forPodcastID: feedURL,
@@ -431,7 +508,7 @@ struct PodcastDetailView: View {
                 )
                 // The route still points at the old feed URL; the migrated
                 // show is reachable from the library under its new address.
-                dismiss()
+                close()
             } catch is CancellationError {
             } catch {
                 feedMigrationErrorMessage = error.localizedDescription
@@ -462,7 +539,18 @@ struct PodcastDetailView: View {
 
     /// Keeps the visit's filter and brings back the rows Hide Up Next took.
     private func showHiddenEpisodes() {
-        episodeListOverride?.hidesQueuedEpisodes = false
+        updateVisit { $0.episodeListOverride?.hidesQueuedEpisodes = false }
+    }
+
+    /// Leaves this page: a pushed page pops; a two-pane split's detail root
+    /// clears its section's path, since `dismiss` cannot remove a stack's
+    /// root.
+    private func close() {
+        if let rootClose, rootClose.route == route {
+            rootClose.close()
+        } else {
+            dismiss()
+        }
     }
 
     private func updatePodcastArtworkPreview(_ preview: ArtworkPreview) {
@@ -476,17 +564,13 @@ struct PodcastDetailView: View {
         guard !isSearchVisible else {
             return
         }
-        searchQuery = ""
-        searchMode = .episodes
+        updateVisit { $0.search = PodcastDetailVisit.Search() }
         searchSession.clear()
-        isSearchVisible = true
         isSearchPresented = true
     }
 
     private func hideSearch() {
-        isSearchVisible = false
-        searchQuery = ""
-        searchMode = .episodes
+        updateVisit { $0.search = nil }
         searchSession.clear()
     }
 

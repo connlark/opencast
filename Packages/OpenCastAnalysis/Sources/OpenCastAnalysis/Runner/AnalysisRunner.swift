@@ -51,7 +51,8 @@ public struct AnalysisRunner: Sendable {
             clock: clock,
             segmentCount: request.segments.count,
             policy: policy.settings,
-            model: policy.model
+            model: policy.model,
+            execution: policy.executionBudget
         )
         var traces: [AdWindowTrace] = []
         for (index, window) in windows.enumerated() {
@@ -78,6 +79,7 @@ public struct AnalysisRunner: Sendable {
             policy: policy.settings,
             model: policy.model,
             canonicalThinking: canonicalThinking,
+            executionBudget: policy.executionBudget,
             transport: transport,
             clock: clock
         )

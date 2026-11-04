@@ -106,14 +106,16 @@ enum SyncDuplicateRepairer {
             guard let deletedAt = subscriptionClearsByFeedURL[canonicalFeedURL] else {
                 return false
             }
-            return subscribedAt <= deletedAt
+            return subscribedAt.timeIntervalSinceReferenceDate <= deletedAt.timeIntervalSinceReferenceDate
         }
 
         func shadowsProgress(canonicalFeedURL: String, episodeID: String, updatedAt: Date) -> Bool {
-            if let deletedAt = progressClearsByFeedURL[canonicalFeedURL], updatedAt <= deletedAt {
+            if let deletedAt = progressClearsByFeedURL[canonicalFeedURL],
+               updatedAt.timeIntervalSinceReferenceDate <= deletedAt.timeIntervalSinceReferenceDate {
                 return true
             }
-            if let deletedAt = progressClearsByEpisodeID[episodeID], updatedAt <= deletedAt {
+            if let deletedAt = progressClearsByEpisodeID[episodeID],
+               updatedAt.timeIntervalSinceReferenceDate <= deletedAt.timeIntervalSinceReferenceDate {
                 return true
             }
             return false

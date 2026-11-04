@@ -64,6 +64,51 @@ enum TestSupport {
         }
     }
 
+    /// A transport that holds each send to its `timeoutSeconds` on a
+    /// stepping clock: a scripted reply arrives after its latency, and a
+    /// latency past the send's timeout is a `.timeout` once that timeout
+    /// has passed. Each purpose consumes its steps in order; ad windows
+    /// without a script answer with `defaultStep`.
+    actor TimedTransport: AnalysisProviderTransport {
+        struct Step: Sendable {
+            var latency: Double
+            var reply: Result<AnalysisProviderReply, AnalysisTransportError>
+            /// Cancels the sending task before the reply arrives.
+            var cancels = false
+        }
+
+        private let clock: SteppingClock
+        private var scripts: [AnalysisProviderRequest.Purpose: [Step]]
+        private let defaultStep: Step?
+        private(set) var sent: [AnalysisProviderRequest] = []
+
+        init(clock: SteppingClock, scripts: [AnalysisProviderRequest.Purpose: [Step]], defaultStep: Step? = nil) {
+            self.clock = clock
+            self.scripts = scripts
+            self.defaultStep = defaultStep
+        }
+
+        func send(_ request: AnalysisProviderRequest) async throws(AnalysisTransportError) -> AnalysisProviderReply {
+            sent.append(request)
+            let step: Step
+            if var script = scripts[request.purpose], !script.isEmpty {
+                step = script.removeFirst()
+                scripts[request.purpose] = script
+            } else if case .adWindow = request.purpose, let defaultStep {
+                step = defaultStep
+            } else {
+                throw .notArchived
+            }
+            if step.cancels { withUnsafeCurrentTask { $0?.cancel() } }
+            guard step.latency <= request.timeoutSeconds else {
+                clock.advance(request.timeoutSeconds)
+                throw .timeout
+            }
+            clock.advance(step.latency)
+            return try step.reply.get()
+        }
+    }
+
     /// A clock that advances only when the pipeline sleeps, recording each
     /// pause.
     final class SteppingClock: AnalysisClock, @unchecked Sendable {

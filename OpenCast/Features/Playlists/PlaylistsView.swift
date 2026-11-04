@@ -112,8 +112,9 @@ struct PlaylistsView: View {
         // already has its final column count.
         GeometryReader { proxy in
             let metrics = LibraryGridMetrics.resolve(
-                containerWidth: proxy.size.width,
-                isCompact: horizontalSizeClass == .compact || verticalSizeClass == .compact,
+                in: proxy,
+                horizontalSizeClass: horizontalSizeClass,
+                verticalSizeClass: verticalSizeClass,
                 isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
             )
 
@@ -130,11 +131,12 @@ struct PlaylistsView: View {
                             )
                     }
                 }
+                .libraryGridPlacement(metrics)
                 .padding(.vertical, 8)
             }
             .accessibilityIdentifier("Playlists Grid")
             .contentMargins(.horizontal, metrics.horizontalMargin, for: .scrollContent)
-            .contentMargins(.bottom, 72, for: .scrollContent)
+            .tabAccessoryBottomClearance(rowSpacing: metrics.rowSpacing)
         }
     }
 

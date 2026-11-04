@@ -380,7 +380,7 @@ final class AIServicesSettingsUITests: XCTestCase {
         attachSmokeScreenshot(named: "analysis_key_notice_generate")
         addKey.tap()
 
-        assertExists(app.navigationBars["AI Services"], named: "AI Services after Add a key", timeout: 10)
+        assertScreen("AI Services", named: "AI Services after Add a key", in: app, timeout: 10)
         assertDoesNotExist(
             app.staticTexts["Generate Chapters & Summary?"],
             named: "generate disclosure after Add a key"
@@ -406,7 +406,7 @@ final class AIServicesSettingsUITests: XCTestCase {
         attachSmokeScreenshot(named: "analysis_key_required_exhausted")
 
         openSettings.tap()
-        assertExists(app.navigationBars["AI Services"], named: "AI Services from the key screen", timeout: 10)
+        assertScreen("AI Services", named: "AI Services from the key screen", in: app, timeout: 10)
         assertDoesNotExist(openSettings, named: "key screen after Open Settings", timeout: 5)
     }
 
@@ -547,7 +547,7 @@ final class AIServicesSettingsUITests: XCTestCase {
         let row = providerRow(provider, in: app)
         assertHittable(row, named: "\(provider) key row", file: file, line: line)
         row.tap()
-        assertExists(app.navigationBars[title], named: "\(title) key sheet", timeout: 5, file: file, line: line)
+        assertScreen(title, named: "\(title) key sheet", in: app, timeout: 5, file: file, line: line)
     }
 
     /// One `typeText` call: per-character typing on the simulator bounces

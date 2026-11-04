@@ -366,7 +366,7 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
             if tab.exists, tab.isHittable {
                 tab.tap()
             }
-            if app.navigationBars["Downloads"].waitForExistence(timeout: 5) {
+            if waitForScreen("Downloads", in: app, timeout: 5) {
                 break
             }
         }
@@ -470,10 +470,10 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
     private func openLibrary(in app: XCUIApplication) {
         for _ in 0..<4 {
             dismissBlockingAlertsIfPresent()
-            if app.navigationBars["Library"].exists {
+            if waitForScreen("Library", in: app, timeout: 0) {
                 return
             }
-            let tabButton = app.tabBars.buttons["Library"].firstMatch
+            let tabButton = sectionItem("Library", in: app).firstMatch
             // At regular width (iPad) the tabs are sidebar rows, not tab-bar
             // buttons.
             let sidebarRow = app.cells.matching(NSPredicate(format: "label == %@", "Library")).firstMatch
@@ -490,7 +490,7 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
                 }
             }
             for _ in 0..<8 {
-                if app.navigationBars["Library"].exists {
+                if waitForScreen("Library", in: app, timeout: 0) {
                     return
                 }
                 usleep(500_000)
@@ -612,7 +612,7 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
         // Coordinate tap: the glass toolbar button's AX frame can miss the
         // real hit target on device, making element taps silent no-ops.
         let candidates = [
-            app.navigationBars["Library"].buttons["Add"].firstMatch,
+            toolbarButton("Add", in: "Library", of: app).firstMatch,
             app.buttons["Add"].firstMatch
         ]
         // A library scrolled away from the top collapses its navigation bar

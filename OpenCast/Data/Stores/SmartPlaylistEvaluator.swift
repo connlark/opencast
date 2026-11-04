@@ -40,7 +40,9 @@ enum SmartPlaylistEvaluator {
                 }
             }
             if let earliestPublishedAt {
-                guard let publishedAt = episode.publishedAt, publishedAt >= earliestPublishedAt else {
+                guard let publishedAt = episode.publishedAt,
+                      publishedAt.timeIntervalSinceReferenceDate >= earliestPublishedAt.timeIntervalSinceReferenceDate
+                else {
                     return false
                 }
             }

@@ -52,6 +52,57 @@ struct SyncTombstoneRepairTests {
         #expect(store.syncedStoreSelfSaveCount == 1)
     }
 
+    /// The tombstone comparisons are inclusive: a record stamped at the clear
+    /// instant itself is shadowed. Guards the issue 34 rewrite of `<=`.
+    @Test("Records stamped at a tombstone's own instant stay shadowed")
+    func recordsStampedAtATombstonesOwnInstantStayShadowed() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+
+        context.insert(
+            SyncTombstoneRecord(scope: .subscription, feedURL: Self.feedURL, deletedAt: Self.clearInstant)
+        )
+        context.insert(
+            SyncTombstoneRecord(scope: .feedProgress, feedURL: Self.feedURL, deletedAt: Self.clearInstant)
+        )
+        context.insert(
+            SyncTombstoneRecord(
+                scope: .episodeProgress,
+                feedURL: Self.otherFeedURL,
+                episodeID: "boundary-episode",
+                deletedAt: Self.clearInstant
+            )
+        )
+        context.insert(
+            SubscriptionRecord(feedURL: Self.feedURL, title: "Boundary", subscribedAt: Self.clearInstant)
+        )
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "boundary-feed",
+                podcastID: Self.feedURL,
+                position: 10,
+                updatedAt: Self.clearInstant
+            )
+        )
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "boundary-episode",
+                podcastID: Self.otherFeedURL,
+                position: 20,
+                updatedAt: Self.clearInstant
+            )
+        )
+        try context.save()
+
+        let result = try await store.repairSyncDuplicates(modelContext: context)
+
+        #expect(try context.fetch(FetchDescriptor<SubscriptionRecord>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<EpisodeProgressRecord>()).isEmpty)
+        #expect(result.tombstonedSubscriptionRecordsDeleted == 1)
+        #expect(result.tombstonedProgressRecordsDeleted == 2)
+    }
+
     @Test("Feed progress tombstones clear old history and keep newer listening")
     func feedProgressTombstonesClearOldHistoryAndKeepNewerListening() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

@@ -12,6 +12,9 @@ use crate::bundle::{Feature, TrialBundle};
 pub const CHAPTERS_ESCALATED_THINKING: &str = "high";
 /// The call timeout the pipeline gives an escalated Chapters request.
 pub const CHAPTERS_ESCALATED_CALL_TIMEOUT_SECONDS: u32 = 300;
+/// A declared budget more than this far under its cap is the device's own
+/// planning rather than the whole seconds it floors off a full call.
+pub const CLIENT_BUDGET_MARGIN_SECONDS: u32 = 10;
 pub const MAX_RUN_ID_CHARS: usize = 64;
 pub const MAX_WINDOW_INDEX: u64 = 1_023;
 pub const MAX_TURNS: usize = 64;
@@ -88,6 +91,10 @@ pub struct TrialWindow {
     /// The whole exchange's budget: the cap (the entry's per-call timeout,
     /// or the escalated Chapters timeout), shortened by the device's own.
     pub call_timeout_seconds: u32,
+    /// The device declared a budget more than `CLIENT_BUDGET_MARGIN_SECONDS`
+    /// under the cap, before any proxy time is deducted. A timeout under it
+    /// says nothing about the provider's health.
+    pub client_budget: bool,
 }
 
 pub fn parse_window(
@@ -177,6 +184,7 @@ pub fn parse_window(
     // around it, and a proxy still forwarding past it holds the lock.
     let call_timeout_seconds =
         client_timeout.map_or(cap_seconds, |seconds| seconds.min(cap_seconds));
+    let client_budget = call_timeout_seconds + CLIENT_BUDGET_MARGIN_SECONDS < cap_seconds;
 
     let mut config = Map::new();
     config.insert("maxOutputTokens".into(), entry.max_output_tokens.into());
@@ -206,6 +214,7 @@ pub fn parse_window(
         thinking,
         max_output_tokens: entry.max_output_tokens,
         call_timeout_seconds,
+        client_budget,
     })
 }
 

@@ -215,10 +215,12 @@ final class ChaptersSummaryRouteUITests: XCTestCase {
         let entry = app.buttons["Episode Diagnostics"].firstMatch
         assertExists(entry, named: "Episode Diagnostics entry", timeout: 10, file: file, line: line)
         entry.tap()
-        assertExists(
-            app.navigationBars["Episode Diagnostics"].firstMatch,
+        assertScreen(
+            "Episode Diagnostics",
             named: "Episode Diagnostics sheet",
+            in: app,
             timeout: 10,
+            firstMatch: true,
             file: file,
             line: line
         )

@@ -7,7 +7,7 @@ final class OpenCastIntentUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--opencast-ui-testing", "--opencast-seed-ui-library", "--opencast-seed-episode-progress"]
         app.launch()
-        XCTAssertTrue(app.tabBars.buttons["Library"].waitForExistence(timeout: 20))
+        XCTAssertTrue(waitForSectionItem("Library", in: app, timeout: 20))
         let definitions = IntentDefinitions(bundleIdentifier: "com.connor.opencast")
         let episodes = try await definitions.entities["OpenCastEpisodeEntity"].suggestedEntities()
         XCTAssertFalse(episodes.isEmpty)
@@ -26,7 +26,7 @@ final class OpenCastIntentUITests: XCTestCase {
         app.launchArguments = ["--opencast-ui-testing", "--opencast-seed-ui-library"]
         app.launchEnvironment["OPENCAST_SEED_PLAYLISTS"] = "1"
         app.launch()
-        XCTAssertTrue(app.tabBars.buttons["Library"].waitForExistence(timeout: 20))
+        XCTAssertTrue(waitForSectionItem("Library", in: app, timeout: 20))
         let definitions = IntentDefinitions(bundleIdentifier: "com.connor.opencast")
         let playlists = definitions.entities["OpenCastPlaylistEntity"]
         let suggested = try await playlists.suggestedEntities()
@@ -57,11 +57,11 @@ final class OpenCastIntentUITests: XCTestCase {
         // A foreground intent hands the scene back mid-transition, and a tab
         // tap that lands then is dropped; verify the switch and tap again.
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
-        for _ in 0..<3 where !app.navigationBars["Library"].exists {
+        for _ in 0..<3 where !waitForScreen("Library", in: app, timeout: 0) {
             openSection("Library", in: app)
-            _ = app.navigationBars["Library"].waitForExistence(timeout: 3)
+            _ = waitForScreen("Library", in: app, timeout: 3)
         }
-        XCTAssertTrue(app.navigationBars["Library"].exists, "Library tab should be selected after the intents")
+        XCTAssertTrue(waitForScreen("Library", in: app, timeout: 0), "Library tab should be selected after the intents")
         let playlistsRow = app.buttons.matching(identifier: "Library Playlists Row").firstMatch
         XCTAssertTrue(playlistsRow.waitForExistence(timeout: 10))
         playlistsRow.tap()

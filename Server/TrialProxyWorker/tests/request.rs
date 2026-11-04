@@ -157,6 +157,47 @@ fn the_device_may_only_shorten_the_budget() {
 }
 
 #[test]
+fn only_a_budget_more_than_ten_seconds_under_its_cap_is_the_clients() {
+    assert_eq!(
+        embedded().unwrap().ad_detection.per_call_timeout_seconds,
+        120
+    );
+    assert_eq!(CHAPTERS_ESCALATED_CALL_TIMEOUT_SECONDS, 300);
+    let mut ad = wrap("ad_detection", device_body());
+    assert!(!parse(&ad).unwrap().client_budget, "declared nothing");
+    for (seconds, expected) in [
+        (500, false),
+        (120, false),
+        (119, false),
+        (110, false),
+        (109, true),
+        (34, true),
+    ] {
+        ad["timeout_seconds"] = json!(seconds);
+        assert_eq!(parse(&ad).unwrap().client_budget, expected, "{seconds}");
+    }
+    let mut escalated = wrap("chapters_summary", chapters_request("high"));
+    assert!(
+        !parse(&escalated).unwrap().client_budget,
+        "declared nothing"
+    );
+    for (seconds, expected) in [(300, false), (299, false), (290, false), (289, true)] {
+        escalated["timeout_seconds"] = json!(seconds);
+        assert_eq!(
+            parse(&escalated).unwrap().client_budget,
+            expected,
+            "{seconds}"
+        );
+    }
+    // Chapters below the escalated level is held to the entry's own cap.
+    let mut plain = wrap("chapters_summary", chapters_request("low"));
+    for (seconds, expected) in [(110, false), (109, true)] {
+        plain["timeout_seconds"] = json!(seconds);
+        assert_eq!(parse(&plain).unwrap().client_budget, expected, "{seconds}");
+    }
+}
+
+#[test]
 fn chargeable_or_unknown_request_keys_are_refused() {
     for key in [
         "tools",

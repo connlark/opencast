@@ -40,7 +40,7 @@ final class InteractionPerformanceUITests: XCTestCase {
         let app = makeApp(layout: "list")
         measure(metrics: [XCTClockMetric()], options: measureOptions) {
             launchPlaying(app)
-            app.tabBars.buttons["Inbox"].tap()
+            openSection("Inbox", in: app)
             waitForTraceIfRequested()
             startMeasuring()
             app.buttons["Open Now Playing"].tap()
@@ -59,7 +59,7 @@ final class InteractionPerformanceUITests: XCTestCase {
         let app = makeApp(layout: layout, usesRealLibrary: usesRealLibrary)
         if frameProbeEnabled { app.launchArguments.append("--opencast-frame-probe-window") }
         launchPlaying(app)
-        app.tabBars.buttons[section].tap()
+        openSection(section, in: app)
         let list = layout == "grid" && section == "Library"
             ? app.scrollViews["Library Grid"]
             : app.collectionViews.firstMatch

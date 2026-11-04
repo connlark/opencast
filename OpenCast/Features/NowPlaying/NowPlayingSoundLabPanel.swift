@@ -1,9 +1,16 @@
 import SwiftUI
 
 struct NowPlayingSoundLabPanel: View {
+    /// Over the artwork from the panel's inline floor up; below it, the same
+    /// controls in the player's utility sheet.
+    enum Presentation: Equatable {
+        case inline(revealProgress: CGFloat)
+        case sheet
+    }
+
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    let revealProgress: CGFloat
+    let presentation: Presentation
     @Binding var voiceBoostEnabled: Bool
     let voiceBoostControlEnabled: Bool
     let adFreePassRow: NowPlayingSoundLabAdFreePassRowModel
@@ -13,6 +20,20 @@ struct NowPlayingSoundLabPanel: View {
     let onTranscriptAction: () -> Void
     let onAdFreePassBackgroundProbe: () -> Void
 
+    static func constrainedRowSpacing(
+        panelHeight: CGFloat,
+        verticalInset: CGFloat,
+        rowCount: Int,
+        rowHeight: CGFloat
+    ) -> CGFloat {
+        NowPlayingSoundLabLayout.constrainedRowSpacing(
+            panelHeight: panelHeight,
+            verticalInset: verticalInset,
+            rowCount: rowCount,
+            rowHeight: rowHeight
+        )
+    }
+
     static func collapsesToIconOnly(rowAreaWidth: CGFloat, isAccessibilitySize: Bool) -> Bool {
         NowPlayingSoundLabLayout.collapsesToIconOnly(
             rowAreaWidth: rowAreaWidth,
@@ -21,12 +42,23 @@ struct NowPlayingSoundLabPanel: View {
     }
 
     var body: some View {
+        switch presentation {
+        case .inline(let revealProgress):
+            inlinePanel(revealProgress: revealProgress)
+        case .sheet:
+            sheetPanel
+        }
+    }
+
+    private func inlinePanel(revealProgress: CGFloat) -> some View {
         GeometryReader { proxy in
             let layout = NowPlayingSoundLabLayout(panelWidth: proxy.size.width)
-            let protectedLeadingSpace = layout.artworkRailWidth + layout.artworkGutter
-            let usesConstrainedHeight = dynamicTypeSize.isAccessibilitySize || proxy.size.height < 250
-            let rowHeight = usesConstrainedHeight ? 44.0 : NowPlayingSoundLabLayout.controlRowHeight
-            let rowSpacing = usesConstrainedHeight ? 14.0 : (proxy.size.height > 290 ? 7.0 : 5.0)
+            let rows = NowPlayingSoundLabLayout.rowMetrics(
+                panelHeight: proxy.size.height,
+                verticalInset: layout.contentInset,
+                rowCount: transcriptionRow == nil ? 2 : 3,
+                isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
+            )
             let isIconOnly = Self.collapsesToIconOnly(
                 rowAreaWidth: layout.rowAreaWidth,
                 isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
@@ -39,11 +71,16 @@ struct NowPlayingSoundLabPanel: View {
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(.white.opacity(0.22), lineWidth: 1)
 
-                VStack(spacing: 8) {
-                    ForEach(0..<12, id: \.self) { _ in
+                // Never taller than the panel: a taller rail would grow the
+                // stack and push the rows out of the clip.
+                VStack(spacing: NowPlayingSoundLabLayout.railCapsuleSpacing) {
+                    ForEach(0..<NowPlayingSoundLabLayout.railCapsuleCount(panelHeight: proxy.size.height), id: \.self) { _ in
                         Capsule()
                             .fill(.primary.opacity(0.13))
-                            .frame(width: 3, height: 11)
+                            .frame(
+                                width: NowPlayingSoundLabLayout.railCapsuleWidth,
+                                height: NowPlayingSoundLabLayout.railCapsuleHeight
+                            )
                     }
                 }
                 .frame(width: max(0, layout.artworkRailWidth - layout.contentInset))
@@ -51,72 +88,17 @@ struct NowPlayingSoundLabPanel: View {
                 .opacity(0.46 + 0.30 * Double(revealProgress))
                 .accessibilityHidden(true)
 
-                VStack(alignment: .leading, spacing: rowSpacing) {
-                    if !usesConstrainedHeight {
-                        Label {
-                            Text("Sound Lab")
-                        } icon: {
-                            Image(systemName: "sparkles")
-                                .foregroundStyle(.yellow)
-                                .shadow(color: .yellow.opacity(0.32), radius: 4)
-                        }
-                        .font(.headline)
-                        .lineLimit(1)
-                        .foregroundStyle(.primary)
-                        .padding(.bottom, 3)
+                VStack(alignment: .leading, spacing: rows.rowSpacing) {
+                    if rows.showsHeader {
+                        header
+                            .padding(.bottom, 3)
                     }
 
-                    GlassEffectContainer(spacing: rowSpacing) {
-                        VStack(spacing: rowSpacing) {
-                            NowPlayingSoundLabToggle(
-                                title: "Voice Boost",
-                                systemImage: "waveform",
-                                tint: .cyan,
-                                isEnabled: voiceBoostControlEnabled,
-                                isIconOnly: isIconOnly,
-                                rowHeight: rowHeight,
-                                isOn: $voiceBoostEnabled
-                            )
+                    controls(isIconOnly: isIconOnly, rowHeight: rows.rowHeight, spacing: rows.rowSpacing)
 
-                            NowPlayingSoundLabActionRow(
-                                title: adFreePassRow.title,
-                                systemImage: "megaphone",
-                                tint: adFreePassTint,
-                                phase: adFreePassRow.phase,
-                                isEnabled: adFreePassRow.isEnabled,
-                                isIconOnly: isIconOnly,
-                                rowHeight: rowHeight,
-                                accessibilityValueText: adFreePassRow.statusText,
-                                accessibilityID: "Skip Promos & Ads",
-                                action: onAdFreePassAction
-                            )
-
-                            if let transcriptionRow {
-                                NowPlayingSoundLabActionRow(
-                                    title: transcriptionRow.title,
-                                    systemImage: transcriptionRow.systemImage,
-                                    tint: .blue,
-                                    phase: transcriptionRow.phase,
-                                    isEnabled: transcriptionRow.isEnabled,
-                                    isIconOnly: isIconOnly,
-                                    rowHeight: rowHeight,
-                                    accessibilityValueText: transcriptionRow.accessibilityValue,
-                                    accessibilityID: transcriptionRow.accessibilityIdentifier,
-                                    action: performTranscriptionAction
-                                )
-                            }
-                        }
-                    }
-
-                    #if DEBUG
-                    if AdFreePassBackgroundProbe.isUserInterfaceEnabled {
-                        NowPlayingSoundLabAdFreePassBackgroundProbeControl(
-                            onRun: onAdFreePassBackgroundProbe
-                        )
-                    }
-                    #endif
+                    backgroundProbeControl
                 }
-                .padding(.leading, protectedLeadingSpace)
+                .padding(.leading, layout.protectedLeadingSpace)
                 .padding(.trailing, layout.contentInset)
                 .padding(.vertical, layout.contentInset)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
@@ -126,6 +108,91 @@ struct NowPlayingSoundLabPanel: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Now Playing Sound Lab")
         .accessibilityIdentifier("Now Playing Sound Lab")
+    }
+
+    private var sheetPanel: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                header
+
+                controls(isIconOnly: false, rowHeight: nil, spacing: 10)
+
+                backgroundProbeControl
+            }
+            .padding(20)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Now Playing Sound Lab")
+        .accessibilityIdentifier("Now Playing Sound Lab")
+    }
+
+    private var header: some View {
+        Label {
+            Text("Sound Lab")
+        } icon: {
+            Image(systemName: "sparkles")
+                .foregroundStyle(.yellow)
+                .shadow(color: .yellow.opacity(0.32), radius: 4)
+        }
+        .font(.headline)
+        .lineLimit(1)
+        .foregroundStyle(.primary)
+    }
+
+    private func controls(isIconOnly: Bool, rowHeight: CGFloat?, spacing: CGFloat) -> some View {
+        GlassEffectContainer(spacing: spacing) {
+            VStack(spacing: spacing) {
+                NowPlayingSoundLabToggle(
+                    title: "Voice Boost",
+                    systemImage: "waveform",
+                    tint: .cyan,
+                    isEnabled: voiceBoostControlEnabled,
+                    isIconOnly: isIconOnly,
+                    rowHeight: rowHeight,
+                    isOn: $voiceBoostEnabled
+                )
+
+                NowPlayingSoundLabActionRow(
+                    title: adFreePassRow.title,
+                    systemImage: "megaphone",
+                    tint: adFreePassTint,
+                    phase: adFreePassRow.phase,
+                    isEnabled: adFreePassRow.isEnabled,
+                    isIconOnly: isIconOnly,
+                    rowHeight: rowHeight,
+                    accessibilityValueText: adFreePassRow.statusText,
+                    accessibilityID: "Skip Promos & Ads",
+                    action: onAdFreePassAction
+                )
+
+                if let transcriptionRow {
+                    NowPlayingSoundLabActionRow(
+                        title: transcriptionRow.title,
+                        systemImage: transcriptionRow.systemImage,
+                        tint: .blue,
+                        phase: transcriptionRow.phase,
+                        isEnabled: transcriptionRow.isEnabled,
+                        isIconOnly: isIconOnly,
+                        rowHeight: rowHeight,
+                        accessibilityValueText: transcriptionRow.accessibilityValue,
+                        accessibilityID: transcriptionRow.accessibilityIdentifier,
+                        action: performTranscriptionAction
+                    )
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var backgroundProbeControl: some View {
+        #if DEBUG
+        if AdFreePassBackgroundProbe.isUserInterfaceEnabled {
+            NowPlayingSoundLabAdFreePassBackgroundProbeControl(
+                onRun: onAdFreePassBackgroundProbe
+            )
+        }
+        #endif
     }
 
     private var adFreePassTint: Color {

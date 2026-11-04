@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// The Playlists, Up Next and Notes rows above the Library's shows.
-/// Playlists and Notes push their screens; Up Next opens the queue sheet, so
-/// it has no chevron. A nil `notesCount` (Show Note Button is off) hides the
-/// Notes row.
+/// Playlists and Notes push their screens (in a two-pane split they open as
+/// the detail and show the selection); Up Next opens the queue, so it has no
+/// chevron. A nil `notesCount` (Show Note Button is off) hides the Notes row.
 struct LibraryCollectionsHeader: View {
     @ScaledMetric(relativeTo: .title3) private var iconWidth = 30.0
 
@@ -15,7 +15,7 @@ struct LibraryCollectionsHeader: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            NavigationLink(value: AppRoute.playlists) {
+            TwoPaneRootLink(route: .playlists, selectionStyle: .inline) {
                 LibraryCollectionRow(
                     title: "Playlists",
                     systemImage: "music.note.list",
@@ -62,6 +62,7 @@ struct LibraryCollectionsHeader: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .twoPaneRootSelection(.notes, style: .inline)
                 .accessibilityValue(Self.accessibilityValue(for: notesCount))
                 .accessibilityIdentifier("Library Notes Row")
 

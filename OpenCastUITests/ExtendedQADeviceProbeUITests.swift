@@ -547,9 +547,11 @@ final class ExtendedQADeviceProbeUITests: XCTestCase {
 
     @MainActor
     private func dismissNowPlaying(in app: XCUIApplication) {
-        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22))
-        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.97))
-        start.press(forDuration: 0.05, thenDragTo: end)
+        let card = app.descendants(matching: .any)["Now Playing"].firstMatch
+        guard card.exists else {
+            return
+        }
+        dragNowPlayingCard(card, travelling: 0.75)
         sleep(1)
     }
 

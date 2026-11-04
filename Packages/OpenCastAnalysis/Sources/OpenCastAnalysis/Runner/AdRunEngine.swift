@@ -32,6 +32,7 @@ struct AdRunEngine: Sendable {
     let model: AnalysisModelEntry
     /// The thinking level carried in the canonical payload.
     let canonicalThinking: String?
+    let executionBudget: AnalysisExecutionBudget
     let transport: any AnalysisProviderTransport
     let clock: any AnalysisClock
 
@@ -58,7 +59,13 @@ struct AdRunEngine: Sendable {
         }
         let windows = AdWindowing.windows(of: request, policy: policy)
         let single = windows.count == 1
-        let budget = AdRunBudget(clock: clock, segmentCount: request.segments.count, policy: policy, model: model)
+        let budget = AdRunBudget(
+            clock: clock,
+            segmentCount: request.segments.count,
+            policy: policy,
+            model: model,
+            execution: executionBudget
+        )
         let inFlight = max(1, policy.window.maxInFlight)
         let outcome: Result<[Int: AdWindowResult], AnalysisFailure> = await withTaskGroup(
             of: (Int, Result<AdWindowResult, AnalysisFailure>).self

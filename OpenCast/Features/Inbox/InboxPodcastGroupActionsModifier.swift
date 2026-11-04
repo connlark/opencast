@@ -23,11 +23,12 @@ struct InboxPodcastGroupActionsModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .contextMenu {
-                NavigationLink(
-                    value: AppRoute.podcastDetail(
+                TwoPaneRootLink(
+                    route: .podcastDetail(
                         feedURL: group.subscription.feedURL,
                         episodeListOverride: episodeListOverride
-                    )
+                    ),
+                    selectionStyle: .menuItem
                 ) {
                     Label("Go to Show", systemImage: "rectangle.stack")
                 }

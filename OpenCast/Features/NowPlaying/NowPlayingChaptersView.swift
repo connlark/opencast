@@ -7,6 +7,8 @@ struct NowPlayingChaptersView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
 
+    var host: NowPlayingSecondaryHost = .sheet
+
     var body: some View {
         let chapters = appModel.currentEpisodeChapters
         let current = chapters.chapter(at: appModel.playback.position)
@@ -18,8 +20,7 @@ struct NowPlayingChaptersView: View {
                 } else {
                     List(chapters.chapters) { chapter in
                         Button {
-                            appModel.seekCurrentEpisode(toChapter: chapter, in: chapters, modelContext: modelContext)
-                            dismiss()
+                            select(chapter, in: chapters)
                         } label: {
                             HStack(alignment: .firstTextBaseline, spacing: 12) {
                                 Text(EpisodeChaptersCard.startTimeText(chapter.startTime))
@@ -49,13 +50,22 @@ struct NowPlayingChaptersView: View {
             .navigationTitle("Chapters")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
-                        dismiss()
+                if host.showsDoneButton {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            dismiss()
+                        }
                     }
                 }
             }
         }
         .accessibilityIdentifier("Now Playing Chapters")
+    }
+
+    private func select(_ chapter: EpisodeChapter, in chapters: PlaybackChapterList) {
+        appModel.seekCurrentEpisode(toChapter: chapter, in: chapters, modelContext: modelContext)
+        if host.dismissesAfterSelection {
+            dismiss()
+        }
     }
 }

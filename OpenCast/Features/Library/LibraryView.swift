@@ -7,6 +7,7 @@ struct LibraryView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(SceneLibraryLayouts.self) private var sceneLibraryLayouts: SceneLibraryLayouts?
     @State private var sampleSubscriptionErrorMessage: String?
     @State private var isSubscribingSample = false
     @State private var namePromptRequest: PlaylistNamePromptRequest?
@@ -23,7 +24,10 @@ struct LibraryView: View {
     }
 
     private var layout: LibraryLayout {
-        displaySettings.layout.resolved(isRegularWidth: horizontalSizeClass == .regular)
+        let preference = displaySettings.layout
+        let isRegularWidth = horizontalSizeClass == .regular
+        return sceneLibraryLayouts?.layout(of: .library, for: preference, isRegularWidth: isRegularWidth)
+            ?? preference.resolved(isRegularWidth: isRegularWidth)
     }
 
     var body: some View {
@@ -71,6 +75,9 @@ struct LibraryView: View {
             }
             .onChange(of: pendingOpenPlaylistID) {
                 openPendingPlaylistAfterPrompt()
+            }
+            .onChange(of: displaySettings.layout, initial: true) { _, preference in
+                sceneLibraryLayouts?.observe(preference, on: .library, isRegularWidth: horizontalSizeClass == .regular)
             }
             .onAppear(perform: appModel.library.advanceNewEpisodeReferenceDate)
             .onChange(of: scenePhase) { _, scenePhase in

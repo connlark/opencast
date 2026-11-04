@@ -134,7 +134,7 @@ struct PlaylistDetailView: View {
         .background(alignment: .top) {
             EpisodeArtworkGlowBackground(preview: glowPreview(for: summary, items: allItems))
         }
-        .contentMargins(.bottom, 72, for: .scrollContent)
+        .tabAccessoryBottomClearance()
         .animation(listAnimation, value: summary.hidesPlayed)
     }
 

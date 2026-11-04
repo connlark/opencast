@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FinishedPlaybackView: View {
     @AccessibilityFocusState private var isFinishedStatusAccessibilityFocused: Bool
+    @State private var titleBlockHeight: CGFloat?
 
     let presentation: FinishedPlaybackPresentation
     let metrics: NowPlayingContentMetrics
@@ -13,7 +14,7 @@ struct FinishedPlaybackView: View {
             ArtworkPlaceholder(
                 title: presentation.episode.podcastTitle,
                 imageURL: presentation.episode.artworkURL,
-                size: metrics.artworkSize,
+                size: metrics.artworkUpperBound,
                 cacheKind: .episode,
                 preview: presentation.episode.artworkPreview
             )
@@ -34,6 +35,12 @@ struct FinishedPlaybackView: View {
                     .minimumScaleFactor(metrics.podcastMinimumScaleFactor)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            .onGeometryChange(for: CGFloat.self) { geometry in
+                geometry.size.height
+            } action: { height in
+                titleBlockHeight = height
+            }
+            .padding(.top, metrics.finishedTitleBlockTopSpacer(titleBlockHeight: titleBlockHeight))
 
             Label("Finished", systemImage: "checkmark.circle.fill")
                 .font(.headline)
@@ -58,7 +65,8 @@ struct FinishedPlaybackView: View {
             .padding(.top, 8)
         }
         .frame(maxWidth: metrics.contentWidth)
-        .padding(.horizontal, metrics.horizontalPadding)
+        .padding(.leading, metrics.leadingPadding)
+        .padding(.trailing, metrics.trailingPadding)
         .padding(.top, metrics.topContentPadding)
         .padding(.bottom, metrics.bottomContentPadding)
         .frame(maxWidth: .infinity)

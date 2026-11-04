@@ -7,12 +7,11 @@ struct PlayerUtilitySpeedButton: View {
     var body: some View {
         Button(action: action) {
             Text(rate.formattedSpeed)
-                .font(.body)
                 .bold()
                 .minimumScaleFactor(0.7)
         }
         .buttonStyle(.plain)
-        .playerUtilityCircleChrome()
+        .playerUtilityCircleChrome(labelIsText: true)
         .accessibilityLabel("Playback Speed")
         .accessibilityValue(rate.formattedSpeed)
         .accessibilityInputLabels(["Speed", "Playback Speed"])

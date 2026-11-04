@@ -140,6 +140,12 @@ pub enum SettleOutcome {
     Ambiguous {
         class: AmbiguousClass,
         status: Option<u16>,
+        /// A dispatched timeout under a budget the device materially
+        /// shortened: charged like any other, but it cannot tell a slow
+        /// provider from a short budget, so it is not counted as a provider
+        /// failure. Absent on the wire from a Worker that predates it.
+        #[serde(default)]
+        client_budget: bool,
     },
     NotDispatched,
 }
@@ -159,7 +165,11 @@ impl SettleOutcome {
     }
 
     pub fn provider_failure(self) -> bool {
-        matches!(self, Self::Ambiguous { class, .. } if class.is_provider_failure())
+        matches!(
+            self,
+            Self::Ambiguous { class, client_budget, .. }
+                if class.is_provider_failure() && !client_budget
+        )
     }
 }
 
@@ -175,6 +185,7 @@ pub fn classify_reply(status: u16, body: &[u8]) -> SettleOutcome {
             None => SettleOutcome::Ambiguous {
                 class: AmbiguousClass::NoUsage,
                 status: Some(status),
+                client_budget: false,
             },
         };
     }
@@ -190,6 +201,7 @@ pub fn classify_reply(status: u16, body: &[u8]) -> SettleOutcome {
     SettleOutcome::Ambiguous {
         class,
         status: Some(status),
+        client_budget: false,
     }
 }
 
@@ -271,7 +283,8 @@ mod tests {
             classify_reply(200, b"{}"),
             SettleOutcome::Ambiguous {
                 class: AmbiguousClass::NoUsage,
-                status: Some(200)
+                status: Some(200),
+                client_budget: false
             }
         );
         for status in UNBILLED_STATUSES {
@@ -293,11 +306,97 @@ mod tests {
                 classify_reply(status, usage),
                 SettleOutcome::Ambiguous {
                     class,
-                    status: Some(status)
+                    status: Some(status),
+                    client_budget: false
                 },
                 "{status}"
             );
         }
+        // What the transport reports: no reply, so no status.
+        for (class, failure) in [
+            (AmbiguousClass::Timeout, true),
+            (AmbiguousClass::Unreachable, true),
+            (AmbiguousClass::BodyTooLarge, false),
+        ] {
+            let outcome = SettleOutcome::Ambiguous {
+                class,
+                status: None,
+                client_budget: false,
+            };
+            assert!(outcome.dispatched(), "{class:?}");
+            assert_eq!(outcome.provider_failure(), failure, "{class:?}");
+        }
+        assert!(classify_reply(503, usage).provider_failure());
+        assert!(!classify_reply(408, usage).provider_failure());
+        assert!(!classify_reply(200, b"{}").provider_failure());
+    }
+
+    fn client_budget_timeout() -> SettleOutcome {
+        SettleOutcome::Ambiguous {
+            class: AmbiguousClass::Timeout,
+            status: None,
+            client_budget: true,
+        }
+    }
+
+    #[test]
+    fn a_client_budget_timeout_is_dispatched_but_no_provider_failure() {
+        let outcome = client_budget_timeout();
+        assert!(outcome.dispatched());
+        assert_eq!(outcome.kind(), "ambiguous");
+        assert!(!outcome.provider_failure());
+    }
+
+    #[test]
+    fn the_flag_crosses_settle_and_defaults_to_false() {
+        let wire = serde_json::to_value(client_budget_timeout()).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "kind": "ambiguous",
+                "class": "timeout",
+                "status": null,
+                "client_budget": true
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<SettleOutcome>(wire).unwrap(),
+            client_budget_timeout()
+        );
+        // A Worker that predates the flag still means an ordinary timeout.
+        let old: SettleOutcome =
+            serde_json::from_str(r#"{"kind":"ambiguous","class":"timeout","status":null}"#)
+                .unwrap();
+        assert_eq!(
+            old,
+            SettleOutcome::Ambiguous {
+                class: AmbiguousClass::Timeout,
+                status: None,
+                client_budget: false
+            }
+        );
+        assert!(old.provider_failure());
+    }
+
+    #[test]
+    fn an_object_that_predates_the_flag_ignores_it() {
+        // The enum as baseline bb72df94 decodes it.
+        #[derive(Debug, PartialEq, Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case")]
+        enum Baseline {
+            Ambiguous {
+                class: AmbiguousClass,
+                status: Option<u16>,
+            },
+        }
+        let wire = serde_json::to_vec(&client_budget_timeout()).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Baseline>(&wire).unwrap(),
+            Baseline::Ambiguous {
+                class: AmbiguousClass::Timeout,
+                status: None
+            }
+        );
     }
 
     #[test]

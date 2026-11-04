@@ -35,7 +35,7 @@ final class AnalysisTrialStatusCache {
     /// The status, from the cache when younger than an hour and not forced;
     /// `nil` when it could not be read.
     func status(forceRefresh: Bool) async -> AnalysisTrialProxyStatus? {
-        if !forceRefresh, let status, let fetchedAt, now().timeIntervalSince(fetchedAt) < Self.timeToLive, fetchedAt <= now() {
+        if !forceRefresh, let status, let fetchedAt, now().timeIntervalSince(fetchedAt) < Self.timeToLive, fetchedAt.timeIntervalSinceReferenceDate <= now().timeIntervalSinceReferenceDate {
             return status
         }
         if let inFlight { return await inFlight.value }

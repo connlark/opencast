@@ -12,6 +12,8 @@ struct NowPlayingUtilityControls: View {
     /// The width the controls are laid out in; a single row that would not
     /// fit falls back to the grid instead of overflowing the screen edges.
     let availableWidth: Double
+    /// The transport's resolved play-button diameter: no circle outgrows it.
+    let playButtonDiameter: Double
     let onShowSpeed: () -> Void
     let onShowSleepTimer: () -> Void
     let onShowUpNext: () -> Void
@@ -49,16 +51,22 @@ struct NowPlayingUtilityControls: View {
             }
         }
         .foregroundStyle(.primary)
+        .environment(\.playerUtilityCircleCeiling, playButtonDiameter)
     }
 
     private var usesGrid: Bool {
         dynamicTypeSize.isAccessibilitySize
-            || Self.rowWidth(circleCount: onAddNote == nil ? 4 : 5, scaledDiameter: circleDiameter) > availableWidth
+            || Self.rowWidth(
+                circleCount: onAddNote == nil ? 4 : 5,
+                scaledDiameter: circleDiameter,
+                playButtonDiameter: playButtonDiameter
+            ) > availableWidth
     }
 
-    static func rowWidth(circleCount: Int, scaledDiameter: Double) -> Double {
+    static func rowWidth(circleCount: Int, scaledDiameter: Double, playButtonDiameter: Double) -> Double {
         let count = Double(circleCount)
-        return count * PlayerUtilityCircleChrome.diameter(scaled: scaledDiameter) + (count - 1) * spacing
+        let diameter = PlayerUtilityCircleChrome.diameter(scaled: scaledDiameter, playButtonDiameter: playButtonDiameter)
+        return count * diameter + (count - 1) * spacing
     }
 
     private func addNoteButton(action: @escaping () -> Void) -> some View {

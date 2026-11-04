@@ -241,9 +241,7 @@ final class ScrollJankDeviceProbeUITests: XCTestCase {
             return
         }
 
-        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22))
-        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.97))
-        start.press(forDuration: 0.05, thenDragTo: end)
+        dragNowPlayingCard(overlay, travelling: 0.75)
         sleep(1)
     }
 

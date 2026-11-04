@@ -192,14 +192,15 @@ final class AnalysisRouteResolver {
 
     /// The trial's entry: the Google entry with the trial's model id. Ad
     /// detection runs one window at a time, because the trial service
-    /// admits one open request per install.
+    /// admits one open request per install, under the trial's serial
+    /// execution budget.
     nonisolated static func trialPolicy(feature: AnalysisFeature, snapshot: AnalysisPolicySnapshot) -> AnalysisRoutePolicy? {
         switch feature {
         case .adDetection:
             guard let trial = snapshot.trialAdDetection else { return nil }
             var settings = trial.settings
             settings.window.maxInFlight = 1
-            return .adDetection(trial.with(settings: settings))
+            return .adDetection(trial.with(settings: settings, executionBudget: .trial))
         case .chaptersSummary:
             guard let entry = snapshot.chaptersSummary(provider: .google),
                   entry.model.modelID == snapshot.bundle.trial.modelID

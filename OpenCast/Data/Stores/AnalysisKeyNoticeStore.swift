@@ -63,7 +63,7 @@ final class AnalysisKeyNoticeStore {
     /// The AI Services row stays after the notice was seen, until a key is
     /// saved.
     func showsSettingsNoticeRow(notice: AnalysisNoticePolicy?, hasSavedKey: Bool, now: Date) -> Bool {
-        !hasSavedKey && (notice?.startsAt ?? .distantFuture) <= now
+        !hasSavedKey && (notice?.startsAt ?? .distantFuture).timeIntervalSinceReferenceDate <= now.timeIntervalSinceReferenceDate
     }
 
     func remainingUnits(trial: AnalysisTrialPolicy) -> Int {

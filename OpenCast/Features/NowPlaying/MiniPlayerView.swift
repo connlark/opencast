@@ -5,6 +5,7 @@ import SwiftUI
 
 struct MiniPlayerView: View {
     @Environment(OpenCastAppModel.self) private var appModel
+    @Environment(TabAccessoryGeometryStore.self) private var accessoryStore: TabAccessoryGeometryStore?
     @Environment(\.modelContext) private var modelContext
     @Environment(\.tabViewBottomAccessoryPlacement) private var tabAccessoryPlacement
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -23,14 +24,16 @@ struct MiniPlayerView: View {
             let playlistRemainingCount = playlistSource.map {
                 appModel.remainingQueuedCount(forPlaylist: $0.playlistID)
             } ?? 0
+            let row = TabAccessoryRow(geometry: accessoryGeometry, isInline: isInline)
+            let metrics = row.metrics
 
-            HStack(spacing: isInline ? 4 : 8) {
+            HStack(spacing: isInline ? 4 : metrics.controlSpacing) {
                 Button(action: expand) {
-                    HStack(spacing: 10) {
+                    HStack(spacing: isInline ? 10 : metrics.artworkTitleSpacing) {
                         ArtworkPlaceholder(
                             title: episode.podcastTitle,
                             imageURL: episode.artworkURL?.absoluteString,
-                            size: isInline ? 30 : 38,
+                            size: isInline ? 30 : metrics.artworkSide,
                             cacheKind: .episode
                         )
                         .accessibilityHidden(true)
@@ -39,7 +42,8 @@ struct MiniPlayerView: View {
                             title: episode.title,
                             podcastTitle: episode.podcastTitle,
                             playlistSource: isInline ? nil : playlistSource,
-                            playlistRemainingCount: playlistRemainingCount
+                            playlistRemainingCount: playlistRemainingCount,
+                            showsSecondaryLine: row != .dense
                         )
                     }
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -54,6 +58,20 @@ struct MiniPlayerView: View {
                         remainingCount: playlistRemainingCount
                     )
                 )
+
+                if row == .wide {
+                    MiniPlayerScrubber()
+                        .frame(width: TabAccessoryRow.scrubberWidth)
+
+                    Button(action: skipBackward) {
+                        Label(skipBackwardLabel, systemImage: "gobackward.\(skipBackwardSeconds)")
+                            .labelStyle(.iconOnly)
+                            .font(.title3)
+                            .frame(width: 44, height: 44)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                }
 
                 Button(action: togglePlayPause) {
                     Group {
@@ -74,7 +92,7 @@ struct MiniPlayerView: View {
                 .accessibilityInputLabels(showsPauseButton ? ["Pause"] : ["Play"])
                 .accessibilityValue(state.accessibilityDescription)
 
-                if !isInline && !dynamicTypeSize.isAccessibilitySize {
+                if !isInline && (row == .wide || !dynamicTypeSize.isAccessibilitySize) {
                     Button(action: skipForward) {
                         Label(skipForwardLabel, systemImage: "goforward.\(skipForwardSeconds)")
                             .labelStyle(.iconOnly)
@@ -85,18 +103,28 @@ struct MiniPlayerView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, isInline ? 8 : 12)
-            .padding(.vertical, isInline ? 0 : 6)
+            .padding(.horizontal, isInline ? 8 : metrics.horizontalPadding)
+            .padding(.vertical, isInline ? 0 : metrics.verticalPadding)
             .sensoryFeedback(.impact(flexibility: .soft), trigger: transportFeedback)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier(isInline ? "mini-player-inline" : "mini-player-expanded")
             .accessibilityHidden(appModel.isNowPlayingPresented)
             .accessibilityAction(named: "Stop Playback", stopPlayback)
+            .onChange(of: accessoryGeometry, initial: true) { _, geometry in
+                TabAccessoryRow.log(accessory: "mini-player", geometry: geometry, isInline: isInline)
+            }
+            .tabAccessoryRowContainer()
         }
     }
 
     private var isInline: Bool {
         tabAccessoryPlacement == .inline
+    }
+
+    /// The accessory's own measured geometry, published by the tab root;
+    /// absent outside the tab view.
+    private var accessoryGeometry: TabAccessoryGeometry {
+        accessoryStore?.geometry ?? .absent
     }
 
     private func openNowPlayingValue(
@@ -122,6 +150,14 @@ struct MiniPlayerView: View {
         "Skip Forward \(skipForwardSeconds) Seconds"
     }
 
+    private var skipBackwardSeconds: Int {
+        Int(appModel.playbackSettings.skipBackwardOption.seconds.rounded())
+    }
+
+    private var skipBackwardLabel: String {
+        "Skip Back \(skipBackwardSeconds) Seconds"
+    }
+
     private func expand() {
         nowPlayingProbeMark("miniplayer-tap")
         onExpand()
@@ -139,5 +175,10 @@ struct MiniPlayerView: View {
     private func skipForward() {
         transportFeedback += 1
         appModel.playback.skip(by: appModel.playbackSettings.skipForwardOption.seconds)
+    }
+
+    private func skipBackward() {
+        transportFeedback += 1
+        appModel.playback.skip(by: -appModel.playbackSettings.skipBackwardOption.seconds)
     }
 }

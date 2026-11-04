@@ -16,6 +16,9 @@ struct NowPlayingSoundLabArtwork: View {
     let onTranscribeRemotely: () -> Void
     let onTranscriptAction: () -> Void
     let onAdFreePassBackgroundProbe: () -> Void
+    /// Below the panel's inline floor the reveal asks the player for the
+    /// Sound Lab sheet instead.
+    let onRequestSoundLabSheet: () -> Void
     @Binding var isSoundLabInteractionActive: Bool
     let isCardDismissDragActive: Bool
 
@@ -26,6 +29,10 @@ struct NowPlayingSoundLabArtwork: View {
     @State private var imageState = ArtworkImageState()
 
     private let cornerRadius: CGFloat = 8
+    /// A release opens the panel past this much of the reveal, or past
+    /// `openingPredictedProgress` of it by the drag's predicted end.
+    private static let openingProgress: CGFloat = 0.22
+    private static let openingPredictedProgress: CGFloat = 0.30
 
     var body: some View {
         let request = artworkRequest
@@ -35,7 +42,7 @@ struct NowPlayingSoundLabArtwork: View {
         ZStack {
             if shouldRenderSoundLabPanel {
                 NowPlayingSoundLabPanelHost(
-                    revealProgress: revealProgress,
+                    presentation: .inline(revealProgress: revealProgress),
                     voiceBoostEnabled: $voiceBoostEnabled,
                     voiceBoostControlEnabled: voiceBoostControlEnabled,
                     onAdFreePassAction: onAdFreePassAction,
@@ -53,11 +60,7 @@ struct NowPlayingSoundLabArtwork: View {
 
             NowPlayingArtworkImageView(title: title, image: artworkImage)
                 .opacity(1 - 0.10 * Double(revealProgress))
-                .offset(
-                    x: -size
-                        * (1 - NowPlayingSoundLabLayout.artworkVisibleFraction)
-                        * revealProgress
-                )
+                .offset(x: -(size - panelLayout.artworkExposedWidth) * revealProgress)
                 .allowsHitTesting(false)
         }
         .frame(width: size, height: size)
@@ -67,10 +70,11 @@ struct NowPlayingSoundLabArtwork: View {
                 .stroke(.white.opacity(edgeStrokeOpacity), lineWidth: 1)
                 .accessibilityHidden(true)
         }
-        .overlay(alignment: soundLabHitAlignment) {
+        .overlay(alignment: .leading) {
             Color.clear
-                .frame(width: soundLabHitWidth, height: size)
+                .frame(width: soundLabHitSpan.upperBound - soundLabHitSpan.lowerBound, height: size)
                 .contentShape(.rect(cornerRadius: cornerRadius))
+                .offset(x: soundLabHitSpan.lowerBound)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Artwork for \(title)")
                 .accessibilityValue(isOpen ? "Visual settings shown" : "Visual settings hidden")
@@ -86,6 +90,9 @@ struct NowPlayingSoundLabArtwork: View {
         .onAppear(perform: applyPinnedReveal)
         .onChange(of: appModel.isNowPlayingPresented) { _, isPresented in
             if !isPresented { resetInteraction() }
+        }
+        .onChange(of: showsInlinePanel) { _, showsInline in
+            if !showsInline { resetInteraction() }
         }
         .task(id: loadingRequest) {
             // Dismissal pauses loading without dropping the displayed bitmap.
@@ -106,7 +113,7 @@ struct NowPlayingSoundLabArtwork: View {
     }
 
     private func applyPinnedReveal() {
-        guard let pinnedRevealProgress else {
+        guard let pinnedRevealProgress, showsInlinePanel else {
             return
         }
 
@@ -135,8 +142,15 @@ struct NowPlayingSoundLabArtwork: View {
         reduceMotion ? size * 0.04 * (1 - revealProgress) : size * 0.03 * (1 - revealProgress)
     }
 
+    private var showsInlinePanel: Bool {
+        NowPlayingSoundLabLayout.showsInline(panelSide: size)
+    }
+
     private var shouldRenderSoundLabPanel: Bool {
-        switch interactionState {
+        guard showsInlinePanel else {
+            return false
+        }
+        return switch interactionState {
         case .closed:
             revealProgress > 0.001
         case .openingDrag, .open, .closingDrag, .settling:
@@ -160,16 +174,12 @@ struct NowPlayingSoundLabArtwork: View {
         size * 0.54
     }
 
-    private var soundLabHitWidth: CGFloat {
-        if isOpen, !isTrackingSoundLab {
-            return max(94, size * 0.34)
-        }
-
-        return size
+    private var panelLayout: NowPlayingSoundLabLayout {
+        NowPlayingSoundLabLayout(panelWidth: size)
     }
 
-    private var soundLabHitAlignment: Alignment {
-        isOpen && !isTrackingSoundLab ? .leading : .center
+    private var soundLabHitSpan: ClosedRange<CGFloat> {
+        panelLayout.artworkHitSpan(panelSide: size, isSettledOpen: isOpen && !isTrackingSoundLab)
     }
 
     private var soundLabGesture: some Gesture {
@@ -199,7 +209,7 @@ struct NowPlayingSoundLabArtwork: View {
     }
 
     private func updateSoundLabDrag(_ value: DragGesture.Value) {
-        guard !isCardDismissDragActive, !ignoresCurrentDrag else {
+        guard showsInlinePanel, !isCardDismissDragActive, !ignoresCurrentDrag else {
             return
         }
 
@@ -231,6 +241,16 @@ struct NowPlayingSoundLabArtwork: View {
             ignoresCurrentDrag = false
         }
 
+        // Below the floor nothing tracks the drag, so a cancelled one leaves
+        // no state behind; a release that would have opened the panel asks
+        // for the sheet.
+        guard showsInlinePanel else {
+            if releaseOpensBelowFloor(value) {
+                onRequestSoundLabSheet()
+            }
+            return
+        }
+
         guard isTrackingSoundLab else {
             isSoundLabInteractionActive = false
             return
@@ -241,10 +261,24 @@ struct NowPlayingSoundLabArtwork: View {
         let shouldOpen = if isOpen {
             !(revealProgress < 0.52 || predictedProgress < 0.36)
         } else {
-            revealProgress > 0.22 || predictedProgress > 0.30
+            revealProgress > Self.openingProgress || predictedProgress > Self.openingPredictedProgress
         }
 
         snap(open: shouldOpen)
+    }
+
+    private func releaseOpensBelowFloor(_ value: DragGesture.Value) -> Bool {
+        let translation = value.translation
+        guard !isCardDismissDragActive,
+              !NowPlayingDragIntent.shouldSoundLabYieldToCardDismiss(translation: translation),
+              startingSoundLabState(with: value) == .openingDrag
+        else {
+            return false
+        }
+        let verticalAssist = max(0, -translation.height) / (revealDistance * 4)
+        let progress = (-translation.width / revealDistance + verticalAssist).clamped01
+        let predictedProgress = (-value.predictedEndTranslation.width / revealDistance).clamped01
+        return progress > Self.openingProgress || predictedProgress > Self.openingPredictedProgress
     }
 
     private func startingSoundLabState(with value: DragGesture.Value) -> NowPlayingSoundLabInteractionState? {
@@ -278,6 +312,12 @@ struct NowPlayingSoundLabArtwork: View {
     }
 
     private func requestSnap(open: Bool) {
+        guard showsInlinePanel else {
+            if open {
+                onRequestSoundLabSheet()
+            }
+            return
+        }
         snap(open: open)
     }
 

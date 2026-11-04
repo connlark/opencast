@@ -19,7 +19,7 @@ struct LibrarySubscriptionRowView: View {
     var body: some View {
         let newEpisodeCount = newEpisodeCount
 
-        NavigationLink(value: AppRoute.podcastDetail(feedURL: subscription.feedURL)) {
+        TwoPaneRootLink(route: .podcastDetail(feedURL: subscription.feedURL)) {
             SubscriptionRowView(subscription: subscription, badgeCount: newEpisodeCount)
         }
         .accessibilityValue(LibraryNewEpisodeBadge.accessibilityValue(count: newEpisodeCount))

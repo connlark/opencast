@@ -25,6 +25,21 @@ enum AdPipelineConstants {
     static let maxPreservedEvidenceWords = 32
 }
 
+/// The trial route's ad-detection budget (``AnalysisExecutionBudget/trial``).
+/// Trial-only client numbers with no service counterpart, so nothing here
+/// is pinned to the services' source.
+enum AdTrialRunConstants {
+    /// The analysis execution budget, counted from when the run's budget is
+    /// made: twelve 120-second first sends with 300 seconds to spare.
+    /// Retries, repairs and waits draw on the same deadline, so it does not
+    /// reserve every window's worst case. It bounds neither preparation nor
+    /// finalization; the service's own limits (twelve windows, cumulative
+    /// input) are separate and are not a run timer.
+    static let runBudgetSeconds = 1_740
+    /// No send starts with less than this left, and no pause leaves less.
+    static let sendFloorSeconds = 30
+}
+
 /// Chapters & Summary numbers the policy bundle does not carry. Each equals
 /// the service's constant.
 enum ChaptersPipelineConstants {
@@ -102,9 +117,20 @@ extension AnalysisPolicy where Settings == AdDetectionPolicy {
         )
     }
 
-    /// The same policy with other settings or another model.
-    public func with(settings: AdDetectionPolicy? = nil, model: AnalysisModelEntry? = nil) -> Self {
-        AnalysisPolicy(bundleVersion: bundleVersion, source: source, settings: settings ?? self.settings, model: model ?? self.model)
+    /// The same policy with other settings, another model or another
+    /// execution budget.
+    public func with(
+        settings: AdDetectionPolicy? = nil,
+        model: AnalysisModelEntry? = nil,
+        executionBudget: AnalysisExecutionBudget? = nil
+    ) -> Self {
+        AnalysisPolicy(
+            bundleVersion: bundleVersion,
+            source: source,
+            settings: settings ?? self.settings,
+            model: model ?? self.model,
+            executionBudget: executionBudget ?? self.executionBudget
+        )
     }
 }
 
@@ -120,6 +146,12 @@ extension AnalysisPolicy where Settings == ChaptersSummaryPolicy {
     }
 
     public func with(settings: ChaptersSummaryPolicy? = nil, model: AnalysisModelEntry? = nil) -> Self {
-        AnalysisPolicy(bundleVersion: bundleVersion, source: source, settings: settings ?? self.settings, model: model ?? self.model)
+        AnalysisPolicy(
+            bundleVersion: bundleVersion,
+            source: source,
+            settings: settings ?? self.settings,
+            model: model ?? self.model,
+            executionBudget: executionBudget
+        )
     }
 }

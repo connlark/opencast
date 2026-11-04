@@ -582,15 +582,17 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
 
     @MainActor
     private func openInbox(in app: XCUIApplication) {
-        let queueNav = app.navigationBars["Ad Detection"]
-        if queueNav.exists {
-            let backButton = queueNav.buttons.firstMatch
+        if waitForScreen("Ad Detection", in: app, timeout: 0) {
+            var backButton = app.navigationBars["Ad Detection"].buttons.firstMatch
+            if !backButton.exists, isSectionRail(in: app) {
+                backButton = app.buttons["BackButton"].firstMatch
+            }
             if backButton.exists, backButton.isHittable {
                 backButton.tap()
             }
         }
 
-        if app.navigationBars["Inbox"].waitForExistence(timeout: 3) {
+        if waitForScreen("Inbox", in: app, timeout: 3) {
             return
         }
 
@@ -599,7 +601,7 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
 
     @MainActor
     private func openSearch(in app: XCUIApplication) {
-        if app.navigationBars["Search"].exists,
+        if waitForScreen("Search", in: app, timeout: 0),
            app.searchFields.firstMatch.exists {
             return
         }
@@ -615,7 +617,7 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
     @discardableResult
     @MainActor
     private func tryOpenQueueScreen(in app: XCUIApplication) -> Bool {
-        if app.navigationBars["Ad Detection"].exists {
+        if waitForScreen("Ad Detection", in: app, timeout: 0) {
             return true
         }
 
@@ -629,18 +631,17 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
         // progress tick (its `.task(id:)` keys on the progress fraction), so
         // a normal-length tap routinely dies mid-gesture while a drain is
         // running. Bursts of very short taps land between rebuilds.
-        let queueNav = app.navigationBars["Ad Detection"]
         burst: for offset in [0.5, 0.1, 0.85] as [CGFloat] {
             guard indicator.exists else { break }
             for _ in 0..<4 {
                 indicator.coordinate(withNormalizedOffset: CGVector(dx: offset, dy: 0.5))
                     .press(forDuration: 0.02)
-                if queueNav.waitForExistence(timeout: 2) {
+                if waitForScreen("Ad Detection", in: app, timeout: 2) {
                     break burst
                 }
             }
         }
-        return queueNav.exists
+        return waitForScreen("Ad Detection", in: app, timeout: 0)
     }
 
     @MainActor
@@ -660,7 +661,7 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
     private func waitForQueueDrainToFinish(in app: XCUIApplication, timeout: TimeInterval) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if !app.navigationBars["Ad Detection"].exists {
+            if !waitForScreen("Ad Detection", in: app, timeout: 0) {
                 openInbox(in: app)
                 dismissSearchIfPresented(in: app)
                 let indicator = app.buttons["Ad Detection Queue Indicator"]
@@ -670,7 +671,7 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
                 if indicator.exists, indicator.isHittable {
                     indicator.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).tap()
                 }
-                guard app.navigationBars["Ad Detection"].waitForExistence(timeout: 4) else {
+                guard waitForScreen("Ad Detection", in: app, timeout: 4) else {
                     continue
                 }
             }

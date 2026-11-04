@@ -7,10 +7,17 @@ struct MiniPlayerMetadataView: View {
     let podcastTitle: String
     var playlistSource: PlaylistPlaybackSource? = nil
     var playlistRemainingCount = 0
+    /// Off in the dense row: the title alone, on one line. The caller keeps
+    /// the second line's text in its accessibility value.
+    var showsSecondaryLine = true
 
     var body: some View {
         Group {
-            if dynamicTypeSize.isAccessibilitySize {
+            if !showsSecondaryLine {
+                Text(title)
+                    .font(dynamicTypeSize.isAccessibilitySize ? .caption : .subheadline)
+                    .foregroundStyle(.primary)
+            } else if dynamicTypeSize.isAccessibilitySize {
                 // The system accessory has a fixed height. A scaled single
                 // line stays readable; VoiceOver receives both full titles.
                 Text("\(title), \(podcastTitle)")

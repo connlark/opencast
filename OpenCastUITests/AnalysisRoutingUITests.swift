@@ -283,15 +283,14 @@ final class AnalysisRoutingUITests: XCTestCase {
     private func openQueueScreenOnceParked(in app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
         openSection("Inbox", in: app, file: file, line: line)
         let indicator = app.buttons["Ad Detection Queue Indicator"]
-        let queueScreen = app.navigationBars["Ad Detection"]
         assertExists(indicator, named: "queue indicator", timeout: 10, file: file, line: line)
-        for _ in 0..<3 where !queueScreen.exists {
+        for _ in 0..<3 where !waitForScreen("Ad Detection", in: app, timeout: 0) {
             if indicator.exists {
                 indicator.tap()
             }
-            _ = queueScreen.waitForExistence(timeout: 3)
+            _ = waitForScreen("Ad Detection", in: app, timeout: 3)
         }
-        assertExists(queueScreen, named: "queue screen", file: file, line: line)
+        assertScreen("Ad Detection", named: "queue screen", in: app, file: file, line: line)
         let consent = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Download Model")).firstMatch
         assertExists(consent, named: "model consent affordance of the parked item", timeout: 60, file: file, line: line)
     }

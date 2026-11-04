@@ -7,6 +7,7 @@ struct NowPlayingOverlayView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(SceneLibraryLayouts.self) private var sceneLibraryLayouts: SceneLibraryLayouts?
 
     let onDismissed: () -> Void
     let onOpenEpisode: () -> Void
@@ -20,17 +21,68 @@ struct NowPlayingOverlayView: View {
     @State private var isFinishingDismissal = false
     @State private var isSoundLabInteractionActive = false
     @State private var isContentScrolledToTop = true
+    @State private var dismissDragExcludedFrames: [CGRect] = []
+    /// Decided on a drag's first change and kept for the whole drag: a drag
+    /// that starts in the secondary pane stays the pane's even after the
+    /// content beneath it scrolls away. Reset when the drag ends or cancels.
+    @GestureState private var dismissDragStartedInPane: Bool?
 
     private static let accessibilityTitle = "Now Playing"
 
     private var isPresented: Bool { appModel.isNowPlayingPresented }
 
     var body: some View {
+        // The window's insets, read before the card's reader ignores them; the
+        // keyboard's never move the card.
+        GeometryReader { safeAreaProxy in
+            windowLayer(safeAreaInsets: safeAreaProxy.safeAreaInsets)
+        }
+        .ignoresSafeArea(.keyboard)
+        .allowsHitTesting(isPresented)
+    }
+
+    /// The dim and the card in the whole window. The reserved regions are read
+    /// here, from the current layout, every time it changes, and the
+    /// arrangement is derived from them on every layout.
+    private func windowLayer(safeAreaInsets: EdgeInsets) -> some View {
         GeometryReader { proxy in
-            let cardSize = cardSize(in: proxy)
+            let pose = WindowPose(
+                horizontalSizeClass: horizontalSizeClass,
+                divisionRegions: WindowDivisionRegion.current(in: proxy)
+            )
+            let arrangement = NowPlayingArrangement(
+                pose: pose,
+                windowSize: proxy.size,
+                isFoldableScene: NowPlayingArrangement.isFoldableScene(
+                    latched: sceneLibraryLayouts?.isFoldable ?? false,
+                    currentRegions: SceneLibraryLayouts.divisionRegions(in: proxy)
+                )
+            )
+            let surface = NowPlayingSurface(
+                windowSize: proxy.size,
+                safeAreaInsets: safeAreaInsets,
+                pose: pose,
+                occlusions: proxy.reservedRegions(kind: .occlusion).filter(\.isActive).map(\.frame),
+                isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
+            )
+            let cardGeometry = arrangement.usesWindowSizedSurface
+                ? surface.playerGeometry(allocation: CGRect(origin: .zero, size: proxy.size))
+                : NowPlayingCardGeometry(
+                    windowSize: proxy.size,
+                    safeAreaInsets: safeAreaInsets,
+                    isRegular: horizontalSizeClass == .regular,
+                    isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
+                    pose: pose,
+                    occlusions: surface.occlusions
+                )
+            // A foldable scene's surface is the window; the player's own
+            // allocation inside it comes from the arrangement.
+            let surfaceFrame = arrangement.usesWindowSizedSurface
+                ? CGRect(origin: .zero, size: proxy.size)
+                : cardGeometry.cardFrame
             let currentOffset = resolvedOffset(in: proxy)
             let progress = presentationProgress(offset: currentOffset, in: proxy)
-            let cornerRadius = cornerRadius(progress: progress)
+            let cornerRadius = cornerRadius(progress: progress, isWindowSized: arrangement.usesWindowSizedSurface)
             let cardShape = RoundedRectangle(cornerRadius: cornerRadius)
 
             ZStack(alignment: .bottom) {
@@ -40,11 +92,12 @@ struct NowPlayingOverlayView: View {
                     .accessibilityHidden(true)
 
                 NowPlayingView(
-                    bottomContentPadding: proxy.safeAreaInsets.bottom + bottomContentPadding,
-                    topContentPadding: topContentPadding(in: proxy),
-                    moreMenuTopPadding: moreMenuTopPadding(in: proxy),
+                    cardGeometry: cardGeometry,
+                    arrangement: arrangement,
+                    surface: surface,
                     isSoundLabInteractionActive: $isSoundLabInteractionActive,
                     isContentScrolledToTop: $isContentScrolledToTop,
+                    dismissDragExcludedFrames: $dismissDragExcludedFrames,
                     isTrackingDismissDrag: isTrackingDismissDrag,
                     onDismiss: { dismiss(containerHeight: proxy.size.height) },
                     onOpenEpisode: { openEpisode(containerHeight: proxy.size.height) },
@@ -52,7 +105,7 @@ struct NowPlayingOverlayView: View {
                     onOpenPlaylist: { openPlaylist(containerHeight: proxy.size.height) },
                     onStopPlayback: { stopPlayback(containerHeight: proxy.size.height) }
                 )
-                .frame(width: cardSize.width, height: cardSize.height)
+                .frame(width: surfaceFrame.width, height: surfaceFrame.height)
                 .background(playerSurface)
                 .clipShape(cardShape)
                 .overlay {
@@ -74,6 +127,8 @@ struct NowPlayingOverlayView: View {
                 .accessibilityLabel(isPresented ? Text(Self.accessibilityTitle) : Text(""))
                 .accessibilityIdentifier(isPresented ? Self.accessibilityTitle : "")
                 .accessibilityHidden(!isPresented)
+                .padding(.leading, surfaceFrame.minX)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onAppear {
@@ -99,26 +154,10 @@ struct NowPlayingOverlayView: View {
             .opacity(isPresented ? 1 : 0)
         }
         .ignoresSafeArea()
-        .allowsHitTesting(isPresented)
     }
 
     private var playerSurface: Color {
         Color(.systemBackground)
-    }
-
-    private var bottomContentPadding: CGFloat {
-        horizontalSizeClass == .regular ? 32 : 22
-    }
-
-    private func cardSize(in proxy: GeometryProxy) -> CGSize {
-        if horizontalSizeClass == .regular {
-            return CGSize(
-                width: (proxy.size.width - 80).clamped(to: 0...660),
-                height: (proxy.size.height - 72).clamped(to: 0...860)
-            )
-        }
-
-        return proxy.size
     }
 
     private func resolvedOffset(in proxy: GeometryProxy) -> CGFloat {
@@ -127,25 +166,6 @@ struct NowPlayingOverlayView: View {
         }
 
         return max(offsetY, 0)
-    }
-
-    private func topContentPadding(in proxy: GeometryProxy) -> CGFloat {
-        if horizontalSizeClass == .regular {
-            return dynamicTypeSize.isAccessibilitySize ? 56 : 96
-        }
-
-        if dynamicTypeSize.isAccessibilitySize {
-            return proxy.safeAreaInsets.top + (proxy.size.height < 700 ? 14 : 28)
-        }
-
-        return proxy.safeAreaInsets.top + (proxy.size.height < 720 ? 92 : 150)
-    }
-
-    private func moreMenuTopPadding(in proxy: GeometryProxy) -> CGFloat {
-        // proxy.safeAreaInsets is zeroed by this view's ignoresSafeArea, so
-        // the phone value is a fixed clearance below the status bar/Dynamic
-        // Island inside the card's blank top band.
-        horizontalSizeClass == .regular ? 18 : 62
     }
 
     private func presentationProgress(offset: CGFloat, in proxy: GeometryProxy) -> CGFloat {
@@ -173,7 +193,13 @@ struct NowPlayingOverlayView: View {
         return collapsedScale + (1 - collapsedScale) * progress
     }
 
-    private func cornerRadius(progress: CGFloat) -> CGFloat {
+    /// A window-sized surface rounds only while it moves, like the compact
+    /// card, with the regular card's radius.
+    private func cornerRadius(progress: CGFloat, isWindowSized: Bool) -> CGFloat {
+        if isWindowSized {
+            return (1 - progress) * 36
+        }
+
         if horizontalSizeClass == .regular {
             return 36
         }
@@ -304,6 +330,12 @@ struct NowPlayingOverlayView: View {
         }
 
         if !isTrackingDismissDrag {
+            let startedInPane = dismissDragStartedInPane
+                ?? NowPlayingDragIntent.startsInSecondaryPane(value.startLocation, paneFrames: dismissDragExcludedFrames)
+            guard !startedInPane else {
+                return
+            }
+
             guard isContentScrolledToTop else {
                 return
             }
@@ -330,6 +362,14 @@ struct NowPlayingOverlayView: View {
         containerHeight: CGFloat
     ) -> some Gesture {
         DragGesture(minimumDistance: 8, coordinateSpace: .global)
+            .updating($dismissDragStartedInPane) { value, startedInPane, _ in
+                if startedInPane == nil {
+                    startedInPane = NowPlayingDragIntent.startsInSecondaryPane(
+                        value.startLocation,
+                        paneFrames: dismissDragExcludedFrames
+                    )
+                }
+            }
             .onChanged(updateDismissDrag)
             .onEnded {
                 finishDismissDrag(

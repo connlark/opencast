@@ -143,7 +143,7 @@ final class AnalysisUsageStore {
         }
         // A run recorded again under its id may restate its own totals at
         // the same instant.
-        if usage.lastRun.map({ stamp > $0.at || (counted != nil && stamp >= $0.at) }) ?? true {
+        if usage.lastRun.map({ stamp > $0.at || (counted != nil && stamp.timeIntervalSinceReferenceDate >= $0.at.timeIntervalSinceReferenceDate) }) ?? true {
             usage.lastRun = AnalysisProviderUsage.Run(
                 feature: feature.rawValue,
                 inputTokens: totalInput,

@@ -3,7 +3,7 @@ import SwiftUI
 struct NowPlayingSoundLabPanelHost: View {
     @Environment(OpenCastAppModel.self) private var appModel
 
-    let revealProgress: CGFloat
+    let presentation: NowPlayingSoundLabPanel.Presentation
     @Binding var voiceBoostEnabled: Bool
     let voiceBoostControlEnabled: Bool
     let onAdFreePassAction: () -> Void
@@ -13,7 +13,7 @@ struct NowPlayingSoundLabPanelHost: View {
 
     var body: some View {
         NowPlayingSoundLabPanel(
-            revealProgress: revealProgress,
+            presentation: presentation,
             voiceBoostEnabled: $voiceBoostEnabled,
             voiceBoostControlEnabled: voiceBoostControlEnabled,
             adFreePassRow: NowPlayingSoundLabAdFreePassRowModel(

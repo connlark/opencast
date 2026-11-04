@@ -1,18 +1,40 @@
-/// The finite wall budget of one ad-detection run, allocated across the
-/// worst-case waves of windows including the transport retry and the
-/// semantic repair, so a short episode can wait for a slow valid answer
-/// without extending the whole run.
+/// The finite wall budget of one ad-detection run. The service's budget is
+/// allocated across the worst-case waves of windows including the transport
+/// retry and the semantic repair, so a short episode can wait for a slow
+/// valid answer without extending the whole run. The trial's serial budget
+/// gives each send up to the model's per-call timeout while the floor is
+/// left; the floor admits sends and never cuts one short.
 struct AdRunBudget: Sendable {
     let clock: any AnalysisClock
     let deadline: Double
     let callTimeoutSeconds: Double
     let maxBackoffSeconds: Int
+    /// The least time left that admits a send.
+    let sendFloorSeconds: Double
+    /// The time a pause must leave before the deadline.
+    let backoffReserveSeconds: Double
 
-    init(clock: any AnalysisClock, segmentCount: Int, policy: AdDetectionPolicy, model: AnalysisModelEntry) {
+    init(
+        clock: any AnalysisClock,
+        segmentCount: Int,
+        policy: AdDetectionPolicy,
+        model: AnalysisModelEntry,
+        execution: AnalysisExecutionBudget
+    ) {
         self.clock = clock
-        deadline = clock.now() + Double(model.runBudgetSeconds)
-        callTimeoutSeconds = Double(Self.callTimeoutSeconds(segmentCount: segmentCount, policy: policy, model: model))
         maxBackoffSeconds = AdPipelineConstants.maxBackoffSeconds
+        switch execution {
+        case .service:
+            deadline = clock.now() + Double(model.runBudgetSeconds)
+            callTimeoutSeconds = Double(Self.callTimeoutSeconds(segmentCount: segmentCount, policy: policy, model: model))
+            sendFloorSeconds = 1
+            backoffReserveSeconds = callTimeoutSeconds
+        case .trial:
+            deadline = clock.now() + Double(AdTrialRunConstants.runBudgetSeconds)
+            callTimeoutSeconds = Double(model.perCallTimeoutSeconds)
+            sendFloorSeconds = Double(AdTrialRunConstants.sendFloorSeconds)
+            backoffReserveSeconds = sendFloorSeconds
+        }
     }
 
     /// `((budget / waves) - backoff) / attempts`, capped by the model's
@@ -36,13 +58,13 @@ struct AdRunBudget: Sendable {
     func callTimeout() throws(AnalysisFailure) -> Double {
         try check()
         let remaining = deadline - clock.now()
-        if remaining < 1 { throw AdRunEngine.failure(.analysisDeadlineExhausted) }
+        if remaining < sendFloorSeconds { throw AdRunEngine.failure(.analysisDeadlineExhausted) }
         return min(remaining, callTimeoutSeconds)
     }
 
     func backoff(seconds: Int) async throws(AnalysisFailure) {
         try check()
-        if seconds > maxBackoffSeconds || clock.now() + Double(seconds) + callTimeoutSeconds > deadline {
+        if seconds > maxBackoffSeconds || clock.now() + Double(seconds) + backoffReserveSeconds > deadline {
             throw AdRunEngine.failure(.analysisDeadlineExhausted)
         }
         do {

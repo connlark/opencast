@@ -1,8 +1,14 @@
 import SwiftUI
 
 struct NowPlayingTransportControls: View {
+    /// The play button before Dynamic Type scales it (relative to body).
+    nonisolated static let playButtonBaseDiameter = 90.0
+
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
+    /// `resolvedPlayButtonDiameter(scaled:isAccessibilitySize:)`, computed
+    /// once by the card so the utility circles share it.
+    let playButtonDiameter: Double
     let skipBackwardInterval: TimeInterval
     let skipForwardInterval: TimeInterval
     let showsPauseButton: Bool
@@ -14,7 +20,6 @@ struct NowPlayingTransportControls: View {
 
     @Namespace private var glassNamespace
     @ScaledMetric(relativeTo: .body) private var skipButtonSize: CGFloat = 72
-    @ScaledMetric(relativeTo: .body) private var playButtonSize: CGFloat = 90
     @ScaledMetric(relativeTo: .body) private var skipIconSize: CGFloat = 34
     @ScaledMetric(relativeTo: .body) private var playIconSize: CGFloat = 44
     private let playIconOpticalOffset: CGFloat = 4
@@ -60,7 +65,7 @@ struct NowPlayingTransportControls: View {
                         .animation(.easeOut(duration: 0.2), value: showsLoadingIndicator)
                     }
                     .labelStyle(.iconOnly)
-                    .frame(width: resolvedPlayButtonSize, height: resolvedPlayButtonSize)
+                    .frame(width: playButtonDiameter, height: playButtonDiameter)
                     .contentShape(.circle)
                 }
                 .buttonStyle(.plain)
@@ -93,6 +98,12 @@ struct NowPlayingTransportControls: View {
         .frame(maxWidth: .infinity)
     }
 
+    /// The scaled play button under its maxima: 96 pt, or 74 pt at
+    /// accessibility sizes, where the transport has to share the card.
+    nonisolated static func resolvedPlayButtonDiameter(scaled: Double, isAccessibilitySize: Bool) -> Double {
+        scaled.clamped(to: 52...(isAccessibilitySize ? 74 : 96))
+    }
+
     private var skipBackwardSeconds: Int {
         Int(skipBackwardInterval.rounded())
     }
@@ -105,10 +116,6 @@ struct NowPlayingTransportControls: View {
         skipButtonSize.clamped(to: 44...maxSkipButtonSize)
     }
 
-    private var resolvedPlayButtonSize: CGFloat {
-        playButtonSize.clamped(to: 52...maxPlayButtonSize)
-    }
-
     private var resolvedSkipIconSize: CGFloat {
         skipIconSize.clamped(to: 24...maxSkipIconSize)
     }
@@ -119,10 +126,6 @@ struct NowPlayingTransportControls: View {
 
     private var maxSkipButtonSize: CGFloat {
         dynamicTypeSize.isAccessibilitySize ? 62 : 76
-    }
-
-    private var maxPlayButtonSize: CGFloat {
-        dynamicTypeSize.isAccessibilitySize ? 74 : 96
     }
 
     private var maxSkipIconSize: CGFloat {

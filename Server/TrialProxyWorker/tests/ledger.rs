@@ -65,6 +65,14 @@ fn usage(prompt: u64, output: u64) -> SettleOutcome {
     }
 }
 
+fn timeout(client_budget: bool) -> SettleOutcome {
+    SettleOutcome::Ambiguous {
+        class: AmbiguousClass::Timeout,
+        status: None,
+        client_budget,
+    }
+}
+
 fn admitted(decision: &Decision) -> u64 {
     match decision {
         Decision::Admitted {
@@ -149,6 +157,8 @@ both!(
     an_overflowing_overrun_saturates_and_pauses_instead_of_rolling_back,
     prune_keeps_runs_that_consumed_a_unit,
     provider_failure_alert_bursty_not_sparse,
+    client_budget_timeouts_charge_in_full_and_raise_no_alert,
+    client_budget_timeouts_stay_in_the_alert_denominator,
     mirror_failures_alert_on_the_fifth,
     day_summaries_are_taken_once,
 );
@@ -918,6 +928,7 @@ fn every_settlement_branch_charges_as_pinned<H: Harness>(h: &mut H) {
             SettleOutcome::Ambiguous {
                 class: AmbiguousClass::Status5xx,
                 status: Some(503),
+                client_budget: false,
             },
             Box::new(|r| r),
         ),
@@ -925,13 +936,16 @@ fn every_settlement_branch_charges_as_pinned<H: Harness>(h: &mut H) {
             SettleOutcome::Ambiguous {
                 class: AmbiguousClass::Timeout,
                 status: None,
+                client_budget: false,
             },
             Box::new(|r| r),
         ),
+        (timeout(true), Box::new(|r| r)),
         (
             SettleOutcome::Ambiguous {
                 class: AmbiguousClass::Unreachable,
                 status: None,
+                client_budget: false,
             },
             Box::new(|r| r),
         ),
@@ -939,6 +953,7 @@ fn every_settlement_branch_charges_as_pinned<H: Harness>(h: &mut H) {
             SettleOutcome::Ambiguous {
                 class: AmbiguousClass::NoUsage,
                 status: Some(200),
+                client_budget: false,
             },
             Box::new(|r| r),
         ),
@@ -946,6 +961,7 @@ fn every_settlement_branch_charges_as_pinned<H: Harness>(h: &mut H) {
             SettleOutcome::Ambiguous {
                 class: AmbiguousClass::BodyTooLarge,
                 status: Some(200),
+                client_budget: false,
             },
             Box::new(|r| r),
         ),
@@ -953,6 +969,7 @@ fn every_settlement_branch_charges_as_pinned<H: Harness>(h: &mut H) {
             SettleOutcome::Ambiguous {
                 class: AmbiguousClass::Status4xx,
                 status: Some(408),
+                client_budget: false,
             },
             Box::new(|r| r),
         ),
@@ -960,6 +977,7 @@ fn every_settlement_branch_charges_as_pinned<H: Harness>(h: &mut H) {
             SettleOutcome::Ambiguous {
                 class: AmbiguousClass::Status3xx,
                 status: Some(302),
+                client_budget: false,
             },
             Box::new(|r| r),
         ),
@@ -997,6 +1015,7 @@ fn settle_is_idempotent<H: Harness>(h: &mut H) {
         SettleOutcome::Ambiguous {
             class: AmbiguousClass::Timeout,
             status: None,
+            client_budget: false,
         },
     ] {
         let again = settle(h, now + 2, "x", outcome);
@@ -1222,6 +1241,7 @@ fn ceiling_property<H: Harness>(h: &mut H, within_limits: bool) {
                 2 => SettleOutcome::Ambiguous {
                     class: AmbiguousClass::Status5xx,
                     status: Some(500),
+                    client_budget: false,
                 },
                 // Billed at the documented limits exactly.
                 _ if within_limits => usage(MAX_INPUT, 16_384),
@@ -1611,6 +1631,7 @@ fn provider_failure_alert_bursty_not_sparse<H: Harness>(h: &mut H) {
     let fail = SettleOutcome::Ambiguous {
         class: AmbiguousClass::Status5xx,
         status: Some(503),
+        client_budget: false,
     };
     // Sparse: 4 failures among 40 forwards over six hours raises nothing.
     let mut alerts = 0;
@@ -1658,6 +1679,132 @@ fn provider_failure_alert_bursty_not_sparse<H: Harness>(h: &mut H) {
             .provider_failures,
         8
     );
+}
+
+/// One window each for `count` fresh installs, all settled alike a few
+/// seconds apart; the alerts that raised.
+fn settle_windows<H: Harness>(
+    h: &mut H,
+    config: &LedgerConfig,
+    start: i64,
+    tag: &str,
+    count: i64,
+    outcome: SettleOutcome,
+) -> Vec<ledger::AlertRecord> {
+    let mut alerts = Vec::new();
+    for n in 0..count {
+        let id = format!("{tag}-{n}");
+        let now = start + n * 5_000;
+        admitted(&admit(h, config, now, &Req::new(&id, &id, "run", 0)));
+        alerts.extend(
+            h.op(|s| ledger::settle(s, now + 1, &id, &outcome))
+                .unwrap()
+                .alerts,
+        );
+    }
+    alerts
+}
+
+/// Forwards and failures of `now`'s day row and of its hour bucket.
+fn forward_counts<H: Harness>(h: &mut H, now: i64) -> [u64; 4] {
+    let day = h.store().day(now.div_euclid(DAY)).unwrap().unwrap();
+    let hour = now.div_euclid(HOUR);
+    let buckets = h.store().provider_hours_since(hour).unwrap();
+    let bucket = buckets.iter().find(|bucket| bucket.hour == hour).unwrap();
+    [
+        day.forwards,
+        day.provider_failures,
+        bucket.forwards,
+        bucket.failures,
+    ]
+}
+
+fn client_budget_timeouts_charge_in_full_and_raise_no_alert<H: Harness>(h: &mut H) {
+    let config = config();
+    let now = open_day();
+    let mut alerts = 0;
+    let mut charged = 0;
+    for n in 0..5 {
+        let id = format!("client-{n}");
+        let at = now + n * 5_000;
+        let reserved = admitted(&admit(h, &config, at, &Req::new(&id, &id, "run", 0)));
+        let effects = h
+            .op(|s| ledger::settle(s, at + 1, &id, &timeout(true)))
+            .unwrap();
+        assert_eq!(
+            effects.result,
+            SettleResult::Settled {
+                reserved_micros: reserved,
+                charged_micros: reserved,
+                overrun_micros: 0
+            }
+        );
+        alerts += effects.alerts.len();
+        charged += reserved;
+        // Read back through the store's own decoder.
+        let stored = h.store().reservation(&id).unwrap().unwrap();
+        assert_eq!(stored.outcome, Some("timeout"));
+        assert_eq!(stored.state, ReservationState::Settled);
+        assert_eq!(stored.charged_micros, reserved);
+        // A repeat changes nothing.
+        let again = h
+            .op(|s| ledger::settle(s, at + 2, &id, &timeout(true)))
+            .unwrap();
+        assert!(
+            matches!(
+                again.result,
+                SettleResult::AlreadyFinal {
+                    state: ReservationState::Settled,
+                    ..
+                }
+            ),
+            "{:?}",
+            again.result
+        );
+        assert!(again.alerts.is_empty());
+    }
+    assert_eq!(alerts, 0);
+    assert_eq!(forward_counts(h, now), [5, 0, 5, 0]);
+    assert_eq!(
+        h.store().month("2026-12").unwrap().unwrap().charged_micros,
+        charged
+    );
+    check_month_sums(h);
+
+    // The same five as ordinary timeouts raise it, on the fifth.
+    let later = now + 2 * DAY;
+    let raised = settle_windows(h, &config, later, "full", 5, timeout(false));
+    assert_eq!(raised.len(), 1);
+    assert_eq!(raised[0].kind, AlertKind::ProviderFailures);
+    assert_eq!((raised[0].value_a, raised[0].value_b), (5, 5));
+    assert_eq!(forward_counts(h, later), [5, 5, 5, 5]);
+    assert_eq!(
+        h.store().month("2026-12").unwrap().unwrap().charged_micros,
+        charged * 2
+    );
+    check_month_sums(h);
+}
+
+fn client_budget_timeouts_stay_in_the_alert_denominator<H: Harness>(h: &mut H) {
+    let config = config();
+    // 5 of 26 forwards is under 20 %: the 21 keep the rule from firing.
+    let under = open_day();
+    let alerts = settle_windows(h, &config, under, "under-client", 21, timeout(true));
+    assert!(alerts.is_empty());
+    let start = under + 21 * 5_000;
+    let alerts = settle_windows(h, &config, start, "under-full", 5, timeout(false));
+    assert!(alerts.is_empty(), "{alerts:?}");
+    assert_eq!(forward_counts(h, under), [26, 5, 26, 5]);
+    // 5 of 25 is exactly 20 %: the rule fires, and reports that denominator.
+    let exact = under + 2 * DAY;
+    let alerts = settle_windows(h, &config, exact, "exact-client", 20, timeout(true));
+    assert!(alerts.is_empty());
+    let start = exact + 20 * 5_000;
+    let alerts = settle_windows(h, &config, start, "exact-full", 5, timeout(false));
+    assert_eq!(alerts.len(), 1);
+    assert_eq!((alerts[0].value_a, alerts[0].value_b), (5, 25));
+    assert_eq!(forward_counts(h, exact), [25, 5, 25, 5]);
+    check_month_sums(h);
 }
 
 fn mirror_failures_alert_on_the_fifth<H: Harness>(h: &mut H) {

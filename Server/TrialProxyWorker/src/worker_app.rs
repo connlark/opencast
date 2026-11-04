@@ -817,6 +817,12 @@ async fn analyze_inner(
             (outcome, provider_response(reply))
         }
         Err(failure) => {
+            // Only a forward that was sent and cut off: the settlement
+            // diagnostics below overwrite this detail if they occur.
+            let client_budget = matches!(failure, CallFailure::Timeout) && window.client_budget;
+            if client_budget {
+                event.detail = Some("client_budget");
+            }
             let (class, code, outcome_name) = match failure {
                 CallFailure::Timeout => (
                     Some(AmbiguousClass::Timeout),
@@ -841,6 +847,7 @@ async fn analyze_inner(
                 Some(class) => SettleOutcome::Ambiguous {
                     class,
                     status: None,
+                    client_budget,
                 },
                 None => SettleOutcome::NotDispatched,
             };
