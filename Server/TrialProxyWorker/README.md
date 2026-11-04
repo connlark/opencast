@@ -257,6 +257,10 @@ Alerts go to Pushover with the deployer's app token and user key: the ceiling
 failures (5xx, timeouts, unreachable: at least 5 and at least 20 % of
 forwards over six hours, once per window), five consecutive mirror failures,
 and a settlement above its reservation (once a day).
+Dispatched timeouts whose declared budget is more than 10 seconds below
+the applicable cap retain the whole reservation and count as forwards, but are
+excluded from the provider-failure counts used by alerts, the D1 day mirror and
+day-summary telemetry.
 
 ## Embedded bundle
 
@@ -283,7 +287,7 @@ none):
 | `TRIAL_MODE_STARTS_AT` | `2027-01-01T00:00:00Z` | same | same |
 | `TRIAL_LIFETIME_UNITS` | `5` (must equal the bundle's) | same | same |
 | `TRIAL_MONTHLY_CEILING_USD` | `5` | `5` | `50` |
-| `TRIAL_OPEN_DAILY_REQUESTS` | `60` | `60` | `300` |
+| `TRIAL_OPEN_DAILY_REQUESTS` | `60` | `60` | `900` |
 | `TRIAL_OPEN_DAILY_INPUT_TOKENS` | `1600000` | `1600000` | `8000000` |
 | `TRIAL_BEARER_DAILY_REQUESTS` / `_INPUT_TOKENS` | `40` / `2000000` | same | same |
 | `TRIAL_RUN_MAX_WINDOWS` / `TRIAL_RUN_MAX_INPUT_TOKENS` | `12` / `400000` | same | same |

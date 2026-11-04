@@ -33,7 +33,7 @@ Read the [plain-language privacy policy](https://support.opencast.mobile/privacy
 
 ## Build from source
 
-You will need macOS, Xcode 27 or later, Swift 6.4, and an iOS 27 simulator.
+You will need macOS, Xcode 27 or later, Swift 6.4, and an iOS 27.1 or later simulator.
 
 ```zsh
 git clone https://github.com/connlark/opencast.git
@@ -41,7 +41,7 @@ cd opencast
 open opencast.xcodeproj
 ```
 
-Select the `OpenCast` scheme, choose an iPhone or iPad running iOS 27, and press Run. A simulator build does **not** require a Cloudflare deployment: RSS, the local library, playback, downloads, Voice Boost, and local persistence are all part of the app checkout.
+Select the `OpenCast` scheme, choose an iPhone or iPad running iOS 27.1 or later, and press Run. A simulator build does **not** require a Cloudflare deployment: RSS, the local library, playback, downloads, Voice Boost, and local persistence are all part of the app checkout.
 
 The public repository is deliberately sanitized. Server-backed features point to placeholder endpoints, so notifications, ad analysis, model delivery, purchases, and remote transcription require services you operate and configure yourself.
 
