@@ -2,9 +2,10 @@ import SwiftUI
 
 struct NowPlayingSoundLabPanel: View {
     /// Over the artwork from the panel's inline floor up; below it, the same
-    /// controls in the player's utility sheet.
+    /// controls in the player's utility sheet. Inline rows are the square's
+    /// (`rowMetrics`) unless the panel opened beyond it with `titledRows`.
     enum Presentation: Equatable {
-        case inline(revealProgress: CGFloat)
+        case inline(revealProgress: CGFloat, titledRows: NowPlayingSoundLabOpenPanel.TitledRows? = nil)
         case sheet
     }
 
@@ -43,23 +44,26 @@ struct NowPlayingSoundLabPanel: View {
 
     var body: some View {
         switch presentation {
-        case .inline(let revealProgress):
-            inlinePanel(revealProgress: revealProgress)
+        case .inline(let revealProgress, let titledRows):
+            inlinePanel(revealProgress: revealProgress, titledRows: titledRows)
         case .sheet:
             sheetPanel
         }
     }
 
-    private func inlinePanel(revealProgress: CGFloat) -> some View {
+    private func inlinePanel(
+        revealProgress: CGFloat,
+        titledRows: NowPlayingSoundLabOpenPanel.TitledRows?
+    ) -> some View {
         GeometryReader { proxy in
             let layout = NowPlayingSoundLabLayout(panelWidth: proxy.size.width)
-            let rows = NowPlayingSoundLabLayout.rowMetrics(
+            let rows = titledRows?.rowMetrics ?? NowPlayingSoundLabLayout.rowMetrics(
                 panelHeight: proxy.size.height,
                 verticalInset: layout.contentInset,
                 rowCount: transcriptionRow == nil ? 2 : 3,
                 isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
             )
-            let isIconOnly = Self.collapsesToIconOnly(
+            let isIconOnly = titledRows == nil && Self.collapsesToIconOnly(
                 rowAreaWidth: layout.rowAreaWidth,
                 isAccessibilitySize: dynamicTypeSize.isAccessibilitySize
             )
@@ -90,11 +94,15 @@ struct NowPlayingSoundLabPanel: View {
 
                 VStack(alignment: .leading, spacing: rows.rowSpacing) {
                     if rows.showsHeader {
-                        header
-                            .padding(.bottom, 3)
+                        Self.paddedHeader
                     }
 
-                    controls(isIconOnly: isIconOnly, rowHeight: rows.rowHeight, spacing: rows.rowSpacing)
+                    controls(
+                        isIconOnly: isIconOnly,
+                        rowHeight: rows.rowHeight,
+                        spacing: rows.rowSpacing,
+                        capsuleFitsRow: titledRows != nil
+                    )
 
                     backgroundProbeControl
                 }
@@ -113,9 +121,9 @@ struct NowPlayingSoundLabPanel: View {
     private var sheetPanel: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                header
+                Self.header
 
-                controls(isIconOnly: false, rowHeight: nil, spacing: 10)
+                controls(isIconOnly: false, rowHeight: nil, spacing: 10, capsuleFitsRow: false)
 
                 backgroundProbeControl
             }
@@ -127,7 +135,14 @@ struct NowPlayingSoundLabPanel: View {
         .accessibilityIdentifier("Now Playing Sound Lab")
     }
 
-    private var header: some View {
+    /// The heading as an inline panel lays it out, whose height the open
+    /// rectangle counts once.
+    static var paddedHeader: some View {
+        header
+            .padding(.bottom, NowPlayingSoundLabLayout.headingBottomPadding)
+    }
+
+    private static var header: some View {
         Label {
             Text("Sound Lab")
         } icon: {
@@ -140,7 +155,12 @@ struct NowPlayingSoundLabPanel: View {
         .foregroundStyle(.primary)
     }
 
-    private func controls(isIconOnly: Bool, rowHeight: CGFloat?, spacing: CGFloat) -> some View {
+    private func controls(
+        isIconOnly: Bool,
+        rowHeight: CGFloat?,
+        spacing: CGFloat,
+        capsuleFitsRow: Bool
+    ) -> some View {
         GlassEffectContainer(spacing: spacing) {
             VStack(spacing: spacing) {
                 NowPlayingSoundLabToggle(
@@ -163,6 +183,7 @@ struct NowPlayingSoundLabPanel: View {
                     rowHeight: rowHeight,
                     accessibilityValueText: adFreePassRow.statusText,
                     accessibilityID: "Skip Promos & Ads",
+                    capsuleFitsRow: capsuleFitsRow,
                     action: onAdFreePassAction
                 )
 
@@ -177,6 +198,7 @@ struct NowPlayingSoundLabPanel: View {
                         rowHeight: rowHeight,
                         accessibilityValueText: transcriptionRow.accessibilityValue,
                         accessibilityID: transcriptionRow.accessibilityIdentifier,
+                        capsuleFitsRow: capsuleFitsRow,
                         action: performTranscriptionAction
                     )
                 }

@@ -63,6 +63,15 @@ final class AppStoreScreenshotUITests: XCTestCase {
     private static let cueDirectoryEnvironmentKey = "OPENCAST_SCREENSHOT_CUE_DIR"
     private static let cueBoundEnvironmentKey = "OPENCAST_SCREENSHOT_CUE_BOUND_SECONDS"
 
+    /// The inner skip hero uses the last line before the end-of-show promo
+    /// (4:26-4:32) and the promo's first line. A 4:26 or 4:27 reading
+    /// triggers the pause; paused readings must remain in 266..<272 seconds,
+    /// and the post-frame reading must remain below 272 seconds.
+    private static let innerSkipCurrentLine = "So that's first light:"
+    private static let innerSkipPromoLine = "If this episode kept you up past bedtime"
+    private static let innerSkipPauseWindow: ClosedRange<TimeInterval> = 266...267
+    private static let innerSkipPromoStart: TimeInterval = 272
+
     /// The App Store name each set captures a slug under; the compositor's
     /// `lib/spec.mjs` owns the order, layout and captions. A slug with no
     /// entry for the set is not captured, and a flow that serves only such
@@ -217,14 +226,16 @@ final class AppStoreScreenshotUITests: XCTestCase {
         }
 
         if wants("library_grid") {
-            // A fresh launch keeps the grid free of the playback accessory.
-            // The sidebar stays closed: in portrait it opens as an overlay
-            // that dims the grid and hides the first column.
+            // A fresh launch keeps this frame free of the playback accessory.
+            // In the iPad portrait flow, leave the navigation sidebar closed so
+            // its overlay does not dim the grid or cover its first column.
             launch(app)
             openLibrary(in: app)
             if family == .duoInner {
-                // The inner display shows the grid's first rows, not all twelve.
-                assertExists(element(withIdentifier: "Library Grid", in: app), named: "Library grid")
+                // Fully open the Library is a sidebar list beside its selected
+                // page, not a grid; a selected show fills the page.
+                assertExists(element(withIdentifier: "Library List", in: app), named: "Library sidebar list")
+                openPrimaryPodcastDetail(in: app)
             } else {
                 assertExists(app.staticTexts["Weeknight Notes"], named: "last library tile")
             }
@@ -257,7 +268,11 @@ final class AppStoreScreenshotUITests: XCTestCase {
             startPrimaryEpisodePlayback(in: app)
             skipPlayback(into: 233...268, named: "just past the mid-roll zone", in: app)
             assertExists(app.descendants(matching: .any)["Skipped promo"], named: "pinned Skipped promo pill")
-            capture("skip")
+            if family == .duoInner {
+                captureInnerSkipHero(in: app)
+            } else {
+                capture("skip")
+            }
             app.launchArguments.removeAll { $0 == Self.autoSkipPillArgument }
         }
 
@@ -438,19 +453,21 @@ final class AppStoreScreenshotUITests: XCTestCase {
     }
 
     /// Captures `slug` under the set's App Store name; nothing for a slug the
-    /// set does not carry.
+    /// set does not carry. `beforeFrame` runs after the pre-frame checks, as
+    /// the last step before the frame itself.
     @MainActor
-    private func capture(_ slug: String) {
+    private func capture(_ slug: String, beforeFrame: () -> Void = {}) {
         guard let name = Self.shotNames[slug]?[family] else {
             return
         }
-        attachAppStoreScreenshot(named: name)
+        attachAppStoreScreenshot(named: name, beforeFrame: beforeFrame)
     }
 
     @MainActor
-    private func attachAppStoreScreenshot(named name: String) {
+    private func attachAppStoreScreenshot(named name: String, beforeFrame: () -> Void = {}) {
         dismissSystemNotificationBanners()
         verifyFamilyPixels("before \(name)")
+        beforeFrame()
         snapshotForFastlane(name)
         attachFamilyScreenshot(named: name)
     }
@@ -721,12 +738,12 @@ final class AppStoreScreenshotUITests: XCTestCase {
     private func startPrimaryEpisodePlayback(in app: XCUIApplication) {
         openInbox(in: app)
         let primaryEpisode = episodeRow(Self.primaryEpisodeID, in: app)
-        for _ in 0..<6 where !primaryEpisode.waitForExistence(timeout: 1) {
-            swipeContentDown(in: app)
+        for _ in 0..<6 where !isListed(primaryEpisode, in: app) {
+            swipeRootListDown(in: app)
             Thread.sleep(forTimeInterval: 0.8)
         }
         assertExists(primaryEpisode, named: "primary inbox episode")
-        scrollUntilHittable(primaryEpisode, in: app)
+        scrollRootRowUntilHittable(primaryEpisode, in: app)
         primaryEpisode.tap()
         assertNowPlayingOverlay(in: app)
         assertExists(playbackProgress(in: app), named: "Playback Progress control")
@@ -790,12 +807,13 @@ final class AppStoreScreenshotUITests: XCTestCase {
     }
 
     // The elapsed label is the first m:ss text in the overlay; the remaining
-    // label carries a leading minus and never matches.
+    // label carries a leading minus and never matches. `polling` skips the
+    // explicit existence wait.
     @MainActor
-    private func elapsedSeconds(in app: XCUIApplication) -> TimeInterval? {
+    private func elapsedSeconds(in app: XCUIApplication, polling: Bool = false) -> TimeInterval? {
         let predicate = NSPredicate(format: "label MATCHES %@", "^[0-9]{1,2}:[0-9]{2}(:[0-9]{2})?$")
         let label = nowPlayingOverlay(in: app).staticTexts.matching(predicate).firstMatch
-        guard label.waitForExistence(timeout: 2) else {
+        guard polling ? label.exists : label.waitForExistence(timeout: 2) else {
             return nil
         }
         let parts = label.label.split(separator: ":").compactMap { Double($0) }
@@ -884,13 +902,200 @@ final class AppStoreScreenshotUITests: XCTestCase {
         }
     }
 
+    /// Fully open, the skip hero's pane shows what the next skip removes: the
+    /// current transcript line with the flagged promo right below it. The
+    /// playhead parks on that line while the pane is arranged and plays again
+    /// for the frame, so the transport reads as in every other skip shot. The
+    /// capture script refuses a second frame under one shot name, so a
+    /// playhead that reaches the promo fails the run rather than a retake.
+    @MainActor
+    private func captureInnerSkipHero(in app: XCUIApplication) {
+        parkOnLineBeforePromo(in: app)
+        guard let pane = openTranscriptPane(in: app) else {
+            return
+        }
+        assertPromoBelowCurrentLine(in: pane)
+        capture("skip") {
+            resumePlayback(in: app)
+        }
+        let elapsed = elapsedSeconds(in: app, polling: true)
+        print("skip hero: elapsed after the frame \(String(describing: elapsed)) at \(Date.now)")
+        XCTAssertLessThan(
+            elapsed ?? .infinity,
+            Self.innerSkipPromoStart,
+            "The playhead should still be on the line before the promo after the frame"
+        )
+    }
+
+    /// Pause near the start of the last line before the promo so pane setup
+    /// cannot carry playback into the next auto-skip zone. Poll the elapsed
+    /// label without an explicit existence wait to preserve the capture margin.
+    @MainActor
+    private func parkOnLineBeforePromo(in app: XCUIApplication) {
+        let overlay = nowPlayingOverlay(in: app)
+        let pause = overlay.buttons["Pause"].firstMatch
+        assertHittable(pause, named: "Now Playing Pause button")
+        let lineStart = Self.innerSkipPauseWindow.lowerBound
+        let deadline = Date.now.addingTimeInterval(60)
+        var elapsed = elapsedSeconds(in: app, polling: true)
+        print("skip hero: elapsed before the wait \(String(describing: elapsed))")
+        while (elapsed ?? 0) < lineStart, Date.now < deadline {
+            Thread.sleep(forTimeInterval: (elapsed ?? lineStart) < lineStart - 2 ? 1 : 0.05)
+            elapsed = elapsedSeconds(in: app, polling: true)
+            print("skip hero: elapsed during the wait \(String(describing: elapsed)) at \(Date.now)")
+        }
+        print("skip hero: elapsed read before the pause \(String(describing: elapsed))")
+        guard Date.now < deadline, Self.innerSkipPauseWindow.contains(elapsed ?? .infinity) else {
+            XCTFail("Playback should reach \(Self.innerSkipPauseWindow) before the deadline, got \(String(describing: elapsed))")
+            return
+        }
+        pause.tap()
+        assertExists(overlay.buttons["Play"].firstMatch, named: "Now Playing Play button once paused")
+        let paused = elapsedSeconds(in: app)
+        Thread.sleep(forTimeInterval: 1.5)
+        let held = elapsedSeconds(in: app)
+        print("skip hero: elapsed paused \(String(describing: paused)), 1.5 s later \(String(describing: held))")
+        let heldWindow = Self.innerSkipPauseWindow.lowerBound..<Self.innerSkipPromoStart
+        for reading in [paused, held] {
+            XCTAssertTrue(
+                heldWindow.contains(reading ?? .infinity),
+                "The paused playhead should read \(heldWindow), got \(String(describing: reading))"
+            )
+        }
+    }
+
+    /// Resume after capture preparation. Avoid explicit waits after the tap
+    /// beyond the transport check; the post-frame elapsed assertion rejects a
+    /// capture that finishes too late.
+    @MainActor
+    private func resumePlayback(in app: XCUIApplication) {
+        let overlay = nowPlayingOverlay(in: app)
+        let play = overlay.buttons["Play"].firstMatch
+        assertHittable(play, named: "Now Playing Play button")
+        print("skip hero: resuming at \(Date.now)")
+        play.tap()
+        print("skip hero: resumed at \(Date.now)")
+        // "Pause" also shows while buffering or loading, which draw a spinner;
+        // only the value says the transport is playing.
+        let transport = overlay.buttons.matching(NSPredicate(format: "label IN %@", ["Play", "Pause"])).firstMatch
+        let deadline = Date.now.addingTimeInterval(1)
+        var reading = try? transport.snapshot()
+        print("skip hero: transport \(String(describing: reading?.label)) \(String(describing: reading?.value)) at \(Date.now)")
+        while !isPlaying(reading), Date.now < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+            reading = try? transport.snapshot()
+            print("skip hero: transport \(String(describing: reading?.label)) \(String(describing: reading?.value)) at \(Date.now)")
+        }
+        XCTAssertTrue(isPlaying(reading), "The transport should read Pause and Playing before the frame")
+    }
+
+    @MainActor
+    private func isPlaying(_ transport: (any XCUIElementSnapshot)?) -> Bool {
+        transport?.label == "Pause" && transport?.value as? String == "Playing"
+    }
+
+    /// Fully open, the transcript is the pane's Transcript mode: selected
+    /// through the pane's segmented control, its scroller found by the line
+    /// the follow-along brings on screen. The viewport is the part of that
+    /// scroller below the control and inside the Now Playing container.
+    @MainActor
+    private func openTranscriptPane(in app: XCUIApplication) -> (scroller: XCUIElement, viewport: CGRect)? {
+        let picker = element(withIdentifier: "Now Playing Secondary Pane", in: app)
+        assertExists(picker, named: "Now Playing secondary pane control")
+        let segment = picker.buttons["Transcript"]
+        assertHittable(segment, named: "Transcript segment of the secondary pane")
+        segment.tap()
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == true"), object: segment)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed, "Transcript segment should be selected")
+
+        let overlay = nowPlayingOverlay(in: app)
+        assertExists(overlay, named: "Now Playing container of the secondary pane")
+        let currentLine = NSPredicate(format: "label BEGINSWITH %@", Self.innerSkipCurrentLine)
+        let deadline = Date.now.addingTimeInterval(10)
+        var scrollers = overlay.scrollViews.containing(currentLine).allElementsBoundByIndex
+        while scrollers.isEmpty, Date.now < deadline {
+            Thread.sleep(forTimeInterval: 0.25)
+            scrollers = overlay.scrollViews.containing(currentLine).allElementsBoundByIndex
+        }
+        // Prefer the transcript scroller over any enclosing scroll view.
+        let scroller = scrollers.min { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }
+        guard let scroller else {
+            print("skip hero: no transcript scroller in\n\(overlay.debugDescription)")
+            XCTFail("The secondary pane should show the transcript's line \(Self.innerSkipCurrentLine)")
+            return nil
+        }
+        let picked = picker.frame
+        let container = overlay.frame
+        let paneArea = CGRect(
+            x: container.minX,
+            y: picked.maxY,
+            width: container.width,
+            height: container.maxY - picked.maxY
+        )
+        let viewport = scroller.frame.intersection(paneArea)
+        print("skip hero: picker \(picked), overlay \(container), scroller \(scroller.frame), viewport \(viewport)")
+        return (scroller, viewport)
+    }
+
+    /// The current line and the flagged promo, both wholly in the pane's
+    /// viewport, the promo below the line. When the follow-along leaves the
+    /// promo outside, the line is lifted into the viewport's upper half.
+    @MainActor
+    private func assertPromoBelowCurrentLine(in pane: (scroller: XCUIElement, viewport: CGRect)) {
+        let line = transcriptRow(Self.innerSkipCurrentLine, carrying: ["4:26"], in: pane.scroller)
+        let promo = transcriptRow(
+            Self.innerSkipPromoLine,
+            carrying: ["Sponsor segment", "End-of-show promo"],
+            in: pane.scroller
+        )
+        var isShown = waitUntilShown([line, promo], in: pane.viewport)
+        if !isShown, line.exists {
+            let distance = line.frame.midY - (pane.viewport.minY + pane.viewport.height / 4)
+            print("skip hero: scrolling the pane \(distance) pt; line \(line.frame), promo exists \(promo.exists)")
+            let start = line.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            let end = start.withOffset(CGVector(dx: 0, dy: -distance))
+            start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.3)
+            isShown = waitUntilShown([line, promo], in: pane.viewport)
+        }
+        guard isShown else {
+            print("skip hero: rows not shown in \(pane.viewport)\n\(pane.scroller.debugDescription)")
+            XCTFail("The current line and the flagged promo should both show in the transcript pane")
+            return
+        }
+        print("skip hero: current row \(line.frame) value \(String(describing: line.value))")
+        print("skip hero: promo row \(promo.frame) value \(String(describing: promo.value))")
+        XCTAssertGreaterThan(promo.frame.minY, line.frame.maxY, "The flagged promo should sit below the current line")
+    }
+
+    /// `EpisodeTranscriptLineView`'s button: the segment's text as its label,
+    /// the timestamp and any ad description as its value.
+    @MainActor
+    private func transcriptRow(_ text: String, carrying values: [String], in scroller: XCUIElement) -> XCUIElement {
+        let clauses = [NSPredicate(format: "label BEGINSWITH %@", text)]
+            + values.map { NSPredicate(format: "value CONTAINS %@", $0) }
+        return scroller.buttons.matching(NSCompoundPredicate(andPredicateWithSubpredicates: clauses)).firstMatch
+    }
+
+    /// Require complete frame containment before checking for a hittable point.
+    @MainActor
+    private func waitUntilShown(_ rows: [XCUIElement], in viewport: CGRect) -> Bool {
+        let deadline = Date.now.addingTimeInterval(5)
+        while Date.now < deadline {
+            if rows.allSatisfy({ $0.exists && viewport.contains($0.frame) && $0.isHittable }) {
+                return true
+            }
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        return false
+    }
+
     // Play Last keeps the deck's order: the first enqueued row stays first.
     @MainActor
     private func enqueueUpNextEpisodes(in app: XCUIApplication) {
         openInbox(in: app)
         for episodeID in Self.upNextEpisodeIDs {
             let row = episodeRow(episodeID, in: app)
-            scrollUntilHittable(row, in: app)
+            scrollRootRowUntilHittable(row, in: app)
             row.press(forDuration: 1.2)
             let playLast = app.buttons["Play Last"].firstMatch
             assertExists(playLast, named: "Play Last context action for \(episodeID)")
@@ -905,9 +1110,20 @@ final class AppStoreScreenshotUITests: XCTestCase {
     private func openPrimaryPodcastDetail(in app: XCUIApplication) {
         openLibrary(in: app)
         let primaryPodcast = element(withIdentifier: Self.primarySubscriptionRowIdentifier, in: app)
-        scrollUntilHittable(primaryPodcast, in: app)
+        scrollRootRowUntilHittable(primaryPodcast, in: app)
         primaryPodcast.tap()
-        assertExists(app.staticTexts["What the New Telescope Saw First"], named: "primary podcast episode")
+        if rootListIsSidebar {
+            // The page's hero fills the detail column; its episodes start below
+            // it. The sidebar has an "Orbit Report" text too, so the identifier
+            // and the label together name the page.
+            let hero = app.staticTexts
+                .matching(identifier: "Podcast Hero Header")
+                .matching(NSPredicate(format: "label BEGINSWITH %@", "Orbit Report"))
+                .firstMatch
+            assertExists(hero, named: "primary podcast page hero")
+        } else {
+            assertExists(app.staticTexts["What the New Telescope Saw First"], named: "primary podcast episode")
+        }
     }
 
     // The Now Playing title opens the current episode's detail and dismisses
@@ -971,6 +1187,70 @@ final class AppStoreScreenshotUITests: XCTestCase {
     }
 
     // MARK: - Scrolling
+
+    /// Fully open, the roots are splits: the Inbox and Library lists sit in
+    /// the sidebar, and a drag through the window's middle lands on the detail
+    /// column. Sidebar rows scroll with an element swipe on the sidebar itself.
+    private var rootListIsSidebar: Bool {
+        family == .duoInner
+    }
+
+    @MainActor
+    private func sidebar(in app: XCUIApplication) -> XCUIElement {
+        app.collectionViews["Sidebar"].firstMatch
+    }
+
+    /// A realized sidebar row can lie outside the window, so its frame is read
+    /// before `isHittable` is asked.
+    @MainActor
+    private func isInSidebarViewport(_ row: XCUIElement, in app: XCUIApplication) -> Bool {
+        guard row.exists else {
+            return false
+        }
+        let frame = row.frame
+        return sidebar(in: app).frame.contains(CGPoint(x: frame.midX, y: frame.midY))
+    }
+
+    /// Whether the row can be used without scrolling back up. Outside a
+    /// sidebar that is its existence, as the lazy list drops rows it has left.
+    @MainActor
+    private func isListed(_ row: XCUIElement, in app: XCUIApplication) -> Bool {
+        row.waitForExistence(timeout: 1) && (!rootListIsSidebar || isInSidebarViewport(row, in: app))
+    }
+
+    @MainActor
+    private func swipeRootListDown(in app: XCUIApplication) {
+        guard rootListIsSidebar else {
+            swipeContentDown(in: app)
+            return
+        }
+        let list = sidebar(in: app)
+        assertExists(list, named: "root list sidebar")
+        list.swipeDown(velocity: .slow)
+    }
+
+    @MainActor
+    private func scrollRootRowUntilHittable(
+        _ row: XCUIElement,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard rootListIsSidebar else {
+            scrollUntilHittable(row, in: app, file: file, line: line)
+            return
+        }
+        let list = sidebar(in: app)
+        assertExists(list, named: "root list sidebar", file: file, line: line)
+        for _ in 0..<8 {
+            if isInSidebarViewport(row, in: app), isClearOfMiniPlayer(row, in: app) {
+                return
+            }
+            list.swipeUp(velocity: .slow)
+            Thread.sleep(forTimeInterval: 0.8)
+        }
+        XCTFail("Expected the sidebar row to be hittable after scrolling", file: file, line: line)
+    }
 
     @MainActor
     private func scrollUntilHittable(
@@ -1132,9 +1412,8 @@ final class AppStoreScreenshotUITests: XCTestCase {
             .firstMatch
     }
 
-    // Tabs keep their pushed stacks (episode detail opened from Now Playing
-    // lands on the Inbox tab, podcast detail on Library), so every section
-    // switch pops back to the root list before the next step.
+    // Stack-based sections retain pushed pages, so return to their root list.
+    // In a split, the sidebar root stays visible beside its selected detail.
     @MainActor
     private func openLibrary(in app: XCUIApplication) {
         openSectionRoot("Library", in: app)

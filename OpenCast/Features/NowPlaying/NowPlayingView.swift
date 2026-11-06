@@ -266,7 +266,15 @@ struct NowPlayingView: View {
         ScrollView {
             if let episode = appModel.playback.currentEpisode {
                 VStack(spacing: metrics.contentSpacing) {
-                    artwork(for: episode, size: metrics.artworkSize)
+                    artwork(
+                        for: episode,
+                        size: metrics.artworkSize,
+                        openContext: NowPlayingSoundLabOpenPanel.CardContext(
+                            cardGeometry: geometry,
+                            contentWidth: metrics.contentWidth,
+                            viewport: CGRect(origin: .zero, size: size)
+                        )
+                    )
 
                     titleBlock(for: episode, metrics: metrics)
                         .padding(.top, metrics.titleBlockTopSpacer)
@@ -332,6 +340,7 @@ struct NowPlayingView: View {
         .scrollPosition($scrollPosition)
         .scrollDisabled(isTrackingDismissDrag)
         .tracksScrolledToTop(area: .player, update: updateScrolledToTop)
+        .coordinateSpace(.named(NowPlayingSoundLabOpenPanel.CardContext.coordinateSpaceName))
         .overlay(alignment: .topLeading) {
             moreMenu(geometry: geometry)
         }
@@ -379,7 +388,20 @@ struct NowPlayingView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(spacing: metrics.contentSpacing) {
-                    artwork(for: episode, size: layout.artworkSize)
+                    artwork(
+                        for: episode,
+                        size: layout.artworkSize,
+                        openContext: NowPlayingSoundLabOpenPanel.CardContext(
+                            cardGeometry: cardGeometry,
+                            contentWidth: metrics.contentWidth,
+                            viewport: CGRect(
+                                x: 0,
+                                y: layout.mediaViewport.lowerBound,
+                                width: size.width,
+                                height: layout.mediaViewportHeight
+                            )
+                        )
+                    )
                     titleBlock(for: episode, metrics: metrics)
                 }
                 .frame(maxWidth: metrics.contentWidth)
@@ -438,6 +460,7 @@ struct NowPlayingView: View {
             .tracksScrolledToTop(area: .controls, update: updateScrolledToTop)
         }
         .frame(width: size.width, height: size.height, alignment: .top)
+        .coordinateSpace(.named(NowPlayingSoundLabOpenPanel.CardContext.coordinateSpaceName))
         .overlay(alignment: .topLeading) {
             moreMenu(geometry: cardGeometry)
         }
@@ -455,7 +478,11 @@ struct NowPlayingView: View {
     }
 
     @ViewBuilder
-    private func artwork(for episode: Episode, size: CGFloat) -> some View {
+    private func artwork(
+        for episode: Episode,
+        size: CGFloat,
+        openContext: NowPlayingSoundLabOpenPanel.CardContext
+    ) -> some View {
         if appModel.replacesNowPlayingArtworkWithPlaybackDiagnostics {
             NowPlayingPlaybackDiagnosticsView(
                 text: appModel.playback.playbackDiagnosticsText
@@ -475,7 +502,8 @@ struct NowPlayingView: View {
                 onAdFreePassBackgroundProbe: startAdFreePassBackgroundProbe,
                 onRequestSoundLabSheet: presentSoundLabSheet,
                 isSoundLabInteractionActive: $isSoundLabInteractionActive,
-                isCardDismissDragActive: isTrackingDismissDrag
+                isCardDismissDragActive: isTrackingDismissDrag,
+                openContext: openContext
             )
         }
     }

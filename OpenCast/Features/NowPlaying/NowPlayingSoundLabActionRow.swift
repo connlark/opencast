@@ -17,36 +17,15 @@ struct NowPlayingSoundLabActionRow: View {
     let rowHeight: CGFloat?
     let accessibilityValueText: String
     let accessibilityID: String
+    /// Whether the styled capsule, and with it the tap target, is `rowHeight`
+    /// tall; otherwise the style's chrome stands outside the row.
+    var capsuleFitsRow = false
     let action: () -> Void
 
     var body: some View {
         Button(action: performAction) {
-            HStack(spacing: NowPlayingSoundLabLayout.controlSpacing) {
-                NowPlayingSoundLabControlIcon(
-                    systemImage: systemImage,
-                    tint: tint
-                )
-
-                if !isIconOnly {
-                    Text(title)
-                        .font(.subheadline)
-                        .lineLimit(rowHeight == nil ? nil : 1)
-                        .layoutPriority(1)
-                        .contentTransition(.opacity)
-                        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: title)
-                }
-
-                Spacer(minLength: showsTrailingIndicator ? 2 : 0)
-
-                if showsTrailingIndicator {
-                    NowPlayingSoundLabTrailingIndicator(
-                        phase: phase,
-                        tint: tint
-                    )
-                }
-            }
-            .padding(.horizontal, NowPlayingSoundLabLayout.controlHorizontalPadding)
-            .frame(maxWidth: .infinity, minHeight: 44)
+            labelContent(reduceMotion: reduceMotion)
+                .frame(maxWidth: .infinity, minHeight: labelMinimumHeight)
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.capsule)
@@ -62,6 +41,42 @@ struct NowPlayingSoundLabActionRow: View {
         }
         .sensoryFeedback(.selection, trigger: acceptedFeedback)
         .onChange(of: phase, initial: true, renderPhaseChanged)
+    }
+
+    /// Everything inside the capsule; the row sets its height.
+    func labelContent(reduceMotion: Bool) -> some View {
+        HStack(spacing: NowPlayingSoundLabLayout.controlSpacing) {
+            NowPlayingSoundLabControlIcon(
+                systemImage: systemImage,
+                tint: tint
+            )
+
+            if !isIconOnly {
+                Text(title)
+                    .font(.subheadline)
+                    .lineLimit(rowHeight == nil ? nil : 1)
+                    .layoutPriority(1)
+                    .contentTransition(.opacity)
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: title)
+            }
+
+            Spacer(minLength: showsTrailingIndicator ? NowPlayingSoundLabLayout.trailingIndicatorMinimumGap : 0)
+
+            if showsTrailingIndicator {
+                NowPlayingSoundLabTrailingIndicator(
+                    phase: phase,
+                    tint: tint
+                )
+            }
+        }
+        .padding(.horizontal, NowPlayingSoundLabLayout.controlHorizontalPadding)
+    }
+
+    private var labelMinimumHeight: CGFloat {
+        guard capsuleFitsRow, let rowHeight else {
+            return NowPlayingSoundLabLayout.minimumHitTarget
+        }
+        return rowHeight - 2 * NowPlayingSoundLabLayout.nativeGlassButtonVerticalChrome
     }
 
     private var showsTrailingIndicator: Bool {

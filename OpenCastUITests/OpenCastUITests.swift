@@ -3422,6 +3422,14 @@ final class OpenCastUITests: XCTestCase {
         assertNowPlayingOverlay(in: app)
         assertExists(nowPlayingSoundLabPanel(in: app), named: "Now Playing Sound Lab panel")
         assertExists(app.switches["Voice Boost"], named: "Voice Boost Sound Lab toggle")
+
+        // Only the hidden square's 1 pt offset keeps this order under a legacy panel.
+        let identifiers = nowPlayingOverlay(in: app)
+            .descendants(matching: .any)
+            .allElementsBoundByIndex.map(\.identifier)
+        let artworkIndex = try XCTUnwrap(identifiers.firstIndex(of: "Now Playing Artwork"))
+        let panelIndex = try XCTUnwrap(identifiers.firstIndex(of: "Now Playing Sound Lab"))
+        XCTAssertLessThan(artworkIndex, panelIndex)
     }
 
     @MainActor

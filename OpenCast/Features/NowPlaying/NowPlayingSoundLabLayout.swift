@@ -8,11 +8,26 @@ nonisolated struct NowPlayingSoundLabLayout {
     static let compactRowHeight: CGFloat = 44
     /// The gaps between compact rows close no further than this.
     static let minimumRowSpacing: CGFloat = 2
+    /// ...and open no further than this.
+    static let maximumCompactRowSpacing: CGFloat = 14
+    /// The 56 pt tier's gap, and the least a titled panel's rows stand apart.
+    static let titledRowSpacing: CGFloat = 5
     static let controlIconDiameter: CGFloat = 24
     static let controlHorizontalPadding: CGFloat = 5
     static let nativeGlassButtonLeadingInset: CGFloat = 11
+    /// What the `.glass` button style adds beside its label on each side
+    /// (iOS 27.2, measured by `NowPlayingSoundLabTitledCapTests`).
+    static let nativeGlassButtonSideChrome: CGFloat = 12
+    /// What it adds above and below its label, the same at every text size up
+    /// to the first accessibility size (iOS 27.2, measured by
+    /// `NowPlayingSoundLabTitledFitTests`).
+    static let nativeGlassButtonVerticalChrome: CGFloat = 7
     static let controlSpacing: CGFloat = 6
     static let trailingIndicatorSize: CGFloat = 16
+    /// The least space an action row keeps before its trailing state glyph.
+    static let trailingIndicatorMinimumGap: CGFloat = 2
+    /// Below the heading, inside its measured height.
+    static let headingBottomPadding: CGFloat = 3
 
     static let minimumContentInset: CGFloat = 9
     static let contentInsetFraction: CGFloat = 0.035
@@ -48,6 +63,52 @@ nonisolated struct NowPlayingSoundLabLayout {
     /// always do. The space is the panel's own (`rowAreaWidth`), never the
     /// window's.
     static let iconOnlyRowAreaWidth = labeledToggleFixedWidth + voiceBoostTitleWidth
+
+    /// A fixed action title's width in `.subheadline` at the default text
+    /// size, rounded up from its measured width
+    /// (`NowPlayingSoundLabTitledCapTests`).
+    struct ActionTitle: Equatable, Sendable {
+        let title: String
+        let width: CGFloat
+    }
+
+    /// The Sound Lab's fixed action titles, each of which also shows with its
+    /// trailing state glyph. Parameterized titles are outside the guarantee.
+    static let fixedActionTitles = [
+        ActionTitle(title: "Skip Promos & Ads", width: 131),
+        ActionTitle(title: "Reanalyze", width: 70),
+        ActionTitle(title: "Detect on Device", width: 118),
+        ActionTitle(title: "Resume", width: 55),
+        ActionTitle(title: "Retry", width: 37),
+        ActionTitle(title: "Transcribe", width: 73),
+        ActionTitle(title: "Transcribe Remotely", width: 141),
+        ActionTitle(title: "Show Transcript", width: 111)
+    ]
+
+    /// Everything in an action row but its title while its state glyph shows:
+    /// both sides' padding and glass chrome, the icon and its spacing, the
+    /// gap the stack's two spacings and the spacer keep before the glyph, the
+    /// glyph.
+    static let glyphActionRowFixedWidth: CGFloat = 2 * (controlHorizontalPadding + nativeGlassButtonSideChrome)
+        + controlIconDiameter + controlSpacing
+        + controlSpacing + trailingIndicatorMinimumGap + controlSpacing
+        + trailingIndicatorSize
+
+    /// The row space past which no fixed title gains anything: Voice Boost and
+    /// every fixed action title whole beside its glyph at the default text
+    /// size. A panel opened beyond the square grows no further than this.
+    static let titledRowAreaCap = max(
+        iconOnlyRowAreaWidth,
+        glyphActionRowFixedWidth + (fixedActionTitles.map(\.width).max() ?? 0)
+    )
+
+    /// The exact panel widths that hold the titles at all, and all of them.
+    static let titledMinimumWidth = panelWidth(forRowArea: iconOnlyRowAreaWidth)
+    static let titledReferenceWidth = panelWidth(forRowArea: titledRowAreaCap)
+
+    /// How far a panel opened beyond the square stays from More and the
+    /// occlusion regions, in both axes.
+    static let openPanelClearance: CGFloat = 8
 
     /// The narrowest rail: one capsule beside the minimum inset.
     static let minimumRailStrip = minimumContentInset + railCapsuleWidth
@@ -144,7 +205,7 @@ nonisolated struct NowPlayingSoundLabLayout {
         guard isAccessibilitySize || panelHeight < compactPanelHeight else {
             return RowMetrics(
                 rowHeight: controlRowHeight,
-                rowSpacing: panelHeight > roomyPanelHeight ? 7 : 5,
+                rowSpacing: panelHeight > roomyPanelHeight ? 7 : titledRowSpacing,
                 showsHeader: true
             )
         }
@@ -170,10 +231,21 @@ nonisolated struct NowPlayingSoundLabLayout {
         rowHeight: CGFloat
     ) -> CGFloat {
         guard rowCount > 1 else {
-            return 14
+            return maximumCompactRowSpacing
         }
         let room = panelHeight - 2 * verticalInset - CGFloat(rowCount) * rowHeight
-        return min(14, max(minimumRowSpacing, room / CGFloat(rowCount - 1)))
+        return min(maximumCompactRowSpacing, max(minimumRowSpacing, room / CGFloat(rowCount - 1)))
+    }
+
+    /// `rowAreaWidth` inverted where the inset and the rail are both
+    /// proportional to the width (`0.785 w − 4`), and past the width where
+    /// the rail reaches its cap (`0.965 w − 58` from 300 pt).
+    static func panelWidth(forRowArea rowArea: CGFloat) -> CGFloat {
+        let proportional = (rowArea + artworkGutter) / (1 - contentInsetFraction - artworkVisibleFraction)
+        guard proportional > maximumArtworkRailWidth / artworkVisibleFraction else {
+            return proportional
+        }
+        return (rowArea + artworkGutter + maximumArtworkRailWidth) / (1 - contentInsetFraction)
     }
 
     static func showsInline(panelSide: CGFloat) -> Bool {
