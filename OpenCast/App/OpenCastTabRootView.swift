@@ -1,3 +1,6 @@
+#if DEBUG
+import OSLog
+#endif
 import SwiftUI
 
 struct OpenCastTabRootView: View {
@@ -36,6 +39,13 @@ struct OpenCastTabRootView: View {
     /// `TwoPaneRootRule`'s answer for the window and the fold latch: the
     /// container the Library and Inbox roots use.
     @State private var rootContainer = TwoPaneRootContainer.stack
+    @State private var tabRefreshes = TabRefreshes()
+    #if DEBUG
+    /// Form changes in this scene; the first resolve is not one.
+    @State private var tabLabelFormTransitions = 0
+    /// Watches the helper consume generations; never invalidates anything.
+    @State private var tabEvaluationLog = TabEvaluationLog()
+    #endif
 
     @Binding var selectedTab: AppSection
     @Binding var navigationPaths: AppNavigationPaths
@@ -65,11 +75,25 @@ struct OpenCastTabRootView: View {
             acknowledgedUpNextHandoverCount = count
             scheduleUpNextTabStep()
         }
+        .onChange(of: installedTabSections, initial: true) { _, installed in
+            updateTabInstallations(installed)
+        }
+        #if DEBUG
+        .onChange(of: tabLabelForm, initial: true) { oldForm, form in
+            if form != oldForm {
+                tabLabelFormTransitions += 1
+                logSectionForms(form)
+            }
+            Self.formLogger.notice(
+                "tab-root form \(form.rawValue, privacy: .public) transition \(tabLabelFormTransitions, privacy: .public)"
+            )
+        }
+        #endif
     }
 
     private var tabView: some View {
         TabView(selection: $selectedTab) {
-            Tab(AppSection.library.title, systemImage: AppSection.library.systemImage, value: AppSection.library) {
+            sectionTab(.library) {
                 TwoPaneRoot(
                     section: .library,
                     container: $rootContainer,
@@ -95,11 +119,7 @@ struct OpenCastTabRootView: View {
             // rail, or a scene already known to fold (`offersPlaylistsTab`);
             // `updatePlaylistsTab` explains why that switch is deferred.
             if showsPlaylistsTab {
-                Tab(
-                    AppSection.playlists.title,
-                    systemImage: AppSection.playlists.systemImage,
-                    value: AppSection.playlists
-                ) {
+                sectionTab(.playlists) {
                     NavigationStack(path: $navigationPaths[.playlists]) {
                         PlaylistsView(onOpenPlaylist: openPlaylist(on: .playlists))
                             .withOpenCastDestinations(
@@ -115,7 +135,7 @@ struct OpenCastTabRootView: View {
             // (`offersUpNextTab`); inserted and withdrawn by
             // `updateUpNextTab`'s deferred update, as Playlists is.
             if showsUpNextTab {
-                Tab(AppSection.upNext.title, systemImage: AppSection.upNext.systemImage, value: AppSection.upNext) {
+                sectionTab(.upNext) {
                     TwoPaneRoot(
                         section: .upNext,
                         container: $rootContainer,
@@ -133,7 +153,7 @@ struct OpenCastTabRootView: View {
                 }
             }
 
-            Tab(AppSection.inbox.title, systemImage: AppSection.inbox.systemImage, value: AppSection.inbox) {
+            sectionTab(.inbox) {
                 TwoPaneRoot(
                     section: .inbox,
                     container: $rootContainer,
@@ -153,11 +173,7 @@ struct OpenCastTabRootView: View {
                 .publishesActiveTabBarPlacement()
             }
 
-            Tab(
-                AppSection.downloads.title,
-                systemImage: AppSection.downloads.systemImage,
-                value: AppSection.downloads
-            ) {
+            sectionTab(.downloads) {
                 NavigationStack(path: $navigationPaths[.downloads]) {
                     DownloadsView(onOpenEpisode: openEpisode(on: .downloads))
                     .withOpenCastDestinations(
@@ -168,7 +184,7 @@ struct OpenCastTabRootView: View {
             }
             .badge(appModel.downloads.activeDownloadCount)
 
-            Tab(AppSection.settings.title, systemImage: AppSection.settings.systemImage, value: AppSection.settings) {
+            sectionTab(.settings) {
                 NavigationStack(path: $navigationPaths[.settings]) {
                     SettingsView()
                         .withOpenCastDestinations()
@@ -176,12 +192,7 @@ struct OpenCastTabRootView: View {
                 .publishesActiveTabBarPlacement()
             }
 
-            Tab(
-                AppSection.search.title,
-                systemImage: AppSection.search.systemImage,
-                value: AppSection.search,
-                role: .search
-            ) {
+            sectionTab(.search, role: .search) {
                 NavigationStack(path: $navigationPaths[.search]) {
                     SearchView(
                         directoryService: appModel.podcastDirectoryService,
@@ -232,6 +243,149 @@ struct OpenCastTabRootView: View {
         }
         .focusedSceneValue(\.openCastCommandActions, commandActions)
     }
+
+    /// Every section's tab: one stable declaration whose title alone follows
+    /// the form, so the fold latch updates the tabs in place and replaces no
+    /// content. The accessibility label keeps an icon-only tab named.
+    private func sectionTab<Content: View>(
+        _ section: AppSection,
+        role: TabRole? = nil,
+        @ViewBuilder content: () -> Content
+    ) -> some TabContent<AppSection> {
+        // Read in every build: recording a generation is what re-evaluates
+        // the declarations. Never written here, and never the tab's identity.
+        let generation = tabRefreshes.generation(of: section)
+        #if DEBUG
+        tabEvaluationLog.noteEvaluation(of: section, generation: generation)
+        #else
+        _ = generation
+        #endif
+        return Tab(
+            tabLabelForm == .iconOnly ? "" : section.title,
+            systemImage: section.systemImage,
+            value: section,
+            role: role,
+            content: content
+        )
+        .accessibilityLabel(Text(section.title), isEnabled: tabLabelForm == .iconOnly)
+    }
+
+    private var installedTabSections: Set<AppSection> {
+        var sections: Set<AppSection> = [.library, .inbox, .downloads, .settings, .search]
+        if showsPlaylistsTab {
+            sections.insert(.playlists)
+        }
+        if showsUpNextTab {
+            sections.insert(.upNext)
+        }
+        return sections
+    }
+
+    /// A tab inserted with an empty title keeps its symbol's description as
+    /// its hosted label until the declarations are next evaluated, and nothing
+    /// need evaluate them after an insertion. This runs after the update that
+    /// carried it; recording a generation the helper reads is that evaluation.
+    /// Separate from `scheduleUpNextTabStep`: nothing here selects, installs
+    /// or withdraws, and a refresh changes no form.
+    private func updateTabInstallations(_ installed: Set<AppSection>) {
+        let change = tabRefreshes.observe(installed)
+        #if DEBUG
+        for installation in change.withdrawn {
+            logTabInstallation(installation, "withdrawn")
+        }
+        for installation in change.added {
+            logTabInstallation(installation, "installed, generation recorded")
+        }
+        #else
+        _ = change
+        #endif
+    }
+
+    /// The one further update each installation gets: a generation fresh to
+    /// that installation, from an allocator never reset, so a reinstallation
+    /// gets its own. It follows installed membership alone: a tab that has
+    /// lost eligibility and awaits its handover keeps its generation.
+    struct TabRefreshes: Equatable {
+        struct Installation: Equatable {
+            let section: AppSection
+            let generation: Int
+        }
+
+        private var lastGeneration = 0
+        private var generations: [AppSection: Int] = [:]
+
+        /// Records an update's installed sections. Unchanged membership
+        /// changes nothing.
+        mutating func observe(_ installed: Set<AppSection>) -> (added: [Installation], withdrawn: [Installation]) {
+            var added: [Installation] = []
+            var withdrawn: [Installation] = []
+            for section in AppSection.allCases {
+                if let generation = generations[section], !installed.contains(section) {
+                    withdrawn.append(Installation(section: section, generation: generation))
+                    generations[section] = nil
+                } else if generations[section] == nil, installed.contains(section) {
+                    lastGeneration += 1
+                    generations[section] = lastGeneration
+                    added.append(Installation(section: section, generation: lastGeneration))
+                }
+            }
+            return (added, withdrawn)
+        }
+
+        func generation(of section: AppSection) -> Int? {
+            generations[section]
+        }
+    }
+
+    private var tabLabelForm: TabLabelForm {
+        TabLabelForm.resolve(isFoldableScene: inheritedSceneLayouts?.isFoldable == true)
+    }
+
+    #if DEBUG
+    private static let formLogger = Logger(subsystem: "com.connor.opencast", category: "TwoPaneRoot")
+
+    private func logTabInstallation(_ installation: TabRefreshes.Installation, _ event: String) {
+        Self.formLogger.notice(
+            "tab-root section \(installation.section.rawValue, privacy: .public) gen \(installation.generation, privacy: .public) \(event, privacy: .public)"
+        )
+    }
+
+    /// The tabs a scene transition flips live, each section's effective form.
+    private func logSectionForms(_ form: TabLabelForm) {
+        let installed = installedTabSections
+        for section in AppSection.allCases where installed.contains(section) {
+            let generation = tabRefreshes.generation(of: section).map(String.init) ?? "none"
+            Self.formLogger.notice(
+                "tab-root section \(section.rawValue, privacy: .public) gen \(generation, privacy: .public) form \(form.rawValue, privacy: .public)"
+            )
+        }
+    }
+
+    /// Credits a refresh at the first evaluation that consumes a generation,
+    /// which is what proves the update reached the declarations. A plain
+    /// object, so noting one during evaluation invalidates nothing: it watches
+    /// the dependency and never supplies it.
+    final class TabEvaluationLog {
+        private var credited: Set<Int> = []
+
+        var refreshCount: Int {
+            credited.count
+        }
+
+        /// True when this evaluation is the one that consumed the generation.
+        @discardableResult
+        func noteEvaluation(of section: AppSection, generation: Int?) -> Bool {
+            guard let generation, credited.insert(generation).inserted else {
+                return false
+            }
+            let count = credited.count
+            OpenCastTabRootView.formLogger.notice(
+                "tab-root section \(section.rawValue, privacy: .public) gen \(generation, privacy: .public) refresh \(count, privacy: .public)"
+            )
+            return true
+        }
+    }
+    #endif
 
     /// Playlists is offered at regular width and wherever the system shows a
     /// rail (`toolbarVerticalEdge` non-nil: the iPhone Duo's outer display and

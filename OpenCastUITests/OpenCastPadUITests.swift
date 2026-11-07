@@ -6,7 +6,7 @@ final class OpenCastPadUITests: XCTestCase {
     private static let seededSubscriptionRowIdentifier = "subscription-row-https://example.com/ui-test-feed.xml"
     private static let hierarchyProbeEnvironmentKey = "OPENCAST_RUN_PAD_HIERARCHY_PROBE"
     /// `AppSection.playlists.systemImage`: the iPad floating tab bar identifies its Playlists button by it.
-    private static let playlistsSymbol = "music.note.list"
+    private static let playlistsSymbol = "list.bullet.rectangle"
     /// `AppSection.library.systemImage`.
     private static let librarySymbol = "books.vertical"
 

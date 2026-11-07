@@ -37,13 +37,13 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .library:
             "books.vertical"
         case .playlists:
-            "music.note.list"
+            "list.bullet.rectangle"
         case .upNext:
-            "text.line.first.and.arrowtriangle.forward"
+            "play.square.stack"
         case .inbox:
             "tray"
         case .downloads:
-            "arrow.down.circle"
+            "square.and.arrow.down"
         case .settings:
             "gearshape"
         case .search:

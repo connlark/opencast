@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-10-30T07:42:02Z",
+  "updatedAt": "2026-11-06T22:16:02Z",
   "topics": [
     {
       "id": "why-we-charge",
@@ -165,7 +165,7 @@
       "title": "Using your own API key",
       "symbol": "key",
       "summary": "Ad detection and Chapters & Summary on your own Google or OpenAI account.",
-      "updatedAt": "2026-10-25T19:03:07Z",
+      "updatedAt": "2026-11-06T22:16:02Z",
       "minAppBuild": 301,
       "related": [
         "ad-detection",
@@ -183,7 +183,7 @@
         {
           "type": "bullets",
           "items": [
-            "**Google Gemini**: create a key in Google AI Studio. A Gemini key is free to create.",
+            "**Google Gemini**: create a key in Google AI Studio for a project with billing set up. A key on Google's free tier is too limited for these features.",
             "**OpenAI**: create a key on the API keys page of your OpenAI account. OpenAI bills API use to that account.",
             "In Settings › AI Services, open the provider, paste the key, tap **Test** to check it, then **Save**.",
             "With keys for both providers, choose which one each feature uses under **Provider**."
@@ -201,11 +201,19 @@
         },
         {
           "type": "heading",
+          "text": "Keys on Google's free tier"
+        },
+        {
+          "type": "paragraph",
+          "text": "Until January 1, 2027 you don't need a key at all. A key on Google's free tier is too limited for these features: Google can turn free-tier requests away when its models are busy, and ad detection then times out. If you saved one, remove the Google key in Settings › AI Services and both features run without one until January 1, 2027, or on your OpenAI key if you saved one."
+        },
+        {
+          "type": "heading",
           "text": "What it costs"
         },
         {
           "type": "paragraph",
-          "text": "Your provider bills your own account at its API prices; opencast charges nothing for these features. Google's free tier costs nothing within its limits, which are low: opencast slows down to stay inside the per-minute limit, so a long episode takes longer, and a key that reaches its daily limit can't run another analysis until the limit resets. Settings › AI Services shows the tokens each run used, counted on your device. Your provider's dashboard is the bill."
+          "text": "Your provider bills your own account at its API prices; opencast charges nothing for these features. In opencast's own use, ad detection has averaged about 6 cents an episode with Gemini 3.8 Flash, and Google's price for it doubles on January 1, 2027. Settings › AI Services shows the tokens your provider reported for runs on your key, the last run and this month's total, counted on your device. Your provider's dashboard is the bill."
         },
         {
           "type": "heading",
