@@ -282,6 +282,7 @@ for suite in lifecycle digest-runtime review-regressions alerting \
 done
 (cd Server/FeedPollingWorker && worker-build --release --out-dir /tmp/opencast-polling-fixture-build --features storage-fixture)
 node Server/FeedPollingWorker/tests/hooks-runtime.mjs
+node Server/FeedPollingWorker/tests/staging-concurrency.mjs
 OPENCAST_POLLING_FIXTURE_BUILD=/tmp/opencast-polling-fixture-build STORAGE_PHASES_ROWS_OUT=/tmp/opencast-storage-phases-rows.jsonl node Server/FeedPollingWorker/tests/witness-runtime.mjs
 STORAGE_PHASES_ROWS=/tmp/opencast-storage-phases-rows.jsonl python3 -B -m unittest discover -s Server/FeedPollingWorker/storage_phases
 ```
@@ -315,7 +316,12 @@ fire by `controls.stall`). The polling Worker's `storage-fixture` feature
 and the core's close delay behind private fixture routes;
 `harness(..., { pollingBuild })` runs that build. `hooks-runtime.mjs`
 qualifies every hook (`OPENCAST_POLLING_FIXTURE_BUILD` names the fixture
-build, default `/tmp/opencast-polling-fixture-build`). `witness-runtime.mjs`
+build, default `/tmp/opencast-polling-fixture-build`). Per-operation R2
+hooks (`/test/r2-hooks`: held replies, per-page delays, a failing page, and
+the `x-test-r2-gate` gate) reach a changed scan's concurrent snapshot page
+uploads; `staging-concurrency.mjs` uses them to check the upload window
+bound, ordering, failure and cancellation on the fixture build
+(`STAGING_CASES=<names>` runs a subset). `witness-runtime.mjs`
 reads each invocation's `storage_phases` line against the wire proxy's own
 witness of the same operations: the guards, the intervals, the zero-budget and
 Date-jump controls, send provenance through the parser, and the runtime maxima.

@@ -352,8 +352,8 @@ jobs:
   postgres-integration:
     name: Integration (${{ matrix.name }})
     runs-on: ubuntu-24.04
-    # Each entry packages two release Rust Workers; the Notifications entry also
-    # builds the storage-fixture Worker.
+    # Each entry packages two release Rust Workers, then builds its own
+    # Worker's storage-fixture variant.
     timeout-minutes: 60
     permissions:
       contents: read
@@ -511,6 +511,15 @@ jobs:
           node tests/stage1-review.mjs
           node tests/alerting.mjs
           node tests/permit-reclaim.mjs
+          # The concurrent page-upload suite drives the R2 hooks of the
+          # polling Worker's storage-fixture build. It builds in its own
+          # target: a dependant build after a root build of the notifications
+          # crate in one target links that crate's unhashed rlib.
+          CARGO_TARGET_DIR="$RUNNER_TEMP/opencast-polling-fixture-target" \
+            "$HOME/.cargo/bin/worker-build" --release --out-dir "$RUNNER_TEMP/opencast-polling-fixture-build" \
+            --features storage-fixture
+          OPENCAST_POLLING_FIXTURE_BUILD="$RUNNER_TEMP/opencast-polling-fixture-build" \
+            node tests/staging-concurrency.mjs
           python3 -B -m unittest discover -s storage_phases
 
   services:
