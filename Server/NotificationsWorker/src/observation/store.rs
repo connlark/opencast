@@ -11,8 +11,21 @@ use crate::delivery::{
     db::*,
     wire::{int, string},
 };
+use futures_util::{stream, StreamExt, TryStreamExt};
 use serde_json::{json, Value};
 use worker::{Bucket, Error, Result};
+
+/// The pages `Store::put_many` uploads at once. Cloudflare Workers allow six
+/// simultaneous outgoing connections per invocation, R2 operations included,
+/// so a wider window only queues. An application scheduling bound, not a
+/// promise of sixfold throughput.
+pub const UPLOAD_WINDOW: usize = 6;
+/// The most keys one `ReservePages`, or pages one `UploadPages`, statement
+/// carries: the statement budget is sized for it.
+const STATEMENT_PAGES: usize = 64;
+/// One page for `Store::put_many`: its index, bytes, record count and first
+/// and last hash.
+pub type PagePayload = (&'static str, Vec<u8>, usize, String, String);
 
 pub fn fault(code: &str) -> Error {
     Error::RustError(code.into())
@@ -337,7 +350,67 @@ impl Store {
             // Every object is reserved under a lease before upload.
             return Err(fault("observation_unclaimed"));
         }
-        if self.reserved.is_empty() {
+        self.reserve(1).await?;
+        let key = self.reserved.pop().expect("reserved batch");
+        let page = Page {
+            key,
+            sha256: checksum(&bytes),
+            bytes: bytes.len(),
+            count,
+            first_hash,
+            last_hash,
+            index: index.into(),
+        };
+        self.upload(&page, bytes).await?;
+        self.uploaded.push(page.clone());
+        Ok(page)
+    }
+    /// `put` for an ordered batch of at most `UPLOAD_WINDOW` pages, uploaded
+    /// concurrently. Every key is reserved before any upload starts and the
+    /// pages are recorded, as `put` records them, in input order. `buffered`
+    /// yields in input order, so the first YIELDED error ends the batch: an
+    /// upload already started may still land in R2, under its reserved key
+    /// (the snapshot GC's), and a dropped upload never issues its verifying
+    /// GET or its HEAD. Nothing is recorded or checkpointed after an error.
+    pub async fn put_many(&mut self, batch: Vec<PagePayload>) -> Result<Vec<Page>> {
+        if !self.materialized {
+            return Err(fault("observation_unclaimed"));
+        }
+        if batch.len() > UPLOAD_WINDOW {
+            return Err(fault("upload_window"));
+        }
+        self.reserve(batch.len()).await?;
+        let pages: Vec<_> = batch
+            .into_iter()
+            .map(|(index, bytes, count, first_hash, last_hash)| {
+                let page = Page {
+                    key: self.reserved.pop().expect("reserved batch"),
+                    sha256: checksum(&bytes),
+                    bytes: bytes.len(),
+                    count,
+                    first_hash,
+                    last_hash,
+                    index: index.into(),
+                };
+                (page, bytes)
+            })
+            .collect();
+        // Each upload owns its page and bytes and shares the store; the stream
+        // and that borrow end before the pages are recorded.
+        let store = &*self;
+        let uploaded: Vec<Page> = stream::iter(pages)
+            .map(|(page, bytes)| async move { store.upload(&page, bytes).await.map(|()| page) })
+            .buffered(UPLOAD_WINDOW)
+            .try_collect()
+            .await?;
+        self.uploaded.extend(uploaded.iter().cloned());
+        Ok(uploaded)
+    }
+    /// Reserves keys under the lease until `needed` are held, each statement
+    /// the next pool (4 keys, doubling to `STATEMENT_PAGES`), after recording
+    /// the pages already uploaded.
+    async fn reserve(&mut self, needed: usize) -> Result<()> {
+        while self.reserved.len() < needed {
             self.flush().await?;
             let keys: Vec<_> = (0..self.reservation_batch_size).map(|_| id()).collect();
             if slice_b::execute(
@@ -358,22 +431,10 @@ impl Store {
                 }
                 return Err(fault("observation_fence"));
             }
-            self.reserved = keys;
-            self.reservation_batch_size = (self.reservation_batch_size * 2).min(64);
+            self.reserved.extend(keys);
+            self.reservation_batch_size = (self.reservation_batch_size * 2).min(STATEMENT_PAGES);
         }
-        let key = self.reserved.pop().expect("reserved batch");
-        let page = Page {
-            key,
-            sha256: checksum(&bytes),
-            bytes: bytes.len(),
-            count,
-            first_hash,
-            last_hash,
-            index: index.into(),
-        };
-        self.upload(&page, bytes).await?;
-        self.uploaded.push(page.clone());
-        Ok(page)
+        Ok(())
     }
     async fn upload(&self, page: &Page, bytes: Vec<u8>) -> Result<()> {
         let timer = self.db.timer();
@@ -425,28 +486,29 @@ impl Store {
         // R2 checks the supplied SHA-256 on PUT; HEAD independently verifies size.
         Ok(())
     }
+    /// Records the uploaded pages, at most `STATEMENT_PAGES` per statement.
     pub async fn flush(&mut self) -> Result<()> {
-        if self.uploaded.is_empty() {
-            return Ok(());
-        }
-        if slice_b::execute(
-            &self.db,
-            BOperation::UploadPages {
-                scan: self.storage_scan(),
-                pages: self.uploaded.iter().map(Self::storage_page).collect(),
-                now: now(),
-            },
-        )
-        .await?
-        .count()
-            != self.uploaded.len() as u64
-        {
-            if let Some(poll) = &self.poll {
-                poll.rejected(&self.db).await?;
+        while !self.uploaded.is_empty() {
+            let n = self.uploaded.len().min(STATEMENT_PAGES);
+            if slice_b::execute(
+                &self.db,
+                BOperation::UploadPages {
+                    scan: self.storage_scan(),
+                    pages: self.uploaded[..n].iter().map(Self::storage_page).collect(),
+                    now: now(),
+                },
+            )
+            .await?
+            .count()
+                != n as u64
+            {
+                if let Some(poll) = &self.poll {
+                    poll.rejected(&self.db).await?;
+                }
+                return Err(fault("observation_upload_fence"));
             }
-            return Err(fault("observation_upload_fence"));
+            self.uploaded.drain(..n);
         }
-        self.uploaded.clear();
         Ok(())
     }
     async fn release_unused(&mut self) -> Result<()> {

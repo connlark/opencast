@@ -572,10 +572,13 @@ async fn fetch_error(
         sink.failed().await?;
     }
     let storage = error == FeedFetchError::StorageFailed;
-    console_log!(
-        "{}",
-        json!({"event":"poll_outcome","outcome":if storage {"storage_error"} else if deferred {"origin_deferred"} else {"upstream_error"},"reason":error.code()})
-    );
+    let mut outcome = json!({"event":"poll_outcome","outcome":if storage {"storage_error"} else if deferred {"origin_deferred"} else {"upstream_error"},"reason":error.code()});
+    // The publisher's own status when it answered with one; the reason and
+    // the stored error stay the coarse code.
+    if let FeedFetchError::HTTPStatus(status) = &error {
+        outcome["status"] = json!(status);
+    }
+    console_log!("{}", outcome);
     if error == FeedFetchError::FetchFailed {
         if let Some(origin) = sink.origin.as_mut() {
             // Network failure/deadline applies to the publisher origin

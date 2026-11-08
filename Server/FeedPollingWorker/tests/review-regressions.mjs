@@ -185,3 +185,40 @@ try {
   assert.equal((await h.first("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='n_poll'")).n + (await h.first("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='n_origin_permit'")).n, 0);
   console.log('PASS rolling failure counters and orphan/queue-age operator gauges');
 } finally { Date.now = wallNow; await h.instance.dispose(); }
+// A publisher's HTTP status reaches its failed fetch's poll_outcome line as a
+// number beside the unchanged reason; the stored error and the result stay as
+// they were, and a failure without an HTTP response carries no status.
+{
+  let reply;
+  const s = await harness(request => reply(request), { logs: true });
+  try {
+    const feed = await s.add('https://status.example.com/feed');
+    reply = () => new Response(rss([item('base', s.now - 100)]));
+    await s.invoke('test/dispatch'); await s.drain();
+    const failure = async (name, behavior) => {
+      reply = behavior;
+      await s.run('UPDATE n_feed SET due_at=0,retry_at=0,poll_failures=0,dispatch_until=0 WHERE feed_id=?', feed);
+      await s.run('DELETE FROM n_poll_origin');
+      await s.invoke('test/dispatch');
+      const [wake] = await s.polls(), from = s.logs.length;
+      const consumed = await s.consume(wake);
+      assert.equal(consumed.outcome, 'publisher_failed', `${name}: ${consumed.text}`);
+      const lines = s.logs.slice(from).filter(e => e.event === 'poll_outcome' && e.outcome === 'upstream_error');
+      assert.equal(lines.length, 1, `${name}: one upstream_error poll_outcome line: ${JSON.stringify(lines)}`);
+      return { line: lines[0], row: await s.first('SELECT last_poll_outcome,last_poll_error FROM n_feed WHERE feed_id=?', feed) };
+    };
+    const missing = await failure('404', () => new Response('gone', { status: 404 }));
+    assert.deepEqual([missing.line.reason, missing.line.status], ['http_error', 404], JSON.stringify(missing.line));
+    assert.equal(typeof missing.line.status, 'number');
+    assert.deepEqual(missing.row, { last_poll_outcome: 'publisher_failed', last_poll_error: 'http_error' }, 'the stored error is unchanged');
+    // No response at all: the request is never answered within the
+    // publisher's deadline (answered only after the consume returned).
+    let answer;
+    const refused = await failure('no response', () => new Promise(resolve => { answer = resolve; }));
+    answer(new Response('late', { status: 404 }));
+    assert.equal(refused.line.reason, 'fetch_failed', JSON.stringify(refused.line));
+    assert.equal('status' in refused.line, false, 'a failure without an HTTP response carries no status');
+    assert.deepEqual(refused.row, { last_poll_outcome: 'publisher_failed', last_poll_error: 'fetch_failed' });
+    console.log('PASS a publisher\'s 404 reaches its poll_outcome line as status 404 beside reason http_error; a failure without a response has no status; the stored error and the result are unchanged');
+  } finally { await s.instance.dispose(); }
+}

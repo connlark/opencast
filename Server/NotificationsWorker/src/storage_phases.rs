@@ -1013,6 +1013,55 @@ mod tests {
         }
     }
 
+    /// Overlapping R2 spans, as a window of concurrent page uploads records
+    /// them: the invocation's `durations.r2` is their union, the action's
+    /// `r2_ms` their sum (here more than the action's elapsed time) and its
+    /// `r2_calls` the count of recorded intervals.
+    #[test]
+    fn overlapping_r2_spans_are_a_union_per_invocation_and_a_sum_and_count_per_action() {
+        let mut w = dispatch(0);
+        w.context.handler = "consume";
+        w.context.budget_scope = "step";
+        w.context.budget_source = "STEP_DEADLINE";
+        w.context.handler_main_ms = 200_000;
+        w.context.delivery_start = Some(0);
+        w.action_start("scan", 100);
+        // A window of six PUTs and HEADs in flight at once, then a lone page.
+        let spans = [
+            (200, 500),
+            (210, 520),
+            (220, 480),
+            (230, 600),
+            (240, 550),
+            (250, 510),
+            (700, 800),
+            (800, 850),
+        ];
+        for (start, end) in spans {
+            w.record(Category::R2, start, end);
+        }
+        w.action_end("staged", "completed", None, 900);
+        let v = parse(&line(
+            &w,
+            &Inputs {
+                outcome: "ok",
+                now_ms: 1_000,
+                perf_now: 1_000.0,
+            },
+        ));
+        let union = (600 - 200) + (850 - 700);
+        let sum: u64 = spans.iter().map(|(s, e)| e - s).sum();
+        assert_eq!(v["durations"]["r2"], union);
+        let action = &v["action"][0];
+        assert_eq!(action["name"], "scan");
+        assert_eq!(action["r2_ms"], sum);
+        assert_eq!(action["r2_calls"], spans.len());
+        assert!(
+            sum > 900 - 100,
+            "the sum of overlapping spans exceeds the action's elapsed time"
+        );
+    }
+
     #[test]
     fn intervals_union_once() {
         assert_eq!(

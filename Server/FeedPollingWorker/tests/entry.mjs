@@ -7,14 +7,14 @@ globalThis.Date = class extends NativeDate {
   constructor(...args) { super(...(args.length ? args : [(frozen ?? NativeDate.now()) + offset])); }
   static now() { return (frozen ?? NativeDate.now()) + offset; }
 };
-const wakeups = [], controllers = new Map();
+const wakeups = [], controllers = new Map(), gates = new Map();
 // `d1` and `max_d1` are the storage statement counters (their names kept for
 // the suites that assert them); `rows_read` and `rollup_rows_read` read 0, as
 // the PostgreSQL counters report statements and rows written only.
 // `multipart` is every Class A multipart call; the `multipart_*` split and the
 // `scratch_*` reads and deletes say which scratch lifecycle a scan took.
 const COUNTERS = ['d1', 'rows_read', 'rows_written', 'rollup_rows_read', 'get', 'put', 'head', 'delete', 'list', 'multipart', 'multipart_create', 'multipart_part', 'multipart_complete', 'multipart_abort', 'scratch_get', 'scratch_delete', 'queue_messages'];
-const totals = { deliveries: [], cleanup: [], cron: [], alert_deliveries: [], outcomes: {}, passes: {}, logged: {}, calls: 0, log_events: 0, ...Object.fromEntries(COUNTERS.map(name => [name, 0])), max_d1: 0, max_r2: 0, scratch_peak_bytes: 0, recent: [] };
+const totals = { deliveries: [], cleanup: [], cron: [], alert_deliveries: [], outcomes: {}, passes: {}, logged: {}, calls: 0, log_events: 0, ...Object.fromEntries(COUNTERS.map(name => [name, 0])), max_d1: 0, max_r2: 0, max_r2_in_flight: 0, scratch_peak_bytes: 0, recent: [] };
 for(const method of ['log','warn','error']){const native=console[method].bind(console);console[method]=(...args)=>{
   totals.log_events++;
   // Failures are always logged; healthy polls are only sampled. Exact outcome
@@ -23,6 +23,7 @@ for(const method of ['log','warn','error']){const native=console[method].bind(co
   native(...args);
 };}
 const hooks = fixtureHooks({ totals, now: () => NativeDate.now(), fault: () => fault, setFault: value => { fault = value; }, hang: release => { releaseHang = release; } });
+const r2 = r2Hooks({ totals, now: () => NativeDate.now() });
 function fail(point) { if (fault === `always:${point}`) throw Error(`fixture:${point}`); if (fault === point) { fault = undefined; throw Error(`fixture:${point}`); } }
 // The storage hooks act on the wire, in
 // Server/NotificationsWorker/tests/postgres/proxy.mjs, armed through
@@ -47,23 +48,88 @@ function counted(env, trace, run) {
     }
   })();
 }
+// An invocation's bucket calls so far, by operation (multipart: every Class A
+// multipart call).
+const r2Calls = trace => Object.fromEntries(['get', 'put', 'head', 'delete', 'list', 'multipart'].map(name => [name, trace[name]]));
+// One bucket call of an invocation, in flight from its start to its return.
+// `r2_flights` counts the calls so counted.
+async function flight(trace, run) {
+  trace.r2_flights = (trace.r2_flights ?? 0) + 1; trace.r2_in_flight = (trace.r2_in_flight ?? 0) + 1; trace.r2_in_flight_peak = Math.max(trace.r2_in_flight_peak ?? 0, trace.r2_in_flight);
+  try { return await run(); } finally { trace.r2_in_flight--; }
+}
+// /test/r2-probe (hooks-runtime.mjs): bucket calls made through an
+// invocation's instrumented bucket, exactly as the Worker's own calls are, so
+// the R2 hooks, the in-flight counter and the gate are qualified without a
+// scan. The JSON body {"serial":false,"ops":[{"op":"put","key":"k","then":"head"}]}
+// makes its ops at once (serial: one after another). An op is get, put, head,
+// delete, list (the key a prefix), multipart (create, one part, complete) or
+// resume_abort (create, then abort through a resumed handle);
+// `then` names a second call on the same key made once the first returned (a
+// continuation). The reply: each op's {op, key, ok, error, start, end} (ms)
+// and the invocation's calls, flights, in flight and in-flight peak. Under
+// x-test-execution, /abort ends the probe at once with 503 and leaves its ops
+// and their continuations running: an invocation whose work was not dropped.
+async function probe(bucket, { ops = [], serial = false }, signal, trace) {
+  const call = async (op, key, body) => {
+    if (op === 'put') return bucket.put(key, body ?? `probe ${key}`);
+    if (op === 'list') return bucket.list({ prefix: key });
+    if (op === 'get') { const object = await bucket.get(key); await object?.arrayBuffer(); return object; }
+    if (op === 'multipart') { const upload = await bucket.createMultipartUpload(key); const part = await upload.uploadPart(1, body ?? `probe ${key}`); return upload.complete([part]); }
+    if (op === 'resume_abort') { const upload = await bucket.createMultipartUpload(key); return bucket.resumeMultipartUpload(key, upload.uploadId).abort(); }
+    return bucket[op](key);
+  };
+  const one = async ({ op, key, body, then }) => {
+    const start = NativeDate.now();
+    try { await call(op, key, body); if (then) await call(then, key); return { op, key, ok: true, start, end: NativeDate.now() }; }
+    catch (error) { return { op, key, ok: false, error: String(error?.message ?? error), start, end: NativeDate.now() }; }
+  };
+  const results = [];
+  // A call held for a release from another request leaves this one nothing
+  // pending of its own; a timer keeps workerd from judging it hung.
+  const alive = setInterval(() => {}, 25);
+  const work = serial ? (async () => { for (const op of ops) results.push(await one(op)); })() : Promise.all(ops.map(one)).then(all => { results.push(...all); });
+  const aborted = signal ? new Promise(resolve => { if (signal.aborted) resolve(true); else signal.addEventListener('abort', () => resolve(true), { once: true }); }) : new Promise(() => {});
+  const cancelled = await Promise.race([work.then(() => false), aborted]).finally(() => clearInterval(alive));
+  return Response.json({ cancelled, results, calls: r2Calls(trace), flights: trace.r2_flights ?? 0, in_flight: trace.r2_in_flight ?? 0, in_flight_peak: trace.r2_in_flight_peak ?? 0 }, { status: cancelled ? 503 : 200 });
+}
+// A gated execution's record (see x-test-r2-gate below), live while it runs.
+const gated = gate => ({ result: gate.result, released: gate.released, released_seq: gate.released_seq, in_flight: gate.trace.r2_in_flight ?? 0, in_flight_peak: gate.trace.r2_in_flight_peak ?? 0, unsettled: r2.unsettled(gate.trace), calls: r2Calls(gate.trace), drained: gate.drained });
 function instrument(env, trace) {
   const bucket = new Proxy(env.FEED_SNAPSHOTS, { get(target, key) {
     if (key === 'constructor') return target.constructor;
-    if (['get', 'put', 'head', 'delete', 'list'].includes(key)) return async (...args) => { trace[key]++; if (['get', 'delete'].includes(key) && typeof args[0] === 'string' && args[0].startsWith('scratch/')) trace[`scratch_${key}`]++; if(key==='delete'&&fault==='cleanup_budget'){offset+=26000;fault=undefined;} if(key==='get'&&fault==='slow_get'){fault=undefined;await new Promise(resolve=>setTimeout(resolve,16000));} if(key==='get'&&fault==='hang_get'){fault='hang_get_active';await new Promise(resolve=>releaseHang=resolve);} fail(`before_${key}`); const value = await target[key](...args); fail(`after_${key}`); return value; };
+    if (['get', 'put', 'head', 'delete', 'list'].includes(key)) return async (...args) => {
+      trace[key]++; if (['get', 'delete'].includes(key) && typeof args[0] === 'string' && args[0].startsWith('scratch/')) trace[`scratch_${key}`]++;
+      // This invocation's bucket calls in flight at once, and their peak:
+      // every call through this bucket, the multipart calls below included.
+      trace.r2_flights = (trace.r2_flights ?? 0) + 1; trace.r2_in_flight = (trace.r2_in_flight ?? 0) + 1; trace.r2_in_flight_peak = Math.max(trace.r2_in_flight_peak ?? 0, trace.r2_in_flight);
+      try { if(key==='delete'&&fault==='cleanup_budget'){offset+=26000;fault=undefined;} if(key==='get'&&fault==='slow_get'){fault=undefined;await new Promise(resolve=>setTimeout(resolve,16000));} if(key==='get'&&fault==='hang_get'){fault='hang_get_active';await new Promise(resolve=>releaseHang=resolve);} fail(`before_${key}`); const value = await r2.call(key, args, () => target[key](...args), trace); fail(`after_${key}`); return value; }
+      finally { trace.r2_in_flight--; }
+    };
     // Scratch is one multipart upload: count every Class A call and its bytes.
     if (key === 'createMultipartUpload') return async (...args) => {
-      trace.multipart++; trace.multipart_create++; const upload = await target.createMultipartUpload(...args); let bytes = 0;
+      trace.multipart++; trace.multipart_create++; const upload = await flight(trace, () => target.createMultipartUpload(...args)); let bytes = 0;
       return new Proxy(upload, { get(inner, name) {
         if (name === 'constructor') return inner.constructor;
         if (['uploadPart', 'complete', 'abort'].includes(name)) return async (...parts) => {
           trace.multipart++; trace[name === 'uploadPart' ? 'multipart_part' : `multipart_${name}`]++;
-          // `slow_part:<ms>` stalls the next part upload once: a spool or body write mid-scan.
-          if (name === 'uploadPart' && fault?.startsWith('slow_part:')) { const ms = Number(fault.slice(10)); fault = undefined; await new Promise(resolve => setTimeout(resolve, ms)); }
-          fail(`scratch_${name}`);
-          if (name === 'uploadPart') { bytes += parts[1].byteLength ?? parts[1].length ?? 0; totals.scratch_peak_bytes = Math.max(totals.scratch_peak_bytes, bytes); }
-          return inner[name](...parts);
+          return flight(trace, async () => {
+            // `slow_part:<ms>` stalls the next part upload once: a spool or body write mid-scan.
+            if (name === 'uploadPart' && fault?.startsWith('slow_part:')) { const ms = Number(fault.slice(10)); fault = undefined; await new Promise(resolve => setTimeout(resolve, ms)); }
+            fail(`scratch_${name}`);
+            if (name === 'uploadPart') { bytes += parts[1].byteLength ?? parts[1].length ?? 0; totals.scratch_peak_bytes = Math.max(totals.scratch_peak_bytes, bytes); }
+            return inner[name](...parts);
+          });
         };
+        const value = Reflect.get(inner, name); return typeof value === 'function' ? value.bind(inner) : value;
+      } });
+    };
+    // A resumed upload (only the abort after a failed completion): its calls
+    // are in flight like every other; the multipart counters stay as they were.
+    if (key === 'resumeMultipartUpload') return (...args) => {
+      const upload = target.resumeMultipartUpload(...args);
+      return new Proxy(upload, { get(inner, name) {
+        if (name === 'constructor') return inner.constructor;
+        if (['uploadPart', 'complete', 'abort'].includes(name)) return (...parts) => flight(trace, () => inner[name](...parts));
         const value = Reflect.get(inner, name); return typeof value === 'function' ? value.bind(inner) : value;
       } });
     };
@@ -123,34 +189,80 @@ export default class extends Worker {
       return Response.json(due.map(w=>w.body));
     }
     if (path === '/metrics') return Response.json(totals);
+    if (path === '/test/r2-hooks') return Response.json(r2.arm(JSON.parse(await request.text() || '{}')));
+    if (path === '/test/r2-release') {
+      const body = JSON.parse(await request.text() || '{}');
+      // A gated execution's held calls are released by its own request's loop.
+      if (body.execution !== undefined) { const gate = gates.get(body.execution); if (gate) gate.release = true; return Response.json({ execution: body.execution, requested: !!gate }); }
+      return Response.json(r2.release({ stop: !!body.stop }));
+    }
+    if (path === '/test/r2-state') return Response.json({ ...r2.state(), executions: Object.fromEntries([...gates].map(([key, gate]) => [key, gated(gate)])) });
     if (path === '/abort') { const pending=controllers.get(await request.text());if(pending)pending.requested=true;return new Response('ok'); }
     const hooked = await hooks.route(path, request); if (hooked) return hooked;
     if (!path.startsWith('/test/')) return super.fetch(request);
     const trace = { path, ...Object.fromEntries(COUNTERS.map(name => [name, 0])) };
     const key = request.headers.get('x-test-execution'), controller = key ? new AbortController() : undefined;
     const cancellation={requested:false,finished:false};
-    let watching;
+    let watching, gating;
     if (controller) {
       controllers.set(key,cancellation);
       // Abort native I/O in the originating request's workerd context.
       watching=(async()=>{while(!cancellation.requested&&!cancellation.finished)await new Promise(resolve=>setTimeout(resolve,10));if(cancellation.requested)controller.abort();})();
     }
+    // x-test-r2-gate (with x-test-execution): the R2 hooks' held calls of this
+    // invocation are released by this request's own loop, in its own workerd
+    // context, when /test/r2-release {"execution": <key>} asks; and after its
+    // operation returns (or is cancelled) this request stays open until each of
+    // them is released and settled and its in-flight count has stayed 0 for
+    // 500 ms. A continuation of a released call therefore runs here, where its
+    // calls are made and counted, not cancelled with a completed request. The
+    // operation's result and the gate's record are in /test/r2-state's
+    // `executions`.
+    const gate = controller && request.headers.get('x-test-r2-gate') === '1' ? { trace, result: null, release: false, released: 0, released_seq: null, at_release: null, drained: null } : undefined;
+    if (gate) {
+      gates.set(key, gate);
+      gating = (async () => {
+        while (!cancellation.finished) {
+          if (gate.release) { gate.release = false; gate.at_release ??= r2Calls(trace); const { released, seq } = r2.release({ owner: trace }); gate.released += released; gate.released_seq ??= seq; }
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+      })();
+    }
+    const probing = path === '/test/r2-probe' ? JSON.parse(await request.text() || '{}') : null;
     const start = performance.now();
     try {
-      const input = new Request(request.url.replace('/test', ''), request);
-      const response = await counted(this.env, trace, () => new PollingControl(this.ctx, instrument(this.env, trace)).fetch(controller ? new Request(input, { signal: controller.signal }) : input));
+      let operation;
+      if (probing) operation = () => probe(instrument(this.env, trace).FEED_SNAPSHOTS, probing, controller?.signal, trace);
+      else {
+        const input = new Request(request.url.replace('/test', ''), request);
+        operation = () => new PollingControl(this.ctx, instrument(this.env, trace)).fetch(controller ? new Request(input, { signal: controller.signal }) : input);
+      }
+      const response = await counted(this.env, trace, operation);
+      if (gate) gate.result = { status: response.status, text: await response.clone().text() };
       // Healthy polls are only sampled in logs; the consume result is exact.
       // `passes` is how many times a scan parsed its one response body; steps
       // that parsed nothing (304s, continuations) are not counted.
       if (path === '/test/consume' && response.ok) { try { const { outcome, passes } = await response.clone().json(); trace.outcome = outcome; totals.outcomes[outcome] = (totals.outcomes[outcome] ?? 0) + 1; if (passes > 0) { trace.passes = passes; totals.passes[passes] = (totals.passes[passes] ?? 0) + 1; } } catch {} }
       return response;
+    } catch (error) {
+      if (gate) gate.result = { error: String(error?.message ?? error) };
+      throw error;
     } finally {
-      cancellation.finished=true;controllers.delete(key);if(watching)await watching;
+      if (gate) {
+        for (let quiet = 0; quiet < 500;) {
+          await new Promise(resolve => setTimeout(resolve, 25));
+          quiet = r2.unsettled(trace) === 0 && !(trace.r2_in_flight > 0) ? quiet + 25 : 0;
+        }
+        const calls = r2Calls(trace);
+        gate.drained = { in_flight: trace.r2_in_flight ?? 0, unsettled: r2.unsettled(trace), calls_after_release: gate.at_release && Object.fromEntries(Object.entries(calls).map(([name, n]) => [name, n - gate.at_release[name]])) };
+      }
+      cancellation.finished=true;controllers.delete(key);if(watching)await watching;if(gating)await gating;
       trace.wall_ms = performance.now() - start;
       totals.calls++;
       for (const name of COUNTERS) totals[name] += trace[name];
       totals.max_d1 = Math.max(totals.max_d1, trace.d1);
       totals.max_r2 = Math.max(totals.max_r2, trace.get + trace.put + trace.head + trace.delete + trace.list + trace.multipart);
+      totals.max_r2_in_flight = Math.max(totals.max_r2_in_flight, trace.r2_in_flight_peak ?? 0);
       totals.recent.push(trace); if (totals.recent.length > 100) totals.recent.shift();
     }
   }
@@ -255,6 +367,91 @@ function fixtureHooks({ totals, now, fault, setFault, hang }) {
       if (text !== '' && !(Number.isSafeInteger(seconds) && seconds >= 0 && seconds <= 43200)) return new Response('retry-delay takes whole seconds, 0-43200', { status: 400 });
       retryDelay = text === '' ? 1 : seconds;
       return Response.json({ retry_delay_s: retryDelay });
+    },
+  };
+}
+// The R2 hooks (/test/r2-hooks), for the concurrent page uploads of a scan
+// (staging-concurrency.mjs). Each bucket operation is configured on its own;
+// a hook acts on the calls its key selection admits, counted from the arming,
+// so the k-th selected put is the k-th page a scan uploads. The JSON body
+//   {"log":true,"put":{"delay_ms":50},"head":{"fail":[2]}}
+// arms, per operation (get, put, head, delete, list):
+//   delay_ms   every selected call waits this long before it is made;
+//   delays_ms  the k-th selected call waits delays_ms[(k - 1) % length];
+//   hold       these selected calls (a number <n>: the first n; an array: these
+//              ordinals) are made, then their replies are held until
+//              /test/r2-release ({"stop":true} also ends both holds);
+//   hold_request  these selected calls wait for /test/r2-release before they
+//              are made (their objects arrive late); it wins over `hold`;
+//   fail       the selected calls of these ordinals throw instead of being made;
+//   prefix / skip_prefix  the key selection (default: every call);
+// and `log` keeps every bucket call in order, with its key, its start and end
+// sequence numbers and whether it returned. An empty body disarms (a call
+// already held stays held until a release). Each held call is a `fired`
+// record (stage request or reply) stamped when released and when it settled
+// (its finally ran), and belongs to its invocation: /test/r2-release
+// {"execution": <key>} releases one gated execution's held calls only (see
+// x-test-r2-gate). The witness is the metrics' `r2hooks` (/test/r2-state: the
+// same without its log, with the gated executions); the in-flight peak of each
+// invocation is its trace's `r2_in_flight_peak`, over every bucket call it
+// made: get, put, head, delete, list and each multipart call (create, part,
+// complete, abort, a resumed upload's included). The hooks act on get, put,
+// head, delete and list only. /test/r2-probe qualifies all of it.
+function r2Hooks({ totals, now }) {
+  const fresh = () => ({ armed: null, seq: 0, ordinals: {}, held: 0, released: 0, fired: [], log: [] });
+  let witness = totals.r2hooks = fresh(), config = null;
+  // Every held call not yet settled: its record, its invocation's trace and,
+  // until it is released, its release.
+  let holds = [];
+  const waiting = () => holds.filter(h => h.release).length;
+  const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const selected = (spec, key) => (!spec.prefix || key?.startsWith(spec.prefix)) && !(spec.skip_prefix && key?.startsWith(spec.skip_prefix));
+  const holding = (value, k) => Array.isArray(value) ? value.includes(k) : k <= (value ?? 0);
+  const hold = (op, k, key, stage, owner) => {
+    const record = { hook: 'hold', op, k, key, stage, at: now(), released: null, settled: null }; witness.fired.push(record);
+    const held = { record, owner };
+    const wait = new Promise(resolve => { held.release = () => { record.released = now(); resolve(); }; });
+    holds.push(held); witness.held = waiting();
+    return { record, wait };
+  };
+  return {
+    arm(body) {
+      config = Object.keys(body).length ? body : null;
+      witness = totals.r2hooks = { ...fresh(), armed: config, held: waiting() };
+      return { armed: config };
+    },
+    release({ stop = false, owner } = {}) {
+      const due = holds.filter(h => h.release && (!owner || h.owner === owner));
+      for (const h of due) { const release = h.release; h.release = null; release(); }
+      witness.held = waiting(); witness.released += due.length;
+      if (stop && config) for (const spec of Object.values(config)) if (spec && typeof spec === 'object') { spec.hold = 0; spec.hold_request = 0; }
+      return { released: due.length, seq: witness.seq };
+    },
+    // An invocation's held calls not yet settled, released or not.
+    unsettled(owner) { return holds.filter(h => h.owner === owner).length; },
+    state() { const { log, ...rest } = witness; return { ...rest, logged: log.length }; },
+    async call(op, args, make, owner) {
+      const spec = config?.[op], key = typeof args[0] === 'string' ? args[0] : null;
+      const entry = config?.log && witness.log.length < 50000 ? { op, key, start: ++witness.seq, end: null, ok: false } : null;
+      if (entry) witness.log.push(entry);
+      let held = null;
+      try {
+        let k = 0;
+        if (spec && selected(spec, key)) {
+          k = witness.ordinals[op] = (witness.ordinals[op] ?? 0) + 1;
+          if (spec.fail?.includes(k)) { witness.fired.push({ hook: 'fail', op, k, key, at: now() }); throw Error(`fixture:r2_${op}_${k}`); }
+          const ms = spec.delays_ms ? spec.delays_ms[(k - 1) % spec.delays_ms.length] : spec.delay_ms ?? 0;
+          if (ms > 0) await pause(ms);
+          if (holding(spec.hold_request, k)) { held = hold(op, k, key, 'request', owner); await held.wait; }
+        }
+        const value = await make();
+        if (k && !held && holding(spec.hold, k)) { held = hold(op, k, key, 'reply', owner); await held.wait; }
+        if (entry) entry.ok = true;
+        return value;
+      } finally {
+        if (entry) entry.end = ++witness.seq;
+        if (held) { held.record.settled = now(); holds = holds.filter(h => h.record !== held.record); }
+      }
     },
   };
 }

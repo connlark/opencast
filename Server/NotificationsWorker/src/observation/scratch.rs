@@ -6,8 +6,9 @@
 //! completes it, copies the pages under the claimed lease and deletes it.
 use super::{
     snapshot::Page,
-    store::{fault, Store},
+    store::{fault, Store, UPLOAD_WINDOW},
 };
+use crate::storage_witness::{Category::R2, Timer};
 use std::{cell::RefCell, rc::Rc};
 use worker::{Bucket, MultipartUpload, Range, Result, UploadedPart};
 
@@ -38,12 +39,18 @@ pub type Spill = Rc<RefCell<Upload>>;
 
 /// Uploads `part` as the next part of `spill`, creating the upload first.
 pub async fn push_part(spill: &Spill, bucket: &Bucket, feed_id: &str, part: Vec<u8>) -> Result<()> {
+    let upload = start(spill, bucket, feed_id).await?;
+    upload_next(spill, &upload, part).await
+}
+/// The upload of `spill`, created under a fresh `scratch/{feed}/{uuid}` key
+/// when no part has created it yet.
+async fn start(spill: &Spill, bucket: &Bucket, feed_id: &str) -> Result<Rc<MultipartUpload>> {
     let started = spill
         .borrow()
         .started
         .as_ref()
         .map(|(_, upload)| upload.clone());
-    let upload = match started {
+    Ok(match started {
         Some(upload) => upload,
         None => {
             let key = format!("{PREFIX}{feed_id}/{}", crate::delivery::db::id());
@@ -51,8 +58,7 @@ pub async fn push_part(spill: &Spill, bucket: &Bucket, feed_id: &str, part: Vec<
             spill.borrow_mut().started = Some((key, upload.clone()));
             upload
         }
-    };
-    upload_next(spill, &upload, part).await
+    })
 }
 /// Uploads the last part of a started upload. R2 requires every other part to
 /// be the same size; only this one may be shorter.
@@ -125,10 +131,13 @@ pub struct Pending {
     upload: Spill,
 }
 impl Pending {
+    /// Each scratch call is one R2 witness span: the part that creates the
+    /// upload is two calls, the creation and the part.
     pub async fn push(
         &mut self,
         bucket: &Bucket,
         feed_id: &str,
+        timer: &Timer,
         bytes: Vec<u8>,
         count: usize,
     ) -> Result<()> {
@@ -137,7 +146,13 @@ impl Pending {
         while self.buffer.len() >= BUFFER_BYTES {
             let rest = self.buffer.split_off(BUFFER_BYTES);
             let part = std::mem::replace(&mut self.buffer, rest);
-            push_part(&self.upload, bucket, feed_id, part).await?;
+            let started = self.upload.borrow().key().is_some();
+            if !started {
+                timer.time(R2, start(&self.upload, bucket, feed_id)).await?;
+            }
+            timer
+                .time(R2, push_part(&self.upload, bucket, feed_id, part))
+                .await?;
             self.spilled += BUFFER_BYTES;
         }
         Ok(())
@@ -149,18 +164,35 @@ impl Pending {
         abort(&self.upload).await;
     }
     /// A change is proved and the store holds its lease: every page becomes an
-    /// ordinary reserved, verified spool page, in its original order.
+    /// ordinary reserved, verified spool page, in its original order, uploaded
+    /// `UPLOAD_WINDOW` pages at a time from the scratch read window and the
+    /// tail buffer.
     pub async fn materialize(mut self, store: &mut Store) -> Result<Vec<Page>> {
+        let timer = store.db.timer();
         let mut spool = vec![];
-        let scratch = complete(&self.upload, &store.bucket).await?;
+        // A spool that never spilled has no upload: nothing to complete or time.
+        let started = self.upload.borrow().key().is_some();
+        let scratch = if started {
+            timer
+                .time(R2, complete(&self.upload, &store.bucket))
+                .await?
+        } else {
+            None
+        };
         let mut offset = 0;
         let mut window: (usize, Vec<u8>) = (0, vec![]);
+        let mut batch = Vec::with_capacity(UPLOAD_WINDOW);
         for (length, count) in std::mem::take(&mut self.pages) {
             let bytes = if offset + length <= self.spilled {
                 let key = scratch.as_ref().ok_or_else(|| fault("scratch_missing"))?;
                 if offset < window.0 || offset + length > window.0 + window.1.len() {
                     let size = BUFFER_BYTES.max(length).min(self.spilled - offset);
-                    window = (offset, read(&store.bucket, key, offset, size).await?);
+                    window = (
+                        offset,
+                        timer
+                            .time(R2, read(&store.bucket, key, offset, size))
+                            .await?,
+                    );
                 }
                 window.1[offset - window.0..offset - window.0 + length].to_vec()
             } else if offset >= self.spilled {
@@ -170,17 +202,19 @@ impl Pending {
                 // One page straddles the last uploaded part and the buffer.
                 let key = scratch.as_ref().ok_or_else(|| fault("scratch_missing"))?;
                 let head = self.spilled - offset;
-                let mut bytes = read(&store.bucket, key, offset, head).await?;
+                let mut bytes = timer
+                    .time(R2, read(&store.bucket, key, offset, head))
+                    .await?;
                 bytes.extend(&self.buffer[..length - head]);
                 bytes
             };
             offset += length;
-            spool.push(
-                store
-                    .put("spool", bytes, count, String::new(), String::new())
-                    .await?,
-            );
+            batch.push(("spool", bytes, count, String::new(), String::new()));
+            if batch.len() == UPLOAD_WINDOW {
+                spool.extend(store.put_many(std::mem::take(&mut batch)).await?);
+            }
         }
+        spool.extend(store.put_many(batch).await?);
         if let Some(key) = scratch {
             // A crash before this delete leaves one object for the sweeper.
             store

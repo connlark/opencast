@@ -1,4 +1,5 @@
-// The FeedPolling test entry's fixture hooks (entry.mjs's `fixtureHooks`),
+// The FeedPolling test entry's fixture hooks (entry.mjs's `fixtureHooks`, and
+// its R2 hooks `r2Hooks` with the in-flight counter and the x-test-r2-gate),
 // each qualified on the packaged Worker against the local topology: armed,
 // it acts exactly as described there and leaves its witness; unarmed, the
 // entry behaves as before.
@@ -224,6 +225,187 @@ await test('stall:3000:2000 after a held read\'s fire: the 4 s cap expires only 
     // The cap was due before the stall ended; it ran after it.
     assert.ok(on.o.Z_relay + 4000 < g.end && on.o.close >= g.end - 50, `expiry due ${on.o.Z_relay + 4000 - g.start} ms into the stall, close ${on.o.close - g.end} ms after its end`);
     report.push(`stall: control close - Z_relay ${offSpan.toFixed(1)} ms; stalled ${(g.end - g.start).toFixed(1)} ms from ${(g.start - on.f.at).toFixed(1)} ms after the fire, close - Z_relay ${onSpan.toFixed(1)} ms (${(onSpan - offSpan).toFixed(1)} ms later), close ${(on.o.close - g.end).toFixed(1)} ms after the stall`);
+  } finally { await h.close(); }
+});
+
+// ---- The R2 hooks of the concurrent page uploads (entry.mjs's `r2Hooks`, armed
+// by /test/r2-hooks), the per-invocation in-flight counter and the gate
+// (x-test-r2-gate), on /test/r2-probe: bucket calls made through an
+// invocation's instrumented bucket exactly as the Worker's own calls are.
+async function r2Harness() {
+  const h = await harness(() => new Response('unused', { status: 404 }));
+  const bucket = await h.instance.getR2Bucket('FEED_SNAPSHOTS', 'polling-runtime');
+  // Its rejection is handled here and still reaches whoever awaits it.
+  const probe = (body, headers = {}) => {
+    const p = (async () => {
+      const r = await h.instance.dispatchFetch('https://polling.invalid/test/r2-probe', { method: 'POST', body: JSON.stringify(body), headers });
+      const text = await r.text();
+      try { return { status: r.status, ...JSON.parse(text) }; } catch { throw Error(`r2-probe ${r.status}: ${text}`); }
+    })();
+    p.catch(() => {});
+    return p;
+  };
+  const gated = key => ({ 'x-test-execution': key, 'x-test-r2-gate': '1' });
+  const arm = body => h.invoke('test/r2-hooks', body), state = () => h.invoke('test/r2-state'), hooks = async () => (await h.invoke('metrics')).r2hooks;
+  const exists = async key => !!(await bucket.head(key));
+  const until = async (what, check) => { for (let i = 0; i < 500; i++) { const v = await check(); if (v) return v; await sleep(20); } throw Error(`never: ${what}`); };
+  // A probe still running after ms, or its reply.
+  const pending = (p, ms = 300) => Promise.race([p.then(r => ({ settled: r })), sleep(ms).then(() => ({ settled: null }))]);
+  return { h, probe, gated, arm, state, hooks, exists, until, pending };
+}
+const ms = r => r.end - r.start;
+await test('r2 hooks: key selection, independent operations, uniform and ordinal delays, failure ordinals; the in-flight counter returns to 0 after a success and a rejection', async () => {
+  const { h, probe, arm, state, hooks, exists } = await r2Harness();
+  try {
+    // Unarmed: calls are made and nothing is recorded.
+    let r = await probe({ serial: true, ops: [{ op: 'put', key: 'u/a' }, { op: 'head', key: 'u/a' }] });
+    assert.deepEqual([r.status, r.results.map(x => x.ok), r.calls.put, r.calls.head, r.in_flight, r.in_flight_peak], [200, [true, true], 1, 1, 0, 1], JSON.stringify(r));
+    let s = await state();
+    assert.deepEqual([s.armed, s.fired, s.logged, s.ordinals], [null, [], 0, {}]);
+    // Every call is counted in flight: the multipart calls (create, part,
+    // complete) and the abort through a resumed handle, which the multipart
+    // counters leave out.
+    r = await probe({ serial: true, ops: [{ op: 'multipart', key: 'u/mp' }, { op: 'resume_abort', key: 'u/ra' }] });
+    assert.deepEqual([r.results.map(x => x.ok), r.calls.multipart, r.flights, r.in_flight, r.in_flight_peak], [[true, true], 4, 5, 0, 1], JSON.stringify(r));
+    // prefix / skip_prefix select; the failure ordinals count selected calls only.
+    await arm({ log: true, put: { prefix: 'sel/', skip_prefix: 'sel/skip/', fail: [1, 3] } });
+    const keys = ['other/a', 'sel/a', 'sel/skip/a', 'sel/b', 'sel/c', 'sel/d'];
+    r = await probe({ serial: true, ops: keys.map(key => ({ op: 'put', key })) });
+    assert.deepEqual(r.results.map(x => x.ok), [true, false, true, true, false, true], JSON.stringify(r.results));
+    assert.deepEqual(r.results.filter(x => !x.ok).map(x => x.error), ['fixture:r2_put_1', 'fixture:r2_put_3']);
+    assert.deepEqual([r.calls.put, r.in_flight, r.in_flight_peak], [6, 0, 1], 'the counter returns to 0 after each success and each rejection');
+    let w = await hooks();
+    assert.deepEqual(w.ordinals, { put: 4 }, 'unmatched and skipped keys are not counted');
+    assert.deepEqual(w.fired.map(f => [f.hook, f.op, f.k, f.key]), [['fail', 'put', 1, 'sel/a'], ['fail', 'put', 3, 'sel/c']]);
+    assert.deepEqual(w.log.map(e => [e.key, e.ok, e.end > e.start]), keys.map((key, i) => [key, ![1, 4].includes(i), true]));
+    assert.deepEqual(await Promise.all(keys.map(exists)), [true, false, true, true, false, true], 'a failed call is never made');
+    // Rejections at once: both counted in flight, then 0.
+    await arm({ put: { fail: [1, 2] } });
+    r = await probe({ ops: [{ op: 'put', key: 'rej/1' }, { op: 'put', key: 'rej/2' }] });
+    assert.deepEqual([r.results.map(x => x.ok), r.in_flight, r.in_flight_peak], [[false, false], 0, 2], JSON.stringify(r));
+    // PUT and HEAD configured independently; a uniform delay.
+    await arm({ put: { delay_ms: 400 }, head: { fail: [1] } });
+    r = await probe({ serial: true, ops: [{ op: 'put', key: 'ind/a' }, { op: 'head', key: 'ind/a' }, { op: 'head', key: 'ind/a' }, { op: 'put', key: 'ind/b' }] });
+    assert.deepEqual(r.results.map(x => x.ok), [true, false, true, true]);
+    assert.equal(r.results[1].error, 'fixture:r2_head_1');
+    assert.ok(ms(r.results[0]) >= 400 && ms(r.results[3]) >= 400 && ms(r.results[2]) < 400, `PUTs delayed, the HEAD not: ${r.results.map(ms)}`);
+    w = await hooks();
+    assert.deepEqual([w.ordinals, w.fired.map(f => [f.hook, f.op, f.k])], [{ put: 2, head: 2 }, [['fail', 'head', 1]]]);
+    // Ordinal delays cycle; the unconfigured PUT is not delayed.
+    await arm({ head: { delays_ms: [600, 0, 300] } });
+    r = await probe({ serial: true, ops: [...Array(4)].map(() => ({ op: 'head', key: 'ind/a' })).concat([{ op: 'put', key: 'ind/c' }]) });
+    const d = r.results.map(ms);
+    assert.ok(d[0] >= 600 && d[1] < 300 && d[2] >= 300 && d[2] < 600 && d[3] >= 600 && d[4] < 300, `delays_ms [600, 0, 300] by ordinal, then the PUT: ${d}`);
+    report.push(`r2 hooks: prefix/skip_prefix selected 4 of 6 PUTs and failed ordinals 1 and 3; PUT delay_ms 400 beside HEAD fail [1], HEAD delays_ms [600, 0, 300] measured ${d.slice(0, 4).join('/')} ms, the PUT ${d[4]} ms; in flight 0 after successes and rejections`);
+  } finally { await h.close(); }
+});
+await test('r2 hooks: reply and request holds, release, stop and disarm; the in-flight counter counts multipart calls; overlapping invocations count and release independently', async () => {
+  const { h, probe, gated, arm, state, hooks, exists, until, pending } = await r2Harness();
+  try {
+    // Reply holds: the first two PUTs are made (their objects exist), their replies held.
+    await arm({ log: true, put: { hold: 2 } });
+    let p = probe({ ops: ['h/1', 'h/2', 'h/3'].map(key => ({ op: 'put', key })) });
+    await until('two replies held, the third returned', async () => { const s = await state(); return s.held === 2 && s.ordinals.put === 3; });
+    assert.deepEqual(await Promise.all(['h/1', 'h/2', 'h/3'].map(exists)), [true, true, true], 'a reply hold follows the call');
+    assert.equal((await pending(p)).settled, null, 'the probe waits on its held replies');
+    const released = await h.invoke('test/r2-release', {});
+    assert.equal(released.released, 2);
+    let r = await p;
+    assert.deepEqual([r.results.map(x => x.ok), r.in_flight, r.in_flight_peak], [[true, true, true], 0, 3]);
+    let w = await hooks();
+    assert.deepEqual(w.fired.map(f => [f.k, f.stage, !!f.released, !!f.settled]), [[1, 'reply', true, true], [2, 'reply', true, true]]);
+    assert.deepEqual([w.held, w.released], [0, 2]);
+    // Still armed: only ordinals 1 and 2 were held.
+    assert.ok((await pending(probe({ ops: [{ op: 'put', key: 'h/4' }] }), 5000)).settled, 'the 4th PUT is not held');
+    // A request hold: the call is not made until the release.
+    await arm({ put: { hold_request: [1] } });
+    p = probe({ ops: [{ op: 'put', key: 'hr/1' }] });
+    await until('the request held', async () => (await state()).held === 1);
+    assert.equal(await exists('hr/1'), false, 'a request hold precedes the call');
+    assert.equal((await h.invoke('test/r2-release', {})).released, 1);
+    assert.equal((await p).results[0].ok, true);
+    assert.equal(await exists('hr/1'), true, 'made after the release');
+    assert.equal((await hooks()).fired[0].stage, 'request');
+    // stop: the hold ends; the next selected call is not held.
+    await arm({ put: { hold: 5 } });
+    p = probe({ ops: [{ op: 'put', key: 's/1' }] });
+    await until('held', async () => (await state()).held === 1);
+    assert.equal((await h.invoke('test/r2-release', { stop: true })).released, 1);
+    assert.equal((await p).results[0].ok, true);
+    assert.ok((await pending(probe({ ops: [{ op: 'put', key: 's/2' }] }), 5000)).settled, 'after stop, the 2nd PUT is not held');
+    // Disarm: a held call stays held until a release; new calls are untouched.
+    await arm({ put: { hold: 1, delay_ms: 2000 } });
+    p = probe({ ops: [{ op: 'put', key: 'd/1' }] });
+    await until('held', async () => (await state()).held === 1);
+    await arm({});
+    const s = await state();
+    assert.deepEqual([s.armed, s.held], [null, 1], 'disarmed with the call still held');
+    r = await probe({ ops: [{ op: 'put', key: 'd/2' }] });
+    assert.ok(r.results[0].ok && ms(r.results[0]) < 2000, `disarmed: neither held nor delayed (${ms(r.results[0])} ms)`);
+    assert.equal((await pending(p)).settled, null, 'the earlier call is still held');
+    assert.equal((await h.invoke('test/r2-release', {})).released, 1);
+    assert.equal((await p).results[0].ok, true);
+    // Multipart calls are in flight beside a held PUT of the same invocation.
+    await arm({ put: { hold: 1 } });
+    p = probe({ ops: [{ op: 'put', key: 'mp/held' }, { op: 'multipart', key: 'mp/upload' }] }, gated('mp'));
+    let gate = await until('the multipart completed beside the held PUT', async () => { const g = (await state()).executions.mp; return g?.calls.multipart === 3 && g.in_flight === 1 && g; });
+    assert.deepEqual([gate.in_flight, gate.in_flight_peak, gate.unsettled], [1, 2, 1], `create, part and complete each in flight beside the held PUT: ${JSON.stringify(gate)}`);
+    assert.deepEqual(await h.invoke('test/r2-release', { execution: 'mp' }), { execution: 'mp', requested: true });
+    r = await p;
+    assert.deepEqual([r.status, r.calls.multipart, r.in_flight_peak], [200, 3, 2]);
+    gate = (await state()).executions.mp;
+    assert.deepEqual([gate.released, gate.drained.in_flight, gate.drained.unsettled], [1, 0, 0]);
+    // Two invocations at once: each counts and releases only its own calls.
+    await arm({ put: { hold: 5 } });
+    const pa = probe({ ops: ['A/1', 'A/2'].map(key => ({ op: 'put', key })) }, gated('A'));
+    const pb = probe({ ops: ['B/1', 'B/2', 'B/3'].map(key => ({ op: 'put', key })) }, gated('B'));
+    await until('five held', async () => (await state()).held === 5);
+    let ex = (await state()).executions;
+    assert.deepEqual([ex.A.in_flight, ex.A.unsettled, ex.B.in_flight, ex.B.unsettled], [2, 2, 3, 3], JSON.stringify(ex));
+    await h.invoke('test/r2-release', { execution: 'A' });
+    const ra = await pa;
+    ex = (await state()).executions;
+    assert.deepEqual([ra.status, ra.in_flight_peak, ex.A.released, ex.A.drained.in_flight], [200, 2, 2, 0]);
+    assert.deepEqual([ex.B.in_flight, ex.B.unsettled, ex.B.released, (await state()).held], [3, 3, 0, 3], 'B untouched by A\'s release');
+    assert.equal((await pending(pb)).settled, null);
+    await h.invoke('test/r2-release', { execution: 'B' });
+    const rb = await pb;
+    ex = (await state()).executions;
+    assert.deepEqual([rb.status, rb.in_flight_peak, ex.B.released, ex.B.drained.in_flight, (await state()).held], [200, 3, 3, 0, 0]);
+    report.push(`r2 hooks: reply holds left their objects made, a request hold its object absent until the release; stop ended a hold, disarm left a held call held; a multipart upload's 3 calls ran in flight beside a held PUT (peak 2); invocations A and B held 2 and 3 at once and each release freed only its own`);
+  } finally { await h.close(); }
+});
+await test('r2 gate: a continuation released through the gate runs in its own request, live or after its operation was cancelled, and is counted there', async () => {
+  const { h, probe, gated, arm, state, hooks, until, pending } = await r2Harness();
+  try {
+    // Live: the held PUT is released by its own request; its HEAD follows.
+    await arm({ log: true, put: { hold: 1 } });
+    let p = probe({ ops: [{ op: 'put', key: 'g/live', then: 'head' }] }, gated('live'));
+    await until('held', async () => (await state()).held === 1);
+    assert.equal((await state()).executions.live.result, null);
+    await h.invoke('test/r2-release', { execution: 'live' });
+    let r = await p;
+    let gate = (await state()).executions.live, { log } = await hooks();
+    assert.deepEqual([r.status, r.results[0].ok, gate.released, gate.drained.in_flight, gate.drained.unsettled, gate.drained.calls_after_release.head], [200, true, 1, 0, 0, 1], JSON.stringify(gate));
+    const head = key => log.find(e => e.op === 'head' && e.key === key), put = key => log.find(e => e.op === 'put' && e.key === key);
+    assert.ok(head('g/live').start > put('g/live').end && head('g/live').start > gate.released_seq);
+    // Cancelled: the operation returns 503 at once, the request stays open;
+    // the continuation it did not drop runs after the release, in that
+    // request, and its HEAD is counted there: the gate would show a late call.
+    await arm({ log: true, put: { hold: 1 } });
+    p = probe({ ops: [{ op: 'put', key: 'g/dropped', then: 'head' }] }, gated('dropped'));
+    await until('held', async () => (await state()).held === 1);
+    await h.invoke('abort', 'dropped');
+    const result = await until('the cancelled result', async () => (await state()).executions.dropped.result);
+    assert.equal(result.status, 503);
+    assert.equal(JSON.parse(result.text).cancelled, true);
+    assert.equal((await pending(p)).settled, null, 'the cancelled request stays open while its call is held');
+    await h.invoke('test/r2-release', { execution: 'dropped' });
+    r = await p;
+    gate = (await state()).executions.dropped; ({ log } = await hooks());
+    assert.deepEqual([r.status, gate.released, gate.drained.in_flight, gate.drained.unsettled, gate.drained.calls_after_release.head], [503, 1, 0, 0, 1], JSON.stringify(gate));
+    assert.ok(head('g/dropped')?.ok && head('g/dropped').start > put('g/dropped').end && head('g/dropped').start > gate.released_seq, 'the late HEAD followed the release in the cancelled request');
+    report.push(`r2 gate: a live held PUT released by its own request continued to its HEAD; a cancelled operation answered 503 while its request stayed open, and the continuation it left running made its HEAD after the release in that request (calls after the release ${JSON.stringify(gate.drained.calls_after_release)}), in flight 0 at the close`);
   } finally { await h.close(); }
 });
 

@@ -1,7 +1,7 @@
 use super::{
     policy::Reason,
     snapshot::{self, Hash, Manifest, Page, CANDIDATES_PER_PAGE, CANDIDATE_BYTES},
-    store::{fault, Store},
+    store::{fault, PagePayload, Store, UPLOAD_WINDOW},
 };
 use crate::{
     feed_identity, notification_text,
@@ -350,10 +350,12 @@ impl Observer {
             })
             .collect();
         // No change is proved yet, so this page is not an object or a row.
+        let timer = self.store.db.timer();
         self.pending
             .push(
                 &self.store.bucket,
                 &self.store.feed_id,
+                &timer,
                 serde_json::to_vec(&records)?,
                 records.len(),
             )
@@ -418,14 +420,9 @@ impl Observer {
         let spool = std::mem::take(&mut self.pending)
             .materialize(&mut self.store)
             .await?;
-        let mut identities = vec![];
-        let mut fingerprints = vec![];
-        for chunk in self.identities.chunks(snapshot::HASHES_PER_PAGE) {
-            identities.push(put_hashes(&mut self.store, "identity", chunk.to_vec()).await?);
-        }
-        for chunk in self.fingerprints.chunks(snapshot::HASHES_PER_PAGE) {
-            fingerprints.push(put_hashes(&mut self.store, "fingerprint", chunk.to_vec()).await?);
-        }
+        let identities = put_hash_pages(&mut self.store, "identity", &self.identities).await?;
+        let fingerprints =
+            put_hash_pages(&mut self.store, "fingerprint", &self.fingerprints).await?;
         let identity_count = self.identities.len();
         // The exact current hashes are now durable; release their scan buffers
         // before serializing the remaining item keys and preparation manifest.
@@ -434,18 +431,22 @@ impl Observer {
         let metadata = json!({"feed_url":feed_url,"podcast_title":bounded(&parsed.title,512),"artwork_url":parsed.artwork_url.as_deref().map(|s|bounded(s,512)),"credible_release_at":self.credible_dates.first(),"credible_cadence":credible_cadence,"publish_cadence":publish_cadence,"semantic_digest":digest});
         if let Some(previous) = self.store.previous.take() {
             let mut keys = vec![];
-            for chunk in self.item_keys.chunks(65 * 2000) {
-                keys.push(
-                    self.store
-                        .put(
+            let page = 65 * 2000;
+            for window in self.item_keys.chunks(page * UPLOAD_WINDOW) {
+                let batch = window
+                    .chunks(page)
+                    .map(|chunk| {
+                        let count = chunk.len() / 65;
+                        (
                             "item_keys",
                             chunk.to_vec(),
-                            chunk.len() / 65,
+                            count,
                             String::new(),
                             String::new(),
                         )
-                        .await?,
-                );
+                    })
+                    .collect();
+                keys.extend(self.store.put_many(batch).await?);
             }
             let preparation = super::prepare::Preparation::new(
                 previous,
@@ -495,6 +496,32 @@ impl EpisodeSink for Observer {
             .await
             .map_err(|_| RSSParseError::ResourceLimit("observation_stage_failed"))
     }
+}
+/// The sorted `hashes` as hash pages, in order, `UPLOAD_WINDOW` pages per
+/// upload; a window's payloads are built only when it uploads.
+async fn put_hash_pages(
+    store: &mut Store,
+    index: &'static str,
+    hashes: &[Hash],
+) -> Result<Vec<Page>> {
+    let mut pages = vec![];
+    for window in hashes.chunks(snapshot::HASHES_PER_PAGE * UPLOAD_WINDOW) {
+        let batch = window
+            .chunks(snapshot::HASHES_PER_PAGE)
+            .map(|chunk| hash_page(index, chunk))
+            .collect();
+        pages.extend(store.put_many(batch).await?);
+    }
+    Ok(pages)
+}
+fn hash_page(index: &'static str, hashes: &[Hash]) -> PagePayload {
+    (
+        index,
+        hashes.as_flattened().to_vec(),
+        hashes.len(),
+        hex::encode(hashes[0]),
+        hex::encode(hashes[hashes.len() - 1]),
+    )
 }
 pub(super) async fn put_hashes(store: &mut Store, index: &str, hashes: Vec<Hash>) -> Result<Page> {
     let first = hex::encode(hashes[0]);
