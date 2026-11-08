@@ -33,7 +33,7 @@ export const metadata: Metadata = createPageMetadata({
 });
 
 const effectiveDate = "June 21, 2026";
-const lastUpdated = "October 25, 2026";
+const lastUpdated = "November 7, 2026";
 
 // The in-app notice shown once before the first Recap or Ask request. The
 // sentences below are the app's own words and the section repeats them
@@ -161,7 +161,10 @@ export default function PrivacyPage() {
                   Every cloud feature is opt-in. When you use one, opencast
                   sends only what that job needs and deletes it when the job
                   is done. With your own AI key, the text goes straight to
-                  your provider instead, under its terms.
+                  your provider instead, under its terms. From version
+                  2026.11.2 and until January 1, 2027, ad detection with a
+                  Google key on the free tier goes through opencast&apos;s
+                  trial service, as a run without a key does.
                 </span>
               </li>
               <li>
@@ -369,7 +372,9 @@ export default function PrivacyPage() {
                   provider whose key you added (Google or OpenAI).
                   opencast&apos;s servers are not in that path and never see
                   your key. The provider processes the text under its own API
-                  terms.
+                  terms. From version 2026.11.2 and until January 1, 2027, ad
+                  detection with a Google key on the free tier goes through
+                  opencast&apos;s trial service, as a run without a key does.
                 </p>
                 <p>
                   Without a key, these requests go through opencast&apos;s
@@ -422,7 +427,12 @@ export default function PrivacyPage() {
                     not use your prompts or responses to improve its products,
                     and logs them for a limited period only to detect abuse and
                     meet legal requirements. Google does not use trial requests
-                    to improve its products.
+                    to improve its products. From version 2026.11.2 and until
+                    January 1, 2027, ad detection with a Google key on the free
+                    tier goes through opencast&apos;s trial service, as a run
+                    without a key does. To tell whether a key is on the free
+                    tier, opencast sends Google one small fixed request with
+                    that key, carrying none of your content.
                   </li>
                   <li>
                     OpenAI, under its API terms: API data is not used to train
@@ -439,7 +449,7 @@ export default function PrivacyPage() {
                 </ul>
                 <DataPathFacts
                   leaves="Transcript text, sometimes with the episode and show titles."
-                  receiver="The provider whose key you added, straight from your device. Without a key, opencast's trial service, which forwards it to Google."
+                  receiver="The provider whose key you added, straight from your device. Without a key, opencast's trial service, which forwards it to Google. From version 2026.11.2 and until January 1, 2027, ad detection with a Google key on the free tier goes through opencast's trial service, as a run without a key does."
                   kept="By your provider under its API terms. The trial service keeps no text and no results. Its hashed counts of this install's analyses and the runs that used a free analysis stay for as long as it runs; other run summaries are gone within about 90 days, and a hashed cleanup note stays until the cleanup has run. Daily and monthly totals with no identifiers stay for as long as it runs."
                 />
               </PolicyArticleSection>

@@ -21,6 +21,9 @@ public struct AnalysisProviderEndpoint: Sendable, Equatable, Decodable {
     /// bundle's raw text (the clamp checks this text, before any `URL`
     /// normalises it). `nil` in bundles that predate it.
     public var keyPage: String?
+    /// The model the tier check asks, replacing the transport's constant, so
+    /// a later bundle can move it without a build. No bundle carries it yet.
+    public var tierCheckModel: String?
 
     /// `keyPage` to open in the browser from the key sheet.
     public var keyURL: URL? {
@@ -34,5 +37,6 @@ public struct AnalysisProviderEndpoint: Sendable, Equatable, Decodable {
         case countTokensPath = "count_tokens_path"
         case versionHeaders = "version_headers"
         case keyPage = "key_url"
+        case tierCheckModel = "tier_check_model"
     }
 }

@@ -7,15 +7,24 @@ nonisolated struct EpisodeAdFreePassAnalysisSteps: Equatable, Sendable {
     let completed: Int
     let total: Int
     let stepBudgetSeconds: Double
+    /// The run record these steps belong to. A change means a handover: the
+    /// steps start over, and each mapper rebases on its own position.
+    let attemptID: String?
+    /// The run uses the trial service because Google named the key free tier.
+    let isFreeTierTrial: Bool
 
     init(
         completed: Int,
         total: Int,
-        stepBudgetSeconds: Double = AdAnalysisRunProgress.defaultStepBudgetSeconds
+        stepBudgetSeconds: Double = AdAnalysisRunProgress.defaultStepBudgetSeconds,
+        attemptID: String? = nil,
+        isFreeTierTrial: Bool = false
     ) {
         self.total = max(total, 1)
         self.completed = min(max(completed, 0), self.total)
         self.stepBudgetSeconds = max(stepBudgetSeconds, 1)
+        self.attemptID = attemptID
+        self.isFreeTierTrial = isFreeTierTrial
     }
 
     /// A running run's steps: its own, plus the one still to come. A
@@ -26,7 +35,9 @@ nonisolated struct EpisodeAdFreePassAnalysisSteps: Equatable, Sendable {
         self.init(
             completed: progress.completed,
             total: progress.total + 1,
-            stepBudgetSeconds: progress.stepBudgetSeconds
+            stepBudgetSeconds: progress.stepBudgetSeconds,
+            attemptID: progress.attemptID,
+            isFreeTierTrial: progress.isFreeTierTrial
         )
     }
 

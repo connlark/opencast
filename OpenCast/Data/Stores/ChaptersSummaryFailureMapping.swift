@@ -5,12 +5,21 @@ import OpenCastAnalysisProviders
 /// message beside it. Every message is built from closed-vocabulary codes,
 /// so no provider body, request text or key can reach the record.
 enum ChaptersSummaryFailureMapping {
-    /// The listener-facing provider failure wins when the run has one; the
-    /// pipeline's own code decides otherwise.
+    /// Google naming the free tier is read first: a final or daily 429 on
+    /// such a key would otherwise read as the key refused. Then the
+    /// listener-facing provider failure when the run has one; the pipeline's
+    /// own code decides otherwise.
     static func failure(
         _ failure: AnalysisFailure,
-        listenerFailure: AnalysisProviderFailure?
+        listenerFailure: AnalysisProviderFailure?,
+        namedFreeTier: Bool = false
     ) -> ChaptersSummaryRunFailure {
+        if namedFreeTier {
+            return ChaptersSummaryRunFailure(
+                kind: .providerFreeTier,
+                message: message(EpisodeAnalysisFailureKind.providerFreeTier.rawValue)
+            )
+        }
         if let listenerFailure {
             return ChaptersSummaryRunFailure(
                 kind: kind(for: listenerFailure),
@@ -57,8 +66,10 @@ enum ChaptersSummaryFailureMapping {
         switch listenerFailure {
         case .invalidKey, .billingOrQuota:
             .providerRejectedKey
-        case .rateLimited, .dailyLimit, .overloaded:
+        case .rateLimited, .overloaded:
             .providerLimited
+        case .dailyLimit:
+            .providerDailyLimit
         case .modelUnavailable, .unreachable:
             .providerUnavailable
         case .timeout:

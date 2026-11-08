@@ -214,6 +214,7 @@ struct AnalysisRunResumeTests {
             storedProvider: { _ in .google },
             trialStatus: AnalysisTrialStatusCache(defaults: defaults, fetch: { status }),
             trial: FixedTrialConnection(exchange: exchange),
+            trialReachability: AnalysisTrialReachability { true },
             runs: runs
         )
         return Launch(

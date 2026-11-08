@@ -52,11 +52,13 @@ struct AdDetectionLiveRouteTests {
                 storedProvider: { _ in provider },
                 trialStatus: trialStatus,
                 trial: NoTrialConnection(),
+                trialReachability: AnalysisTrialReachability { false },
                 runs: runs
             ),
             transports: AnalysisTransportFactory(policy: policy, runs: runs, keys: keys.storage, client: client),
             runs: runs,
             usage: AnalysisUsageStore(),
+            keyTier: AnalysisKeyTierStore(),
             trialStatus: trialStatus,
             policy: policy,
             presentKeyRequired: { _ in },

@@ -144,7 +144,7 @@ struct EpisodeAdAnalysisStoreTests {
             ),
             ProviderRefusal(
                 answer: .failure(.quotaExhausted, status: 429, listener: .dailyLimit),
-                kind: .providerLimited,
+                kind: .providerDailyLimit,
                 listener: .dailyLimit,
                 code: "gemini_quota_exhausted"
             ),

@@ -235,6 +235,30 @@ struct AnalysisPolicyClampTests {
         #expect(rejection { $0.providers[.openai]?.keyPage = nil } == nil)
     }
 
+    @Test("A tier check model is optional and held to the model-id characters")
+    func tierCheckModelFollowsTheModelIDRule() throws {
+        #expect(AnalysisPolicyBundle.baked.providers[.google]?.tierCheckModel == nil)
+        #expect(rejection { $0.providers[.google]?.tierCheckModel = nil } == nil)
+        #expect(rejection { $0.providers[.google]?.tierCheckModel = "gemini-pro_latest.2" } == nil)
+        for model in ["", "../gemini", "gemini pro", "gemini/pro", "gemini:pro", String(repeating: "a", count: 129)] {
+            #expect(rejection {
+                $0.providers[.google]?.tierCheckModel = model
+            } == .outOfBounds(field: "providers.google.tier_check_model"), "\(model)")
+        }
+    }
+
+    @Test("A tier check model decodes from the bundle")
+    func tierCheckModelDecodes() throws {
+        let json = BakedAnalysisPolicy.json.replacing(
+            #""key_url": "https://aistudio.google.com/app/apikey""#,
+            with: #""key_url": "https://aistudio.google.com/app/apikey", "tier_check_model": "gemini-paid-only""#
+        )
+        let bundle = try AnalysisPolicyBundle.decode(Data(json.utf8))
+        #expect(bundle.providers[.google]?.tierCheckModel == "gemini-paid-only")
+        #expect(bundle.providers[.openai]?.tierCheckModel == nil)
+        try AnalysisPolicyClamp.validate(bundle)
+    }
+
     @Test("A key page decodes as its raw text, and opens as a URL")
     func keyPageDecodesRaw() throws {
         let json = BakedAnalysisPolicy.json.replacing(

@@ -43,11 +43,13 @@ struct AdDetectionLiveTrialDeviceTests {
                 storedProvider: { _ in nil },
                 trialStatus: trialStatus,
                 trial: connection,
+                trialReachability: AnalysisTrialReachability { true },
                 runs: runs
             ),
             transports: AnalysisTransportFactory(policy: policy, runs: runs, keys: keys.storage),
             runs: runs,
             usage: AnalysisUsageStore(),
+            keyTier: AnalysisKeyTierStore(),
             trialStatus: trialStatus,
             policy: policy,
             presentKeyRequired: { _ in },

@@ -15,6 +15,8 @@ nonisolated enum ScriptedAdAnswer: Sendable {
     case unverifiableBreak
     /// The provider's refusal: `listener` is what the send reports.
     case failure(AnalysisTransportError, status: Int?, listener: AnalysisProviderFailure)
+    /// A failure whose send names the free tier, as Google's 429 does.
+    case freeTierFailure(AnalysisTransportError, listener: AnalysisProviderFailure)
     /// Waits until the run is cancelled.
     case hold
 }
@@ -84,6 +86,9 @@ nonisolated struct ScriptedAdAnalysisTransport: AnalysisProviderTransport {
         case .failure(let error, let status, let listener):
             record(request, status: status, failure: listener)
             throw error
+        case .freeTierFailure(let error, let listener):
+            record(request, status: 429, failure: listener, freeTier: true)
+            throw error
         case .hold:
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(3600))
@@ -100,6 +105,7 @@ nonisolated struct ScriptedAdAnalysisTransport: AnalysisProviderTransport {
         status: Int?,
         failure: AnalysisProviderFailure?,
         cancelled: Bool = false,
+        freeTier: Bool = false,
         usage: AnalysisBilledUsage? = nil
     ) {
         observer.record(AnalysisProviderSendRecord(
@@ -112,6 +118,7 @@ nonisolated struct ScriptedAdAnalysisTransport: AnalysisProviderTransport {
             finishReason: status == 200 ? .stop : nil,
             failure: failure,
             cancelled: cancelled,
+            freeTier: freeTier,
             usage: usage,
             pacedSeconds: 0,
             exchangeSeconds: 0
@@ -174,6 +181,9 @@ final class ScriptedAdAnalysisRunEnvironment: EpisodeAdAnalysisRunEnvironment {
     var route: AnalysisRoute = .direct(provider: .google)
     /// Replaces the direct route's model per-call timeout.
     var perCallTimeoutSeconds: Int?
+    /// Runs direct windows one at a time, so a test can fail a later window
+    /// after an earlier one was answered.
+    var sendsDirectWindowsInOrder = false
     /// Whether a resumed run keeps its route; `false` resolves it as new.
     var keepsResumedRoute = true
     /// The answer for every send; `answerForRun` (by the run's 1-based
@@ -186,6 +196,8 @@ final class ScriptedAdAnalysisRunEnvironment: EpisodeAdAnalysisRunEnvironment {
     let sends = ScriptedAdSendLog()
     private(set) var resolvedRunIDs: [String?] = []
     private(set) var transportRunIDs: [String] = []
+    /// Each run's observer, so a test can deliver a late send.
+    private(set) var observers: [String: any AnalysisProviderSendObserver] = [:]
     private(set) var usage: [Usage] = []
     /// The run record's state when each usage was recorded.
     private(set) var usageRunStates: [AnalysisRunRecord.State?] = []
@@ -219,13 +231,88 @@ final class ScriptedAdAnalysisRunEnvironment: EpisodeAdAnalysisRunEnvironment {
         return resolution(route, resumingRunID: nil)
     }
 
+    /// The answer to `resolveHandover`.
+    enum HandoverAnswer {
+        case available
+        case notOpen
+        case unavailable
+    }
+
+    var googleKeyTier = AnalysisKeyTierStore.State.unknown
+    /// Whether direct Google runs resolve inside the handover window.
+    var handoverWindowOpen = false
+    /// The date, apart from the window: before it, a closed window means the
+    /// service is out of reach.
+    var isPastTrialDate = false
+    /// What answers are stamped with; a test moves it across a day.
+    var now = Date.now
+    var tierAnswer = AnalysisTierCheckResult.inconclusive
+    var handoverAnswer = HandoverAnswer.unavailable
+    /// Hold each check, or each handover resolution, until released.
+    var tierCheckGate: AsyncTestGate?
+    var handoverGate: AsyncTestGate?
+    /// Called as a check, or a handover resolution, begins.
+    var onTierCheck: (() -> Void)?
+    var onHandover: (() -> Void)?
+    private(set) var tierChecks = 0
+    private(set) var handoverRequests = 0
+    private(set) var tierNotes: [AnalysisTierCheckResult] = []
+    private(set) var tierResets = 0
+
+    func noteGoogleKeyTier(_ answer: AnalysisTierCheckResult, answeredAt: Date, modelContext: ModelContext) {
+        tierNotes.append(answer)
+        switch answer {
+        case .freeTier: googleKeyTier = .freeTier(day: answeredAt)
+        case .notFreeTier: googleKeyTier = .notFreeTier
+        case .inconclusive: break
+        }
+    }
+
+    func resetGoogleKeyTier(modelContext: ModelContext) {
+        tierResets += 1
+        googleKeyTier = .unknown
+    }
+
+    func checkTier(key: AnalysisProviderKey) async -> AnalysisTierCheckResult {
+        tierChecks += 1
+        onTierCheck?()
+        await tierCheckGate?.wait()
+        return tierAnswer
+    }
+
+    func keyChange(provider: AnalysisProvider, keyDigest: Data) -> AnalysisKeyRequiredReason? {
+        keyStorage.flatMap { AnalysisKeyPresenceGuardTransport.removal(provider: provider, keyDigest: keyDigest, keys: $0) }
+    }
+
+    func isHandoverWindowOpen() async -> Bool {
+        handoverWindowOpen
+    }
+
+    func resolveHandover() async -> AnalysisHandoverResolution {
+        handoverRequests += 1
+        onHandover?()
+        await handoverGate?.wait()
+        switch handoverAnswer {
+        case .available: return .available(resolution(.trial, resumingRunID: nil))
+        case .notOpen: return .notOpen
+        case .unavailable: return .unavailable
+        }
+    }
+
     private func resolution(_ route: AnalysisRoute, resumingRunID: String?) -> AnalysisRouteResolution {
         switch route {
         case .keyRequired(let reason):
             return .keyRequired(reason, feature: .adDetection)
         case .direct(let provider):
             let timeout = perCallTimeoutSeconds
+            let inOrder = sendsDirectWindowsInOrder
             let policy = snapshot.adDetection(provider: provider).map { policy in
+                var policy = policy
+                if inOrder {
+                    var settings = policy.settings
+                    settings.window.maxInFlight = 1
+                    policy = policy.with(settings: settings)
+                }
                 guard let timeout else { return policy }
                 var model = policy.model
                 model.perCallTimeoutSeconds = timeout
@@ -237,7 +324,8 @@ final class ScriptedAdAnalysisRunEnvironment: EpisodeAdAnalysisRunEnvironment {
                 policy: policy.map(AnalysisRoutePolicy.adDetection),
                 key: Self.key,
                 resumingRunID: resumingRunID,
-                trialExchange: nil
+                trialExchange: nil,
+                freeTierHandover: provider == .google && handoverWindowOpen
             )
         case .trial:
             return AnalysisRouteResolution(
@@ -261,6 +349,7 @@ final class ScriptedAdAnalysisRunEnvironment: EpisodeAdAnalysisRunEnvironment {
             throw .keyRequired(reason)
         }
         transportRunIDs.append(runID)
+        observers[runID] = observer
         let fixed = answerForRun?(transportRunIDs.count) ?? answer
         let perRequest = answerForRequest
         let onSend = onSend

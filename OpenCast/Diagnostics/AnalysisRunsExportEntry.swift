@@ -34,6 +34,8 @@ nonisolated struct AnalysisRunsExportEntry: Encodable, Sendable, Equatable {
     let exchangeSeconds: Double
     let startedAt: Date
     let finishedAt: Date?
+    let freeTier: Bool?
+    let handoverOf: String?
 
     init(_ record: AnalysisRunRecord) {
         runID = AnalysisRunsExportGrammar.runID(record.id)
@@ -63,6 +65,8 @@ nonisolated struct AnalysisRunsExportEntry: Encodable, Sendable, Equatable {
         exchangeSeconds = Self.finite(record.exchangeSeconds)
         startedAt = record.startedAt
         finishedAt = record.finishedAt
+        freeTier = record.freeTier
+        handoverOf = record.handoverOf.map(AnalysisRunsExportGrammar.runID)
     }
 
     /// `completed`, or a pipeline failure code.
@@ -98,6 +102,8 @@ nonisolated struct AnalysisRunsExportEntry: Encodable, Sendable, Equatable {
         case exchangeSeconds = "exchange_seconds"
         case startedAt = "started_at"
         case finishedAt = "finished_at"
+        case freeTier = "free_tier"
+        case handoverOf = "handover_of"
     }
 
     /// Optional fields encode as `null` so every entry has the same keys.
@@ -123,5 +129,7 @@ nonisolated struct AnalysisRunsExportEntry: Encodable, Sendable, Equatable {
         try container.encode(exchangeSeconds, forKey: .exchangeSeconds)
         try container.encode(startedAt, forKey: .startedAt)
         try container.encode(finishedAt, forKey: .finishedAt)
+        try container.encode(freeTier, forKey: .freeTier)
+        try container.encode(handoverOf, forKey: .handoverOf)
     }
 }

@@ -57,6 +57,29 @@ final class AnalysisTransportFactory {
         removals.reason(runID: runID)
     }
 
+    /// Why `keyDigest` is no longer the saved key for `provider`, read from
+    /// the Keychain now; the same read a send makes.
+    func keyChange(provider: AnalysisProvider, keyDigest: Data) -> AnalysisKeyRequiredReason? {
+        AnalysisKeyPresenceGuardTransport.removal(provider: provider, keyDigest: keyDigest, keys: keys)
+    }
+
+    /// One tier check with `key`, outside any run. An endpoint the transport
+    /// refuses says nothing about the tier.
+    func checkTier(key: AnalysisProviderKey) async -> AnalysisTierCheckResult {
+        if let fixture { return fixture.tierAnswer }
+        guard let endpoint = policy.snapshot.bundle.providers[.google],
+              let transport = try? GeminiAnalysisTransport(
+                  endpoint: endpoint,
+                  key: key,
+                  client: client,
+                  logger: RedactingLogger(category: "AnalysisRun")
+              )
+        else {
+            return .inconclusive
+        }
+        return await transport.checkTier()
+    }
+
     private func innerTransport(
         for resolution: AnalysisRouteResolution,
         runID: String,
@@ -97,7 +120,7 @@ final class AnalysisTransportFactory {
                 case .google:
                     providerTransport = try GeminiAnalysisTransport(
                         endpoint: endpoint, key: key, client: client, pacer: pacer, observer: observer, logger: logger,
-                        preDispatch: dispatchCheck
+                        preDispatch: dispatchCheck, freeTierIsFinal: resolution.freeTierHandover
                     )
                 case .openai:
                     providerTransport = try OpenAIAnalysisTransport(

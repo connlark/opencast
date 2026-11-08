@@ -524,6 +524,45 @@ struct ChaptersSummaryRunProducerTests {
             #expect(ChaptersSummaryFailureMapping.failure(keyRequired: reason).kind.keyRequiredReason == reason)
         }
     }
+
+    @Test("The new kinds are mapped: a daily limit names itself, and Google naming the free tier is read first")
+    func freeTierKindsAreMapped() {
+        let failure = AnalysisFailure(feature: .chaptersSummary, code: .quotaExhausted, status: 429)
+
+        #expect(ChaptersSummaryFailureMapping.kind(for: AnalysisProviderFailure.dailyLimit) == .providerDailyLimit)
+        #expect(ChaptersSummaryFailureMapping.failure(failure, listenerFailure: .dailyLimit).kind == .providerDailyLimit)
+        #expect(ChaptersSummaryFailureMapping.failure(failure, listenerFailure: .billingOrQuota).kind == .providerRejectedKey)
+        for listener: AnalysisProviderFailure? in [.billingOrQuota, .dailyLimit, .rateLimited, nil] {
+            #expect(ChaptersSummaryFailureMapping.failure(failure, listenerFailure: listener, namedFreeTier: true).kind == .providerFreeTier)
+        }
+    }
+
+    @Test("A free-tier per-minute 429 still paces through the producer: no Chapters resolution makes it final")
+    func freeTierPerMinuteStillPaces() async throws {
+        let body = AnalysisTransportFactoryTests.minuteBody(quotaID: AnalysisTransportFactoryTests.freeTierMinuteQuotaID)
+        let client = CapturingAnalysisHTTPClient(status: 429, body: body)
+        let clock = RecordingAnalysisClock()
+        let harness = try Harness()
+        harness.transportFactory = AnalysisTransportFactory(
+            policy: AnalysisPolicySnapshotStore(loader: nil, pacing: AnalysisKeyPacing(clock: clock), initial: .baked),
+            runs: harness.runs,
+            keys: InMemoryAnalysisProviderKeyStorage(seeded: [.google: (AnalysisTransportFactoryTests.googleKey, syncs: false)]),
+            client: client
+        )
+
+        let result = await harness.producer.run(harness.request(), modelContext: harness.context)
+
+        guard case .failed(let failure) = result else {
+            Issue.record("Expected a failed run, got \(result)")
+            return
+        }
+        // The answer was not final: the run went on, waiting out the delay
+        // Google named before every send after the first.
+        #expect(client.sent.count > 1)
+        #expect(clock.sleeps == Array(repeating: AnalysisTransportFactoryTests.retryDelaySeconds, count: client.sent.count - 1))
+        #expect(failure.kind == .providerFreeTier)
+        #expect(harness.presented.isEmpty)
+    }
 }
 
 // MARK: - Harness
@@ -546,6 +585,8 @@ private final class Harness {
     var resolution: AnalysisRouteResolution?
     var resumingRunID: String?
     var transport: (any AnalysisProviderTransport)?
+    /// Builds the run's real transport, in place of `transport`.
+    var transportFactory: AnalysisTransportFactory?
     var transportError: AnalysisTransportFactoryError?
     /// The listener's usage when a test checks what was saved, not only
     /// what was asked for.
@@ -679,9 +720,12 @@ private final class Harness {
                 currentResolution(resuming: resuming == nil ? nil : resumingRunID)
             },
             runs: runs,
-            makeTransport: { [unowned self] _, _, observer throws(AnalysisTransportFactoryError) in
+            makeTransport: { [unowned self] resolution, runID, observer throws(AnalysisTransportFactoryError) in
                 if let transportError {
                     throw transportError
+                }
+                if let transportFactory {
+                    return try transportFactory.makeTransport(for: resolution, runID: runID, observer: observer)
                 }
                 guard let transport = transport as? ScriptedChaptersTransport else {
                     throw .keyRequired(.noKey)

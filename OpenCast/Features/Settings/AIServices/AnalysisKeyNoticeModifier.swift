@@ -11,26 +11,32 @@ struct AnalysisKeyNoticeModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .sheet(isPresented: $gate.isNoticePresented, onDismiss: didDismiss) {
-                AnalysisKeyNoticeSheet(onAddKey: addKey, onLater: later)
+            .sheet(isPresented: $gate.isNoticePresented, onDismiss: gate.didDismiss) {
+                AnalysisKeyNoticeSheet(onOK: ok, onLearnMore: learnMore)
                     .environment(appModel)
                     // Now Playing styles its content; the notice reads as an
                     // ordinary sheet wherever it comes from (the layout sets
                     // its own colors).
                     .font(.body)
             }
+            .sheet(item: $gate.helpDestination) { destination in
+                SheetDestinationView(destination: destination, onDismiss: dismissHelp)
+                    .environment(appModel)
+                    .font(.body)
+                    .foregroundStyle(Color.primary)
+            }
     }
 
-    private func addKey() {
-        gate.choose(.addKey, appModel: appModel, modelContext: modelContext)
+    private func ok() {
+        gate.choose(.ok, appModel: appModel, modelContext: modelContext)
     }
 
-    private func later() {
-        gate.choose(.later, appModel: appModel, modelContext: modelContext)
+    private func learnMore() {
+        gate.choose(.learnMore, appModel: appModel, modelContext: modelContext)
     }
 
-    private func didDismiss() {
-        gate.didDismiss(appModel: appModel)
+    private func dismissHelp() {
+        gate.helpDestination = nil
     }
 }
 

@@ -24,4 +24,15 @@ nonisolated enum AnalysisProviderKeyStoreError: Error, Equatable, Sendable {
         }
         return true
     }
+
+    /// Whether a save with sync on that threw this had already written the
+    /// synced key: such a call fails at a delete only after its write, so
+    /// only this device's copy outlived it. That copy wins every read, so
+    /// what is in use has to be read, not assumed.
+    func savedSyncedLeavingLocalCopy(syncs: Bool) -> Bool {
+        guard syncs, case .keychain(operation: .delete, _) = self else {
+            return false
+        }
+        return true
+    }
 }

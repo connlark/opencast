@@ -11,6 +11,7 @@ final class EpisodeAdAnalysisLiveRunEnvironment: EpisodeAdAnalysisRunEnvironment
     private let routes: AnalysisRouteResolver
     private let transports: AnalysisTransportFactory
     private let usage: AnalysisUsageStore
+    private let keyTier: AnalysisKeyTierStore
     private let trialStatus: AnalysisTrialStatusCache
     private let policy: AnalysisPolicySnapshotStore
     private let presentsKeyRequired: (AnalysisKeyRequiredReason) -> Void
@@ -21,6 +22,7 @@ final class EpisodeAdAnalysisLiveRunEnvironment: EpisodeAdAnalysisRunEnvironment
         transports: AnalysisTransportFactory,
         runs: AnalysisRunRecordStore,
         usage: AnalysisUsageStore,
+        keyTier: AnalysisKeyTierStore,
         trialStatus: AnalysisTrialStatusCache,
         policy: AnalysisPolicySnapshotStore,
         presentKeyRequired: @escaping (AnalysisKeyRequiredReason) -> Void,
@@ -30,6 +32,7 @@ final class EpisodeAdAnalysisLiveRunEnvironment: EpisodeAdAnalysisRunEnvironment
         self.transports = transports
         self.runs = runs
         self.usage = usage
+        self.keyTier = keyTier
         self.trialStatus = trialStatus
         self.policy = policy
         presentsKeyRequired = presentKeyRequired
@@ -77,6 +80,46 @@ final class EpisodeAdAnalysisLiveRunEnvironment: EpisodeAdAnalysisRunEnvironment
 
     func keyRemoval(runID: String) -> AnalysisKeyRequiredReason? {
         transports.keyRemoval(runID: runID)
+    }
+
+    var googleKeyTier: AnalysisKeyTierStore.State {
+        keyTier.state
+    }
+
+    var now: Date {
+        Date.now
+    }
+
+    func noteGoogleKeyTier(_ answer: AnalysisTierCheckResult, answeredAt: Date, modelContext: ModelContext) {
+        switch answer {
+        case .freeTier: keyTier.noteFreeTier(day: answeredAt, modelContext: modelContext)
+        case .notFreeTier: keyTier.noteNotFreeTier(modelContext: modelContext)
+        case .inconclusive: break
+        }
+    }
+
+    func resetGoogleKeyTier(modelContext: ModelContext) {
+        keyTier.reset(modelContext: modelContext)
+    }
+
+    func checkTier(key: AnalysisProviderKey) async -> AnalysisTierCheckResult {
+        await transports.checkTier(key: key)
+    }
+
+    func keyChange(provider: AnalysisProvider, keyDigest: Data) -> AnalysisKeyRequiredReason? {
+        transports.keyChange(provider: provider, keyDigest: keyDigest)
+    }
+
+    func isHandoverWindowOpen() async -> Bool {
+        await routes.isHandoverWindowOpen()
+    }
+
+    var isPastTrialDate: Bool {
+        routes.isPastTrialDate
+    }
+
+    func resolveHandover() async -> AnalysisHandoverResolution {
+        await routes.resolveHandover(feature: .adDetection)
     }
 
     func refreshTrialStatus() {

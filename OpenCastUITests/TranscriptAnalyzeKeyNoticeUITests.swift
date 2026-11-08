@@ -1,7 +1,7 @@
 import XCTest
 
 /// Analyze Promos & Ads from the transcript's menu waits behind the one-time
-/// key notice like every other analysis start: Later runs the held analysis
+/// key notice like every other analysis start: OK runs the held analysis
 /// once, and the notice never shows again. With no key saved the analysis
 /// runs on the free analyses through the app's fixture transport; no request
 /// leaves the simulator.
@@ -24,27 +24,27 @@ final class TranscriptAnalyzeKeyNoticeUITests: XCTestCase {
         assertExists(analyze, named: "Analyze Promos & Ads", timeout: 5)
         analyze.tap()
 
-        let later = app.buttons["AI Key Notice Later"]
-        assertHittable(later, named: "notice Later button", timeout: 10)
-        assertExists(app.buttons["AI Key Notice Add Key"], named: "notice Add a key button")
+        let ok = app.buttons["AI Key Notice OK"]
+        assertHittable(ok, named: "notice OK button", timeout: 10)
+        assertExists(app.buttons["AI Key Notice Learn More"], named: "notice Learn More button")
         attachSmokeScreenshot(named: "transcript_analyze_key_notice")
-        later.tap()
-        assertDoesNotExist(later, named: "notice after Later", timeout: 5)
+        ok.tap()
+        assertDoesNotExist(ok, named: "notice after OK", timeout: 5)
 
-        // Later ran the held analysis: the sponsor line is marked.
+        // OK ran the held analysis: the sponsor line is marked.
         let annotated = app.buttons.matching(NSPredicate(
             format: "label == %@ AND value CONTAINS %@",
             Self.sponsorLine,
             "Sponsor segment"
         )).firstMatch
-        assertExists(annotated, named: "sponsor line marked after Later", timeout: 30)
+        assertExists(annotated, named: "sponsor line marked after OK", timeout: 30)
 
         // The notice shows once: the next analysis starts at once.
         openTranscriptOptions(in: app)
         let reanalyze = app.buttons["Reanalyze Promos & Ads"]
         assertExists(reanalyze, named: "Reanalyze Promos & Ads", timeout: 5)
         reanalyze.tap()
-        assertDoesNotExist(app.buttons["AI Key Notice Later"], named: "notice on the second analysis", timeout: 3)
+        assertDoesNotExist(app.buttons["AI Key Notice OK"], named: "notice on the second analysis", timeout: 3)
     }
 
     // MARK: Launcher

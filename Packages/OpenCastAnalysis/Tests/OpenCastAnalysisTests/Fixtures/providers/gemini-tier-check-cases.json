@@ -1,0 +1,33 @@
+{
+  "note": "The tier check's answers. The 429 and the 503 are recorded bodies from 2026-11-06. The paid 200 recorded only usage and the model version, not the candidates, so its candidate is reconstructed around exactly those. No 404 was recorded; that case is built in Google's NOT_FOUND shape. No key material.",
+  "cases": [
+    {
+      "name": "refused-free-tier",
+      "source": "live recording, 2026-11-06, a free-tier key asking gemini-pro-latest",
+      "status": 429,
+      "body": "{\"error\":{\"code\":429,\"message\":\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://aistudio.google.com/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-3.1-pro, description: Generate content input tokens per day limit exceeded on Free Tier. See https://aistudio.google.com/docs/rate-limits.\\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3.1-pro, description: Generate content requests per day limit exceeded on Free Tier. See https://aistudio.google.com/docs/rate-limits.\\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-3.1-pro, description: Generate content requests per minute limit exceeded on Free Tier. See https://aistudio.google.com/docs/rate-limits.\\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-3.1-pro, description: Generate content input tokens per minute limit exceeded on Free Tier. See https://aistudio.google.com/docs/rate-limits.\\nPlease retry in 10h13m35.425564431s.\",\"status\":\"RESOURCE_EXHAUSTED\",\"details\":[{\"@type\":\"type.googleapis.com/google.rpc.Help\",\"links\":[{\"description\":\"Learn more about Gemini API quotas\",\"url\":\"https://aistudio.google.com/docs/rate-limits\"}]},{\"@type\":\"type.googleapis.com/google.rpc.QuotaFailure\",\"violations\":[{\"description\":\"Generate content input tokens per day limit exceeded on Free Tier. See https://aistudio.google.com/docs/rate-limits.\",\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count\",\"quotaId\":\"GenerateContentInputTokensPerModelPerDay-FreeTier\",\"quotaDimensions\":{\"model\":\"gemini-3.1-pro\",\"location\":\"global\"}},{\"description\":\"Generate content requests per day limit exceeded on Free Tier. See https://aistudio.google.com/docs/rate-limits.\",\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerDayPerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.1-pro\"}},{\"description\":\"Generate content requests per minute limit exceeded on Free Tier. See https://aistudio.google.com/docs/rate-limits.\",\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\"quotaId\":\"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.1-pro\"}},{\"description\":\"Generate content input tokens per minute limit exceeded on Free Tier. See https://aistudio.google.com/docs/rate-limits.\",\"quotaMetric\":\"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count\",\"quotaId\":\"GenerateContentInputTokensPerModelPerMinute-FreeTier\",\"quotaDimensions\":{\"location\":\"global\",\"model\":\"gemini-3.1-pro\"}}]},{\"@type\":\"type.googleapis.com/google.rpc.RetryInfo\",\"retryDelay\":\"36815s\"}]}}",
+      "expect": "free_tier"
+    },
+    {
+      "name": "answered-paid",
+      "source": "usageMetadata and modelVersion recorded from a paid key asking gemini-pro-latest; the candidate text and finishReason are reconstructed, the recording kept neither",
+      "status": 200,
+      "body": "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"OK\"}],\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0}],\"usageMetadata\":{\"promptTokenCount\":8,\"candidatesTokenCount\":1,\"totalTokenCount\":20,\"promptTokensDetails\":[{\"modality\":\"TEXT\",\"tokenCount\":8}],\"thoughtsTokenCount\":11,\"serviceTier\":\"standard\"},\"modelVersion\":\"gemini-3.1-pro-preview\"}",
+      "expect": "not_free_tier"
+    },
+    {
+      "name": "overloaded",
+      "source": "live recording, raw/a-tiny.json",
+      "status": 503,
+      "body": "{\"error\":{\"code\":503,\"message\":\"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\"status\":\"UNAVAILABLE\"}}",
+      "expect": "inconclusive"
+    },
+    {
+      "name": "model-not-found",
+      "source": "constructed in Google's NOT_FOUND shape; no 404 was recorded",
+      "status": 404,
+      "body": "{\"error\":{\"code\":404,\"message\":\"models/gemini-pro-latest is not found for API version v1beta, or is not supported for generateContent.\",\"status\":\"NOT_FOUND\"}}",
+      "expect": "inconclusive"
+    }
+  ]
+}

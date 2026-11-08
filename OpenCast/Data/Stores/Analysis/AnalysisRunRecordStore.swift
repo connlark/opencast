@@ -125,6 +125,36 @@ nonisolated final class AnalysisRunRecordStore: Sendable {
         }
     }
 
+    /// Open runs of `feature` that an open handover record took over from.
+    /// A kill after the handover record was written can leave both open, and
+    /// nothing may pick between them by time: `startedAt` persists at ISO
+    /// 8601 precision and a clock change can reorder them.
+    func runsTakenOverByOpenHandovers(feature: AnalysisFeature) -> [String] {
+        state.withLock { cache in
+            let records = loaded(&cache)
+            return records.values
+                .filter { $0.feature == feature && Self.isOpen($0) }
+                .compactMap(\.handoverOf)
+                .filter { id in records[id].map(Self.isOpen) ?? false }
+        }
+    }
+
+    /// Ends a direct run a handover record already took over from.
+    func finishTakenOver(runID: String) {
+        update(runID: runID) { record in
+            record.state = .failed
+            record.finishedAt = now()
+            for (key, window) in record.windows where window.verdict == .dispatched || window.verdict == .repairing {
+                record.windows[key]?.verdict = .cancelled
+            }
+        }
+        deleteReplies(runID: runID)
+    }
+
+    private static func isOpen(_ record: AnalysisRunRecord) -> Bool {
+        record.state == .dispatched || record.state == .expired
+    }
+
     /// The newest records first.
     func records(limit: Int) -> [AnalysisRunRecord] {
         state.withLock { cache in

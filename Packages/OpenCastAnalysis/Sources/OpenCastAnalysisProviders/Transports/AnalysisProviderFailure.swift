@@ -48,10 +48,14 @@ public enum AnalysisProviderFailure: String, Sendable, Hashable, CaseIterable, C
 public struct AnalysisProviderErrorClassification: Error, Sendable, Hashable {
     public var transport: AnalysisTransportError
     public var listener: AnalysisProviderFailure
+    /// Google named the key free tier in this answer. Set whatever the
+    /// classification says: it is what the app reads, never the failure.
+    public var freeTier: Bool
 
-    public init(transport: AnalysisTransportError, listener: AnalysisProviderFailure) {
+    public init(transport: AnalysisTransportError, listener: AnalysisProviderFailure, freeTier: Bool = false) {
         self.transport = transport
         self.listener = listener
+        self.freeTier = freeTier
     }
 
     /// An exchange that produced no response at all.

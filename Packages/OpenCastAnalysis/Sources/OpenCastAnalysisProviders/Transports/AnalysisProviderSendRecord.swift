@@ -52,6 +52,8 @@ public struct AnalysisProviderSendRecord: Sendable, Hashable {
     /// The run cancelled the send (another window had already failed, or
     /// the caller stopped the run); the provider said nothing about it.
     public var cancelled: Bool
+    /// Google named the key free tier in its answer to this send.
+    public var freeTier: Bool
     public var usage: AnalysisBilledUsage?
     /// Seconds spent waiting for the key's pacer before sending.
     public var pacedSeconds: Double
@@ -68,6 +70,7 @@ public struct AnalysisProviderSendRecord: Sendable, Hashable {
         finishReason: AnalysisFinishReason?,
         failure: AnalysisProviderFailure?,
         cancelled: Bool = false,
+        freeTier: Bool = false,
         usage: AnalysisBilledUsage?,
         pacedSeconds: Double,
         exchangeSeconds: Double
@@ -81,6 +84,7 @@ public struct AnalysisProviderSendRecord: Sendable, Hashable {
         self.finishReason = finishReason
         self.failure = failure
         self.cancelled = cancelled
+        self.freeTier = freeTier
         self.usage = usage
         self.pacedSeconds = pacedSeconds
         self.exchangeSeconds = exchangeSeconds

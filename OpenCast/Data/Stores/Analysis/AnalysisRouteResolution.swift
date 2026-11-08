@@ -15,6 +15,9 @@ nonisolated struct AnalysisRouteResolution: Sendable {
     let resumingRunID: String?
     /// The trial service exchange; set only for `trial`.
     let trialExchange: (any AnalysisTrialProxyExchange)?
+    /// Ad detection on a Google key inside the handover window: a free-tier
+    /// answer ends the direct attempt and the trial service can take over.
+    var freeTierHandover = false
 
     var provider: AnalysisProvider? {
         switch route {

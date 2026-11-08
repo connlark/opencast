@@ -145,11 +145,6 @@ struct AnalysisUITestSeamTests {
         #expect(noOpenAIChapters.chaptersSummary(provider: .google) != nil)
         #expect(noOpenAIChapters.adDetection(provider: .openai) != nil)
 
-        let noticeNotStarted = AnalysisUITestFixtures.policySnapshot(variant: "notice-not-started")
-        let noticeStart = try #require(noticeNotStarted.bundle.notice?.startsAt)
-        #expect(noticeStart > now)
-        #expect(noticeNotStarted.bundle.trial == baked.bundle.trial)
-
         let trialStarted = AnalysisUITestFixtures.policySnapshot(variant: "trial-started")
         #expect(trialStarted.bundle.trial.startsAt <= now)
         #expect(trialStarted.bundle.notice == baked.bundle.notice)
@@ -168,6 +163,14 @@ struct AnalysisUITestSeamTests {
         #expect(AnalysisKeyFixtures.bytes(of: AnalysisUITestFixtures.key(for: .google)) == Data(google.utf8))
     }
 
+    @Test("The tier seam answers free tier, not free tier, or nothing conclusive")
+    func tierAnswers() {
+        #expect(AnalysisUITestTransportMode.tierAnswer("free-tier") == .freeTier)
+        #expect(AnalysisUITestTransportMode.tierAnswer("not-free-tier") == .notFreeTier)
+        #expect(AnalysisUITestTransportMode.tierAnswer("other") == .inconclusive)
+        #expect(AnalysisUITestTransportMode.tierAnswer(nil) == .inconclusive)
+    }
+
     @Test("The seen seed is the flag the notice store reads")
     func seenSeedMarksTheNoticeSeen() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -177,5 +180,10 @@ struct AnalysisUITestSeamTests {
         store.load(modelContext: ModelContext(container))
 
         #expect(store.hasSeenAIKeyNotice)
+        let record = try LocalPreferenceRecord.preference(
+            forKey: AnalysisKeyNoticeStore.seenPreferenceKey,
+            modelContext: ModelContext(container)
+        )
+        #expect(record?.value == "2")
     }
 }

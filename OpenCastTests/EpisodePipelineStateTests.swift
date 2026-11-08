@@ -401,6 +401,24 @@ struct EpisodePipelineStateTests {
         #expect(state?.action == .retryAnalysis)
     }
 
+    @Test("The running card says when a run uses the trial service for a free-tier key, and only then")
+    func freeTierFootnote() {
+        let footnote = "Your Google key is on Google's free tier. Using opencast's trial service."
+        let pass = { (isFreeTierTrial: Bool) in
+            makeState(
+                queueStatus: .running,
+                queueSnapshot: AdFreePassQueueSnapshot(
+                    currentStage: .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 0, total: 2, isFreeTierTrial: isFreeTierTrial))
+                )
+            )
+        }
+        #expect(pass(true)?.footnote == footnote)
+        #expect(pass(false)?.footnote == nil)
+
+        #expect(makeState(analysis: .running, usesTrialForFreeTier: true)?.footnote == footnote)
+        #expect(makeState(analysis: .running)?.footnote == nil)
+    }
+
     @Test(
         "A failed analysis names its persisted failure kind, solo and inside a failed pass",
         arguments: [
@@ -411,6 +429,11 @@ struct EpisodePipelineStateTests {
             (.capExceeded, "Ad detection has reached today's limit."),
             (.keyRequiredNoKey, "Add a key in Settings › AI Services to detect ads."),
             (.keyRequiredTrialExhausted, "Your free analyses are used. Add a key in Settings › AI Services."),
+            (.providerLimited, "Your provider is busy or at its limit. Try again later."),
+            (.providerDailyLimit, "Your Google key has used its daily limit, which resets at midnight Pacific time."),
+            (.providerFreeTier, "Your Google key is on Google's free tier, which is too limited for ad detection. Set up billing for its project in Google AI Studio."),
+            (.providerFreeTierRetry, "Your Google key is on Google's free tier, and opencast's trial service couldn't finish this episode right now. Try again later."),
+            (.providerFreeTierRunBound, "Your Google key is on Google's free tier, and this run needs more than opencast's trial service allows. Set up billing for the key's project in Google AI Studio."),
             (.generic, "Ad detection couldn't finish.")
         ] as [(EpisodeAnalysisFailureKind, String)]
     )
@@ -595,7 +618,8 @@ struct EpisodePipelineStateTests {
         queueSnapshot: AdFreePassQueueSnapshot = AdFreePassQueueSnapshot(),
         downloadRecord: EpisodeDownloadRecord? = nil,
         transcription: EpisodeTranscriptionJobState = .unavailable,
-        analysis: EpisodeAdAnalysisJobState? = nil
+        analysis: EpisodeAdAnalysisJobState? = nil,
+        usesTrialForFreeTier: Bool = false
     ) -> EpisodePipelineState? {
         EpisodePipelineState.make(
             episodeID: episodeID,
@@ -603,7 +627,8 @@ struct EpisodePipelineStateTests {
             queueSnapshot: queueSnapshot,
             downloadRecord: downloadRecord,
             transcription: transcription,
-            analysis: analysis
+            analysis: analysis,
+            usesTrialForFreeTier: usesTrialForFreeTier
         )
     }
 

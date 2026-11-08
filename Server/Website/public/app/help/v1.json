@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-11-06T22:16:02Z",
+  "updatedAt": "2026-11-08T02:50:31Z",
   "topics": [
     {
       "id": "why-we-charge",
       "title": "Why some features cost money",
       "symbol": "dollarsign.circle",
       "summary": "Open source, no ads, and cloud work priced at cost.",
-      "updatedAt": "2026-10-25T19:03:07Z",
+      "updatedAt": "2026-11-08T02:50:31Z",
       "related": [
         "credits",
         "ai-keys"
@@ -23,7 +23,7 @@
         },
         {
           "type": "paragraph",
-          "text": "Cloud transcription runs on Cloudflare Workers AI and uses **transcription credits**. From version 2026.11.1 it is the only feature that does: ad detection and Chapters & Summary run on your device and call Google Gemini or OpenAI with an API key you add in Settings › AI Services, so your provider bills your own account. Until January 1, 2027 they also work without a key; after that, every install keeps five free analyses, then asks for one. In versions before 2026.11.1, ad detection and Chapters & Summary use Google's Gemini models through opencast's own services, and Chapters & Summary uses credits."
+          "text": "Cloud transcription runs on Cloudflare Workers AI and uses **transcription credits**. From version 2026.11.1 it is the only feature that does: ad detection and Chapters & Summary run on your device and call Google Gemini or OpenAI with an API key you add in Settings › AI Services, so your provider bills your own account. Ad detection that opencast runs on its trial service is not billed to you. Until January 1, 2027 they also work without a key; after that, every install keeps five free analyses, then asks for one. In versions before 2026.11.1, ad detection and Chapters & Summary use Google's Gemini models through opencast's own services, and Chapters & Summary uses credits."
         },
         {
           "type": "bullets",
@@ -37,7 +37,7 @@
           "type": "callout",
           "symbol": "lock.shield",
           "title": "What leaves your device",
-          "text": "A cloud transcription job receives only that episode's audio. Ad detection and Chapters & Summary receive only the transcript text, sometimes with the episode and show titles, never the audio. With your own key, transcript text goes from your device to the provider you chose. During the free analyses it passes through opencast's trial service, which adds opencast's key and stores none of it. Your subscriptions, listening history, and account details stay on your device."
+          "text": "A cloud transcription job receives only that episode's audio. Ad detection and Chapters & Summary receive only the transcript text, sometimes with the episode and show titles, never the audio. With your own key, transcript text goes from your device to the provider you chose. From version 2026.11.2, until January 1, 2027, ad detection with a Google key on the free tier goes through the trial service instead when that service is available. During the free analyses it passes through opencast's trial service, which adds opencast's key and stores none of it. Your subscriptions, listening history, and account details stay on your device."
         },
         {
           "type": "link",
@@ -127,7 +127,7 @@
       "title": "Ad detection",
       "symbol": "forward.end",
       "summary": "Find promo and ad breaks on your device or in the cloud.",
-      "updatedAt": "2026-10-25T00:00:00Z",
+      "updatedAt": "2026-11-08T02:02:56Z",
       "related": [
         "credits",
         "transcription-engines",
@@ -152,7 +152,7 @@
         },
         {
           "type": "paragraph",
-          "text": "From version 2026.11.1, in both modes your device sends the transcript text to Google Gemini or OpenAI with the API key you add in Settings › AI Services, and opencast's servers are not in that path. Without a key it goes through opencast's trial service, which adds opencast's Google key and stores none of the text: until January 1, 2027 with no limit per install, then for five free analyses per install. In versions before 2026.11.1, the transcript text is sent to opencast's ad-analysis service, which uses Google's Gemini models to find the breaks. The audio itself never leaves your device unless you chose the cloud option."
+          "text": "From version 2026.11.1, in both modes your device sends the transcript text to Google Gemini or OpenAI with the API key you add in Settings › AI Services, and opencast's servers are not in that path. From version 2026.11.2, until January 1, 2027, ad detection with a Google key on the free tier runs through the trial service when that service is available. Without a key it goes through opencast's trial service, which adds opencast's Google key and stores none of the text: until January 1, 2027 with no limit per install, then for five free analyses per install. In versions before 2026.11.1, the transcript text is sent to opencast's ad-analysis service, which uses Google's Gemini models to find the breaks. The audio itself never leaves your device unless you chose the cloud option."
         },
         {
           "type": "paragraph",
@@ -165,7 +165,7 @@
       "title": "Using your own API key",
       "symbol": "key",
       "summary": "Ad detection and Chapters & Summary on your own Google or OpenAI account.",
-      "updatedAt": "2026-11-06T22:16:02Z",
+      "updatedAt": "2026-11-07T08:11:02Z",
       "minAppBuild": 301,
       "related": [
         "ad-detection",
@@ -174,7 +174,7 @@
       "blocks": [
         {
           "type": "paragraph",
-          "text": "Ad detection and Chapters & Summary run on your device and call the AI provider whose key you add in **Settings › AI Services**: Google Gemini or OpenAI. Your device sends the transcript text straight to that provider, sometimes with the episode and show titles, never the audio, and opencast never sees your key. Recap and Ask use Apple's Private Cloud Compute and need no key."
+          "text": "Ad detection and Chapters & Summary run on your device and call the AI provider whose key you add in **Settings › AI Services**: Google Gemini or OpenAI. Your device sends the transcript text straight to that provider, sometimes with the episode and show titles, never the audio, and opencast never sees your key. From version 2026.11.2 the one exception is ad detection that runs on the trial service for a free-tier key (see \"Keys on Google's free tier\"). Recap and Ask use Apple's Private Cloud Compute and need no key."
         },
         {
           "type": "heading",
@@ -205,7 +205,7 @@
         },
         {
           "type": "paragraph",
-          "text": "Until January 1, 2027 you don't need a key at all. A key on Google's free tier is too limited for these features: Google can turn free-tier requests away when its models are busy, and ad detection then times out. If you saved one, remove the Google key in Settings › AI Services and both features run without one until January 1, 2027, or on your OpenAI key if you saved one."
+          "text": "Until January 1, 2027 you don't need a key at all. A key on Google's free tier is too limited for these features: Google can turn free-tier requests away when its models are busy, and ad detection then times out. From version 2026.11.2, opencast checks whether your Google key is on the free tier by sending Google one very small request with it, to a model free-tier keys cannot use. A free-tier key is refused at no charge; a paid key is billed for about 20 tokens. It checks when you tap Test and after a run fails on Google's side. Until January 1, 2027 it also checks before ad detection runs, until it has seen the key answer as paid. When Google says your key is on the free tier, and until January 1, 2027, opencast runs ad detection through its trial service when that service is available, as it does without a key, and Settings › AI Services says so. In version 2026.11.1 such a run can fail; remove the Google key in Settings › AI Services and both features run without one until January 1, 2027, or on your OpenAI key if you saved one."
         },
         {
           "type": "heading",
@@ -213,7 +213,7 @@
         },
         {
           "type": "paragraph",
-          "text": "Your provider bills your own account at its API prices; opencast charges nothing for these features. In opencast's own use, ad detection has averaged about 6 cents an episode with Gemini 3.8 Flash, and Google's price for it doubles on January 1, 2027. Settings › AI Services shows the tokens your provider reported for runs on your key, the last run and this month's total, counted on your device. Your provider's dashboard is the bill."
+          "text": "Your provider bills your own account at its API prices; opencast charges nothing for these features. In opencast's own use, ad detection has averaged about 6 cents an episode with Gemini 3.8 Flash, and Google's price for it doubles on January 1, 2027. Settings › AI Services shows the tokens your provider reported for runs on your key, the last run and this month's total, counted on your device. When opencast finishes a run on its trial service, opencast covers that part and it is not included in Usage; tokens your provider reported for calls made with your key before the handover still appear there. The small free-tier check is not counted. Your provider's dashboard is the bill."
         },
         {
           "type": "heading",
@@ -251,7 +251,7 @@
         {
           "type": "bullets",
           "items": [
-            "**Google Gemini**: on Google's free tier, Google may use what you send and its answers to improve its products, and human reviewers may read them. With a paid Gemini key, Google doesn't use your prompts or responses to improve its products, and logs them for a limited period only to detect abuse and meet legal requirements.",
+            "**Google Gemini**: on Google's free tier, Google may use what you send and its answers to improve its products, and human reviewers may read them. With a paid Gemini key, Google doesn't use your prompts or responses to improve its products, and logs them for a limited period only to detect abuse and meet legal requirements. Ad detection that runs on the trial service is covered by the Free analyses bullet. The free-tier check sends Google a fixed sentence and none of your content.",
             "**OpenAI**: OpenAI doesn't use API data to train its models unless you opt in, and keeps abuse-monitoring logs for up to 30 days.",
             "**Free analyses**: the trial service holds the text in memory only for the request and stores no results. To count free analyses it keeps this install's App Attest key and, under one-way hashes, how many free analyses the install has used and each run's feature, times, token counts and cost, plus daily and monthly totals that carry no identifier; Google does not use trial requests to improve its products."
           ]

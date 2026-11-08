@@ -34,6 +34,16 @@ nonisolated struct AnalysisProviderKeyTester: AnalysisKeyTesting {
         return await transport.testKey(model: model)
     }
 
+    /// An endpoint the transport refuses says nothing about the tier.
+    func checkTier(_ key: AnalysisProviderKey, snapshot: AnalysisPolicySnapshot) async -> AnalysisTierCheckResult {
+        guard let endpoint = snapshot.bundle.providers[.google],
+              let transport = try? GeminiAnalysisTransport(endpoint: endpoint, key: key, client: client, pacer: nil, logger: logger)
+        else {
+            return .inconclusive
+        }
+        return await transport.checkTier()
+    }
+
     private func makeTransport(
         provider: AnalysisProvider,
         endpoint: AnalysisProviderEndpoint,

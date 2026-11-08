@@ -7,29 +7,38 @@ import OpenCastAnalysisProviders
 /// it has room (or the run is a resume the trial already admitted), else
 /// the key screen. A Keychain read that fails is never "no key", and the
 /// trial is never a fallback for it; nothing here ever routes to
-/// opencast's older analysis services.
+/// opencast's older analysis services. A saved key's run reaches the trial
+/// in one case only: a Google key that Google itself names free tier, which
+/// the ad-detection store asks for through `resolveHandover`.
 final class AnalysisRouteResolver {
     private let keys: AnalysisProviderKeyStore
     private let policy: AnalysisPolicySnapshotStore
     private let storedProvider: (AnalysisFeature) -> AnalysisProvider?
     private let trialStatus: AnalysisTrialStatusCache
     private let trial: any AnalysisTrialConnecting
+    private let trialReachability: AnalysisTrialReachability
     private let runs: AnalysisRunRecordStore
+    private let now: () -> Date
 
+    /// `now` is the test seam for the handover window's clock.
     init(
         keys: AnalysisProviderKeyStore,
         policy: AnalysisPolicySnapshotStore,
         storedProvider: @escaping (AnalysisFeature) -> AnalysisProvider?,
         trialStatus: AnalysisTrialStatusCache,
         trial: any AnalysisTrialConnecting,
-        runs: AnalysisRunRecordStore
+        trialReachability: AnalysisTrialReachability,
+        runs: AnalysisRunRecordStore,
+        now: @escaping () -> Date = { Date.now }
     ) {
         self.keys = keys
         self.policy = policy
         self.storedProvider = storedProvider
         self.trialStatus = trialStatus
         self.trial = trial
+        self.trialReachability = trialReachability
         self.runs = runs
+        self.now = now
     }
 
     /// Whether this build and device can use a trial route at all; no
@@ -43,13 +52,72 @@ final class AnalysisRouteResolver {
     /// is still open (`dispatched` or `expired`) and its route still applies
     /// under the same policy, and a trial resume needs no unit.
     func resolve(feature: AnalysisFeature, resumingRunID: String? = nil) async -> AnalysisRouteResolution {
+        trialReachability.start()
         let snapshot = policy.snapshot
         if let resumingRunID, let record = runs.record(id: resumingRunID), record.feature == feature,
            record.state == .dispatched || record.state == .expired,
            let resumed = await resume(record, snapshot: snapshot) {
-            return resumed
+            return await withHandoverWindow(resumed)
         }
-        return await resolveNew(feature: feature, snapshot: snapshot)
+        return await withHandoverWindow(await resolveNew(feature: feature, snapshot: snapshot))
+    }
+
+    /// Marks an ad-detection run on a Google key inside the window. Chapters
+    /// and OpenAI never wait for the fact and pace as they always have.
+    private func withHandoverWindow(_ resolution: AnalysisRouteResolution) async -> AnalysisRouteResolution {
+        guard resolution.feature == .adDetection, resolution.route == .direct(provider: .google) else {
+            return resolution
+        }
+        var windowed = resolution
+        windowed.freeTierHandover = await isHandoverWindowOpen()
+        return windowed
+    }
+
+    /// Decided with no request to opencast, so a paid key's run never waits
+    /// on opencast's service.
+    func isHandoverWindowOpen() async -> Bool {
+        await trialReachability.resolve()
+        return trialReachability.isHandoverWindowOpen(trialStartsAt: policy.snapshot.bundle.trial.startsAt, now: now())
+    }
+
+    /// Whether the trial date has passed, the one fact that ends a handover
+    /// for good. A service out of reach is apart from it: that can change, so
+    /// a run waiting on it stays open.
+    var isPastTrialDate: Bool {
+        !(now() < policy.snapshot.bundle.trial.startsAt)
+    }
+
+    /// Whether a run on a key Google named free tier can move to the trial
+    /// service now. Reads the status afresh: the answer must be the
+    /// service's, not an hour-old copy. Not open means the date or the
+    /// service's own mode; a service out of reach is unavailable. The date is
+    /// read again after the waits: a reply that lands past it must not start
+    /// a new trial record then, and it outranks a service that did not
+    /// answer, because trying again later would not help.
+    func resolveHandover(feature: AnalysisFeature) async -> AnalysisHandoverResolution {
+        let reachability = await trialReachability.resolve()
+        guard !isPastTrialDate else {
+            return .notOpen
+        }
+        let snapshot = policy.snapshot
+        guard reachability == .available,
+              let trialPolicy = Self.trialPolicy(feature: feature, snapshot: snapshot),
+              let exchange = await trial.exchange(trialEndpoint: snapshot.bundle.trial.endpoint),
+              let status = await trialStatus.status(forceRefresh: true)
+        else {
+            return isPastTrialDate ? .notOpen : .unavailable
+        }
+        guard status.mode == .open, !isPastTrialDate else {
+            return .notOpen
+        }
+        return .available(AnalysisRouteResolution(
+            feature: feature,
+            route: .trial,
+            policy: trialPolicy,
+            key: nil,
+            resumingRunID: nil,
+            trialExchange: exchange
+        ))
     }
 
     private func resolveNew(feature: AnalysisFeature, snapshot: AnalysisPolicySnapshot) async -> AnalysisRouteResolution {

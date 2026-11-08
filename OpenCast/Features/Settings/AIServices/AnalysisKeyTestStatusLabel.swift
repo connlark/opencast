@@ -9,6 +9,8 @@ struct AnalysisKeyTestStatusLabel: View {
     let provider: AnalysisProvider
     let isTesting: Bool
     let result: AnalysisKeyTestResult?
+    /// Google accepted the key and then named it free tier.
+    var isFreeTier = false
     let showsImplausibleWarning: Bool
 
     var body: some View {
@@ -20,7 +22,7 @@ struct AnalysisKeyTestStatusLabel: View {
             }
         } else if let result {
             Label {
-                Text(AIServicesCopy.testResult(result, provider: provider))
+                Text(Self.text(for: result, isFreeTier: isFreeTier, provider: provider))
             } icon: {
                 Image(systemName: systemImage(for: result))
                     .foregroundStyle(color(for: result))
@@ -38,9 +40,13 @@ struct AnalysisKeyTestStatusLabel: View {
         }
     }
 
+    static func text(for result: AnalysisKeyTestResult, isFreeTier: Bool, provider: AnalysisProvider) -> String {
+        isFreeTier ? AIServicesCopy.testResultFreeTier : AIServicesCopy.testResult(result, provider: provider)
+    }
+
     private func systemImage(for result: AnalysisKeyTestResult) -> String {
         switch result {
-        case .accepted: "checkmark.circle.fill"
+        case .accepted: isFreeTier ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"
         case .failed(.invalidKey): "xmark.octagon.fill"
         case .failed: "exclamationmark.triangle.fill"
         }
@@ -48,7 +54,7 @@ struct AnalysisKeyTestStatusLabel: View {
 
     private func color(for result: AnalysisKeyTestResult) -> Color {
         switch result {
-        case .accepted: .green
+        case .accepted: isFreeTier ? .orange : .green
         case .failed(.invalidKey): .red
         case .failed: .orange
         }

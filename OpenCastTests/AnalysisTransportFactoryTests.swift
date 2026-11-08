@@ -9,6 +9,13 @@ import Testing
 /// network.
 nonisolated final class CapturingAnalysisHTTPClient: AnalysisHTTPClient {
     private let requests = Mutex<[AnalysisHTTPRequest]>([])
+    private let status: Int
+    private let body: String
+
+    init(status: Int = 400, body: String = #"{"error":{"code":400,"message":"fixture refusal","status":"INVALID_ARGUMENT"}}"#) {
+        self.status = status
+        self.body = body
+    }
 
     var sent: [AnalysisHTTPRequest] {
         requests.withLock { $0 }
@@ -20,11 +27,28 @@ nonisolated final class CapturingAnalysisHTTPClient: AnalysisHTTPClient {
         maximumBodyBytes: Int
     ) async throws(AnalysisHTTPFailure) -> AnalysisHTTPResponse {
         requests.withLock { $0.append(request) }
-        return AnalysisHTTPResponse(
-            status: 400,
-            contentType: "application/json",
-            body: Data(#"{"error":{"code":400,"message":"fixture refusal","status":"INVALID_ARGUMENT"}}"#.utf8)
-        )
+        return AnalysisHTTPResponse(status: status, contentType: "application/json", body: Data(body.utf8))
+    }
+}
+
+/// Time that passes only when something sleeps, remembering every sleep, so
+/// a test reads the waits a pacer asked for.
+nonisolated final class RecordingAnalysisClock: AnalysisClock {
+    private let state = Mutex<(now: Double, sleeps: [Double])>((0, []))
+
+    var sleeps: [Double] {
+        state.withLock { $0.sleeps }
+    }
+
+    func now() -> Double {
+        state.withLock { $0.now }
+    }
+
+    func sleep(seconds: Double) async throws {
+        state.withLock { state in
+            state.now += seconds
+            state.sleeps.append(seconds)
+        }
     }
 }
 
@@ -49,7 +73,7 @@ struct AnalysisTransportFactoryTests {
     @MainActor
     final class Stack {
         let runs = AnalysisRunRecordStore(directory: AnalysisRunTestFixtures.temporaryDirectory())
-        let client = CapturingAnalysisHTTPClient()
+        let client: CapturingAnalysisHTTPClient
         let factory: AnalysisTransportFactory
 
         let keys: InMemoryAnalysisProviderKeyStorage
@@ -60,10 +84,16 @@ struct AnalysisTransportFactoryTests {
             keys: InMemoryAnalysisProviderKeyStorage = InMemoryAnalysisProviderKeyStorage(seeded: [
                 .google: (AnalysisTransportFactoryTests.googleKey, syncs: false),
                 .openai: (AnalysisTransportFactoryTests.openAIKey, syncs: false),
-            ])
+            ]),
+            client: CapturingAnalysisHTTPClient = CapturingAnalysisHTTPClient(),
+            pacingClock: (any AnalysisClock)? = nil
         ) {
             self.keys = keys
-            factory = AnalysisTransportFactory(policy: .fixed(snapshot), runs: runs, keys: keys, fixture: fixture, client: client)
+            self.client = client
+            let policy = pacingClock.map {
+                AnalysisPolicySnapshotStore(loader: nil, pacing: AnalysisKeyPacing(clock: $0), initial: snapshot)
+            } ?? .fixed(snapshot)
+            factory = AnalysisTransportFactory(policy: policy, runs: runs, keys: keys, fixture: fixture, client: client)
         }
 
         deinit {
@@ -118,6 +148,112 @@ struct AnalysisTransportFactoryTests {
         #expect(request.header("x-goog-api-key") == AnalysisKeyFixtures.googleText)
         #expect(request.header("x-fixture-version") == "g7")
         #expect(request.header("authorization") == nil)
+    }
+
+    /// A free-tier per-minute 429 with no delay, so a retry never waits.
+    private static let freeTierMinuteBody = #"{"error":{"code":429,"message":"quota","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaValue":"15"}]}]}}"#
+
+    @Test("A resolution inside the window makes a free-tier 429 final: one send, and the run ends")
+    func handoverFlagMakesAFreeTierAnswerFinal() async throws {
+        let stack = Stack(client: CapturingAnalysisHTTPClient(status: 429, body: Self.freeTierMinuteBody))
+        var resolution = Self.direct(.google, key: Self.googleKey)
+        resolution.freeTierHandover = true
+        let transport = try stack.make(resolution)
+
+        let outcome = await AnalysisRunner(transport: transport, clock: StoppedAnalysisClock())
+            .detectAds(AnalysisRunTestFixtures.request(), policy: try #require(resolution.policy?.adDetection))
+
+        guard case .failed(let failure) = outcome else {
+            Issue.record("the run did not fail: \(outcome)")
+            return
+        }
+        #expect(failure.code == .quotaExhausted)
+        #expect(stack.client.sent.count == 1)
+    }
+
+    @Test("Outside the window the same 429 is retried as before")
+    func noHandoverFlagKeepsRetrying() async throws {
+        let stack = Stack(client: CapturingAnalysisHTTPClient(status: 429, body: Self.freeTierMinuteBody))
+        let resolution = Self.direct(.google, key: Self.googleKey)
+        #expect(!resolution.freeTierHandover)
+        let transport = try stack.make(resolution)
+
+        let outcome = await AnalysisRunner(transport: transport, clock: StoppedAnalysisClock())
+            .detectAds(AnalysisRunTestFixtures.request(), policy: try #require(resolution.policy?.adDetection))
+
+        guard case .failed(let failure) = outcome else {
+            Issue.record("the run did not fail: \(outcome)")
+            return
+        }
+        #expect(failure.code != .quotaExhausted)
+        #expect(stack.client.sent.count > 1)
+    }
+
+    /// Inside ad detection's 10-second backoff cap: a longer delay ends the
+    /// run after one send, for any key.
+    static let retryDelaySeconds = 7.0
+
+    /// A per-minute 429 with a retry delay, named free tier or not by its id.
+    static func minuteBody(quotaID: String) -> String {
+        #"{"error":{"code":429,"message":"quota","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaId":"\#(quotaID)","quotaValue":"15"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"\#(Int(retryDelaySeconds))s"}]}}"#
+    }
+
+    static let freeTierMinuteQuotaID = "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"
+
+    /// One direct run over a client that answers every send with `body`:
+    /// what was sent, and every wait the key's pacer asked its clock for.
+    private func pacedRun(body: String) async throws -> (sends: [AnalysisProviderSendRecord], waits: [Double]) {
+        let clock = RecordingAnalysisClock()
+        let stack = Stack(client: CapturingAnalysisHTTPClient(status: 429, body: body), pacingClock: clock)
+        let resolution = Self.direct(.google, key: Self.googleKey)
+        #expect(!resolution.freeTierHandover)
+        let log = AnalysisProviderSendLog()
+        let transport = try stack.factory.makeTransport(for: resolution, runID: "paced-run", observer: log)
+
+        _ = await AnalysisRunner(transport: transport, clock: StoppedAnalysisClock())
+            .detectAds(AnalysisRunTestFixtures.request(), policy: try #require(resolution.policy?.adDetection))
+
+        return (log.sends, clock.sleeps)
+    }
+
+    @Test("Outside the window a free-tier per-minute 429 waits on the pacer exactly as a paid key's does")
+    func noHandoverFlagKeepsThePace() async throws {
+        let free = try await pacedRun(body: Self.minuteBody(quotaID: Self.freeTierMinuteQuotaID))
+        let paid = try await pacedRun(body: Self.minuteBody(quotaID: "GenerateRequestsPerMinutePerProjectPerModel"))
+
+        // Every send after the first waits out the delay Google named.
+        #expect(free.sends.count > 1)
+        #expect(free.waits == Array(repeating: Self.retryDelaySeconds, count: free.sends.count - 1))
+        #expect(free.sends.map(\.pacedSeconds) == [0] + free.waits)
+        #expect(free.sends.allSatisfy { $0.freeTier })
+
+        #expect(free.waits == paid.waits)
+        #expect(free.sends.map(\.pacedSeconds) == paid.sends.map(\.pacedSeconds))
+        #expect(paid.sends.allSatisfy { !$0.freeTier })
+    }
+
+    @Test("A tier check goes to the bundle's endpoint with the key it was given, outside any run")
+    func tierCheckUsesTheEndpoint() async throws {
+        let stack = Stack(client: CapturingAnalysisHTTPClient(status: 200, body: "{}"))
+
+        #expect(await stack.factory.checkTier(key: Self.googleKey) == .notFreeTier)
+
+        let request = try #require(stack.client.sent.first)
+        #expect(stack.client.sent.count == 1)
+        #expect(request.url.absoluteString == "https://generativelanguage.googleapis.com/v1alpha/models/gemini-pro-latest:generateContent")
+        #expect(request.header("x-goog-api-key") == AnalysisKeyFixtures.googleText)
+    }
+
+    @Test("A key change reads the Keychain now: the same key stands; gone or replaced does not")
+    func keyChangeReadsTheKeychain() throws {
+        let stack = Stack()
+        #expect(stack.factory.keyChange(provider: .google, keyDigest: Self.googleKey.digest) == nil)
+
+        try stack.keys.save(try #require(AnalysisProviderKey("replacement-test-key")), provider: .google, syncs: false)
+        #expect(stack.factory.keyChange(provider: .google, keyDigest: Self.googleKey.digest) == .noKey)
+
+        try stack.keys.remove(provider: .google, includingSyncedCopy: true)
+        #expect(stack.factory.keyChange(provider: .google, keyDigest: Self.googleKey.digest) == .noKey)
     }
 
     @Test("An OpenAI route builds the Responses transport from the bundle's endpoint with the key, wrapped for resume")

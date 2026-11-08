@@ -5,8 +5,11 @@ import OpenCastAnalysisProviders
 /// UI tests: how the fixture transport answers every analysis send.
 /// `OPENCAST_UI_TEST_ANALYSIS_TRANSPORT` picks the answer
 /// (`fixture`, `invalid-key`, `rate-limited`, `trial-exhausted`,
-/// `trial-paused`); `--opencast-ui-test-analysis-transport-hold` keeps every
-/// send waiting until its run is cancelled.
+/// `trial-paused`, `direct-overloaded`);
+/// `--opencast-ui-test-analysis-transport-hold` keeps every send waiting
+/// until its run is cancelled, and `--opencast-ui-test-analysis-tier` answers
+/// every tier check (`free-tier` or `not-free-tier`; anything else is
+/// inconclusive).
 nonisolated struct AnalysisUITestTransportMode: Sendable, Hashable {
     enum Answer: String, Sendable, Hashable {
         case fixture
@@ -14,10 +17,21 @@ nonisolated struct AnalysisUITestTransportMode: Sendable, Hashable {
         case rateLimited = "rate-limited"
         case trialExhausted = "trial-exhausted"
         case trialPaused = "trial-paused"
+        /// Google turns every direct send away; the trial answers.
+        case directOverloaded = "direct-overloaded"
     }
 
     var answer: Answer
     var holds: Bool
+    var tierAnswer = AnalysisTierCheckResult.inconclusive
+
+    static func tierAnswer(_ rawValue: String?) -> AnalysisTierCheckResult {
+        switch rawValue {
+        case "free-tier": .freeTier
+        case "not-free-tier": .notFreeTier
+        default: .inconclusive
+        }
+    }
 }
 
 /// Answers the pipeline from a synthetic reply built from the request's
@@ -37,8 +51,12 @@ nonisolated struct AnalysisUITestFixtureTransport: AnalysisProviderTransport {
             record(request, status: nil, failure: nil, cancelled: true)
             throw .network
         }
+        if mode.answer == .directOverloaded, route != .trial {
+            record(request, status: 503, failure: .overloaded)
+            throw .retryable(status: 503, retryAfterSeconds: 0)
+        }
         switch mode.answer {
-        case .fixture:
+        case .fixture, .directOverloaded:
             let body: String? = switch request.feature {
             case .adDetection: Self.adBody(for: request)
             case .chaptersSummary: ChaptersSummaryFixtureAnswer.geminiBody(for: request)

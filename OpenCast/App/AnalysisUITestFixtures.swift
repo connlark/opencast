@@ -25,16 +25,13 @@ enum AnalysisUITestFixtures {
     }
 
     /// `baked` (also for `nil` or an unknown name), `no-openai-chapters`
-    /// (the baked bundle without OpenAI's Chapters & Summary entry),
-    /// `notice-not-started` (the notice starts in the far future) or
+    /// (the baked bundle without OpenAI's Chapters & Summary entry) or
     /// `trial-started` (the trial started when the bundle was generated).
     static func policySnapshot(variant: String?) -> AnalysisPolicySnapshot {
         var bundle = AnalysisPolicyBundle.baked
         switch variant ?? "baked" {
         case "no-openai-chapters":
             bundle.features.chaptersSummary.allowedModels.removeAll { $0.provider == .openai }
-        case "notice-not-started":
-            bundle.notice?.startsAt = .distantFuture
         case "trial-started":
             bundle.trial.startsAt = bundle.generatedAt
         default:

@@ -12,6 +12,32 @@ struct AnalysisProviderKeyTesterTests {
     private let googleKey = AnalysisKeyFixtures.key(AnalysisKeyFixtures.googleText)
     private let openAIKey = AnalysisKeyFixtures.key(AnalysisKeyFixtures.openAIText)
 
+    @Test("The tier check is one request to the paid-only model with the key, and says what Google answered")
+    func tierCheck() async throws {
+        let client = StubAnalysisHTTPClient(.success(response(200, "{}")))
+
+        let answer = await AnalysisProviderKeyTester(client: client).checkTier(googleKey, snapshot: snapshot)
+
+        #expect(answer == .notFreeTier)
+        let request = try #require(client.requests.first)
+        #expect(client.requests.count == 1)
+        #expect(request.url.absoluteString == "https://\(AnalysisProvider.google.pinnedHost)/v1beta/models/gemini-pro-latest:generateContent")
+        #expect(request.header("x-goog-api-key") == AnalysisKeyFixtures.googleText)
+    }
+
+    @Test("A failed tier check is inconclusive, and Test's answer stands apart from it")
+    func tierCheckFailure() async {
+        let client = StubAnalysisHTTPClient(.success(response(503, "{}")))
+
+        #expect(await AnalysisProviderKeyTester(client: client).checkTier(googleKey, snapshot: snapshot) == .inconclusive)
+    }
+
+    @Test("The seeded tester answers the tier it was given, and nothing conclusive by default")
+    func fixedTesterTier() async {
+        #expect(await FixedAnalysisKeyTester().checkTier(googleKey, snapshot: snapshot) == .inconclusive)
+        #expect(await FixedAnalysisKeyTester(results: [.accepted], tierAnswer: .freeTier).checkTier(googleKey, snapshot: snapshot) == .freeTier)
+    }
+
     @Test("A 2xx from Gemini's countTokens on the ad entry's model is accepted, with only the key header")
     func geminiAccepted() async throws {
         let client = StubAnalysisHTTPClient(.success(response(200, #"{"totalTokens":1}"#)))

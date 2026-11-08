@@ -197,6 +197,61 @@ extension TransportPacingTests {
 }
 
 extension TransportPacingTests {
+    @Test("Without the flag a free-tier per-minute 429 paces exactly as a per-minute 429 does")
+    func freeTierMinutePacesWithoutTheFlag() async throws {
+        let clock = ManualClock()
+        let pacer = AnalysisKeyPacer(maxInFlight: 4, clock: clock)
+        let log = AnalysisProviderSendLog()
+        let transport = try ProviderTestSupport.googleTransport(ScriptedHTTPClient([try Self.quotaCase("minute-retry-info")]), pacer: pacer, observer: log, clock: clock)
+
+        let result = await ProviderTestSupport.sendResult(transport, try ProviderTestSupport.adWindowRequest(model: ProviderTestSupport.googleEntry()))
+
+        #expect(result == .failure(.retryable(status: 429, retryAfterSeconds: 12)))
+        #expect(await pacer.isSerial)
+        #expect(log.sends.map(\.failure) == [.rateLimited])
+        #expect(log.sends.map(\.freeTier) == [true])
+    }
+
+    @Test("With the flag a free-tier per-minute 429 is not paced and ends the run, its windows in flight drained")
+    func freeTierMinuteEndsTheRunWithTheFlag() async throws {
+        let clock = ManualClock()
+        let pacer = AnalysisKeyPacer(maxInFlight: 4, clock: clock)
+        let log = AnalysisProviderSendLog()
+        let client = GatedHTTPClient()
+        let transport = try GeminiAnalysisTransport(
+            endpoint: ProviderTestSupport.googleEndpoint,
+            key: ProviderTestKeys.google,
+            client: client,
+            pacer: pacer,
+            observer: log,
+            logger: RedactingLogger(subsystem: nil),
+            clock: clock,
+            freeTierIsFinal: true
+        )
+        let policy = AdDetectionAnalysisPolicy.service.with(model: ProviderTestSupport.googleEntry())
+        let running = Task {
+            await AnalysisRunner(transport: transport, clock: clock).detectAds(AdTrialBudgetTests.request(windows: 3), policy: policy)
+        }
+        await client.waitForWaiting(3)
+
+        client.answer(try Self.quotaCase("minute-retry-info"))
+        let outcome = await running.value
+
+        guard case .failed(let failure) = outcome else {
+            Issue.record("a final free-tier 429 did not fail the run: \(outcome)")
+            return
+        }
+        #expect(failure.code == .quotaExhausted)
+        #expect(await !pacer.isSerial)
+        #expect(client.sentCount == 3)
+        #expect(client.waitingCount == 0)
+        #expect(log.sends.count == 3)
+        #expect(log.sends.count(where: \.freeTier) == 1)
+        #expect(log.sends.count(where: \.cancelled) == 2)
+        // The app reads the free-tier finding first; this is why it must.
+        #expect(AnalysisProviderFailure.resolve(outcome, sends: log.sends) == .billingOrQuota)
+    }
+
     @Test("A request with a huge or non-finite timeout is paced and sent without trapping")
     func hugeRequestTimeout() async throws {
         for timeout in [1e300, Double.infinity, Double.nan] {

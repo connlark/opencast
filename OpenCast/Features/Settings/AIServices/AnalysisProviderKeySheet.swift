@@ -9,18 +9,15 @@ import SwiftUI
 struct AnalysisProviderKeySheet: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
     @Environment(\.openURL) private var openURL
 
     let provider: AnalysisProvider
 
     @State private var draft = AnalysisKeyDraft()
     @State private var syncs = true
-    /// Bumped by every edit, sync change, Save and Remove. A test result
-    /// stamped with an older generation describes a draft that is gone.
-    @State private var draftGeneration = 0
+    @State private var test = AnalysisKeyTestState()
     @State private var testTask: Task<Void, Never>?
-    @State private var isTesting = false
-    @State private var testResult: AnalysisKeyTestResult?
     @State private var errorMessage: String?
     @State private var isConfirmingRemove = false
     /// What the confirmation said, so Remove deletes exactly that: a synced
@@ -84,11 +81,18 @@ struct AnalysisProviderKeySheet: View {
                     .font(.footnote)
                     .foregroundStyle(.red)
             }
+        } header: {
+            if provider == .google {
+                Text(AIServicesCopy.googleKeyRequirement)
+                    .textCase(nil)
+                    .accessibilityIdentifier("AI Services Google Key Requirement")
+            }
         } footer: {
             AnalysisKeyTestStatusLabel(
                 provider: provider,
-                isTesting: isTesting,
-                result: testResult,
+                isTesting: test.isTesting,
+                result: test.result,
+                isFreeTier: test.isFreeTier,
                 showsImplausibleWarning: hasDraft && !isDraftPlausible
             )
         }
@@ -201,7 +205,16 @@ struct AnalysisProviderKeySheet: View {
     }
 
     private var canTest: Bool {
-        !isTesting && testSubject != .none
+        !test.isTesting && testSubject != .none
+    }
+
+    private var actions: AnalysisKeySheetActions {
+        AnalysisKeySheetActions(
+            provider: provider,
+            keys: appModel.analysisKeys,
+            tier: appModel.analysisKeyTier,
+            modelContext: modelContext
+        )
     }
 
     // MARK: Actions
@@ -219,6 +232,7 @@ struct AnalysisProviderKeySheet: View {
 
     private func testKey() {
         errorMessage = nil
+        invalidateTestResult()
         let key: AnalysisProviderKey?
         switch testSubject {
         case .typed:
@@ -228,44 +242,57 @@ struct AnalysisProviderKeySheet: View {
         case .none:
             return
         }
-        guard let key else {
-            testResult = .failed(.requestRejected)
+        guard let generation = test.start(key: key), let key else {
             return
         }
 
-        invalidateTestResult()
-        let generation = draftGeneration
         let tester = appModel.analysisKeyTester
         let snapshot = appModel.analysisPolicy.snapshot
         let provider = provider
-        isTesting = true
+        let isSavedKey = testSubject == .saved
+        let actions = actions
         testTask = Task {
             let result = await tester.test(key, provider: provider, snapshot: snapshot)
-            guard !Task.isCancelled, generation == draftGeneration else {
+            // Only a key Google accepted can be asked about its tier.
+            let tier: AnalysisTierCheckResult = if provider == .google, result == .accepted {
+                await tester.checkTier(key, snapshot: snapshot)
+            } else {
+                .inconclusive
+            }
+            guard !Task.isCancelled else {
                 return
             }
-            testResult = result
-            isTesting = false
+            let answer = AnalysisKeyTierStore.Answer(result: tier, keyDigest: key.digest, answeredAt: .now)
+            guard test.finish(result, tier: answer, generation: generation) else {
+                return
+            }
+            // A typed key's answer waits for Save, which keeps it only if
+            // that same key is what ends up saved.
+            if isSavedKey {
+                actions.applyTierAnswer(answer)
+            }
             testTask = nil
         }
     }
 
     private func save() {
         errorMessage = nil
+        // Save clears the result, and the answer must outlive that.
+        let tested = test.tier
         invalidateTestResult()
         if hasDraft {
             guard isDraftPlausible, let key = AnalysisProviderKey(draft.text) else {
                 return
             }
             do throws(AnalysisProviderKeyStoreError) {
-                try appModel.analysisKeys.save(key, provider: provider, syncs: syncs)
+                try actions.save(key, syncs: syncs, tested: tested)
             } catch {
                 showSaveFailure(error)
                 return
             }
         } else if let savedSyncs, syncs != savedSyncs {
             do throws(AnalysisProviderKeyStoreError) {
-                try appModel.analysisKeys.setSyncs(syncs, provider: provider)
+                try actions.setSyncs(syncs, tested: tested)
             } catch {
                 showSaveFailure(error)
                 return
@@ -280,7 +307,7 @@ struct AnalysisProviderKeySheet: View {
     /// Only this call's failure decides: a save with sync off that wrote the
     /// key and failed at deleting the synced copy saved it here, so the
     /// typed key goes and the sheet says what remains; any other failure
-    /// saved nothing, so the typed key stays.
+    /// keeps the typed key.
     private func showSaveFailure(_ error: AnalysisProviderKeyStoreError) {
         if error.savedLocallyLeavingSyncedCopy(syncs: syncs) {
             errorMessage = AIServicesCopy.syncOffIncomplete
@@ -312,7 +339,7 @@ struct AnalysisProviderKeySheet: View {
         errorMessage = nil
         invalidateTestResult()
         do {
-            try appModel.analysisKeys.remove(provider: provider, includingSyncedCopy: removalScope != .absent)
+            try actions.remove(includingSyncedCopy: removalScope != .absent)
         } catch {
             errorMessage = AIServicesCopy.removeFailed
             return
@@ -330,11 +357,9 @@ struct AnalysisProviderKeySheet: View {
     }
 
     private func invalidateTestResult() {
-        draftGeneration += 1
         testTask?.cancel()
         testTask = nil
-        isTesting = false
-        testResult = nil
+        test.invalidate()
     }
 
     private func discardDraft() {

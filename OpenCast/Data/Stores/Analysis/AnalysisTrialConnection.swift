@@ -42,6 +42,16 @@ nonisolated final class AnalysisTrialConnection: AnalysisTrialConnecting {
         #endif
     }
 
+    /// Whether a trial route is really there for this build and device: the
+    /// UI-test fixture, or a configuration that resolves and can sign.
+    /// `isConfigured` cannot say so in a release build, where it only reads
+    /// App Attest support and an unknown store environment has no route.
+    /// Makes no request to opencast.
+    func isReachable(trialEndpoint: URL) async -> Bool {
+        if isFixture { return true }
+        return await configuration(trialEndpoint: trialEndpoint)?.canAuthenticate ?? false
+    }
+
     func configuration(
         trialEndpoint: URL,
         storeEnvironment: (@Sendable () async throws -> RemoteTranscriptionStoreEnvironment)? = nil

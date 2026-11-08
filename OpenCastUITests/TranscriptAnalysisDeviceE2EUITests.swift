@@ -300,10 +300,10 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
         assertExists(generate, named: "Generate button below the show notes", timeout: 20)
         scrollIntoMiddleBand(generate, in: app)
         generate.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        // The key notice (no key saved): run the held tap with Later.
-        let later = app.buttons["AI Key Notice Later"]
-        if later.waitForExistence(timeout: 5) {
-            later.tap()
+        // The key notice (no key saved): run the held tap with OK.
+        let ok = app.buttons["AI Key Notice OK"]
+        if ok.waitForExistence(timeout: 5) {
+            ok.tap()
         }
         if staticText(containing: "Generate Chapters & Summary?", in: app).waitForExistence(timeout: 8) {
             let confirm = app.buttons["Generate"].firstMatch

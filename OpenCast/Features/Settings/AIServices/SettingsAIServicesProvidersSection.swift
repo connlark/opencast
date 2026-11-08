@@ -22,7 +22,7 @@ struct SettingsAIServicesProvidersSection: View {
             Text(AIServicesCopy.providerHeader)
         } footer: {
             VStack(alignment: .leading, spacing: 8) {
-                Text(AIServicesCopy.providersFooter)
+                Text(footer)
                 if let message = appModel.analysisProviderSelection.lastErrorMessage {
                     Text(message)
                         .foregroundStyle(.red)
@@ -33,6 +33,13 @@ struct SettingsAIServicesProvidersSection: View {
         // icon-only, and a chip must read as its model. Set here, never
         // inside the chip's menu label (that placement crashed on iOS 27).
         .labelStyle(.titleAndIcon)
+    }
+
+    private var footer: String {
+        let trial = appModel.analysisPolicy.snapshot.bundle.trial
+        return appModel.analysisTrialReachability.isHandoverWindowOpen(trialStartsAt: trial.startsAt, now: .now)
+            ? AIServicesCopy.providersFooterInHandoverWindow(date: AIServicesCopy.trialDate(trial.startsAt))
+            : AIServicesCopy.providersFooter
     }
 
     private func options(for feature: AnalysisFeature) -> [(provider: AnalysisProvider, title: String)] {

@@ -8,6 +8,32 @@ import Testing
 struct AnalysisRunsExportTests {
     static let startedAt = Date(timeIntervalSince1970: 1_793_000_000)
 
+    @Test("A handover's two fields reach the export, and an id outside the grammar does not")
+    func handoverFields() throws {
+        let handover = Self.record(id: "6F1C2A3B-0000-4000-8000-000000000003", feature: .adDetection, route: .trial) { record in
+            record.freeTier = true
+            record.handoverOf = "6F1C2A3B-0000-4000-8000-000000000004"
+        }
+        let forged = Self.record(id: "6F1C2A3B-0000-4000-8000-000000000005", feature: .adDetection, route: .trial) { record in
+            record.handoverOf = "https://example.com/feed?key=secret"
+        }
+        let plain = Self.record(id: "6F1C2A3B-0000-4000-8000-000000000006", feature: .adDetection, route: .direct) { _ in }
+
+        let entry = AnalysisRunsExportEntry(handover)
+        #expect(entry.freeTier == true)
+        #expect(entry.handoverOf == "6F1C2A3B-0000-4000-8000-000000000004")
+        #expect(AnalysisRunsExportEntry(forged).handoverOf == AnalysisRunsExportGrammar.runID("https://example.com/feed?key=secret"))
+        #expect(AnalysisRunsExportEntry(forged).handoverOf?.contains("secret") == false)
+        #expect(AnalysisRunsExportEntry(plain).freeTier == nil)
+        #expect(AnalysisRunsExportEntry(plain).handoverOf == nil)
+
+        let data = try AnalysisRunsExport.data(entries: [handover].map(AnalysisRunsExportEntry.init), generatedAt: Self.startedAt)
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let run = try #require((json["analysis_runs"] as? [[String: Any]])?.first)
+        #expect(run["free_tier"] as? Bool == true)
+        #expect(run["handover_of"] as? String == "6F1C2A3B-0000-4000-8000-000000000004")
+    }
+
     @Test("The export is a versioned envelope of closed fields, nulls included")
     func envelopeShape() throws {
         let finished = Self.record(id: "6F1C2A3B-0000-4000-8000-000000000001", feature: .chaptersSummary, route: .direct) { record in
@@ -35,6 +61,7 @@ struct AnalysisRunsExportTests {
             "run_id", "feature", "route", "provider", "model_id", "bundle_version", "policy_source",
             "policy_revision", "state", "background", "outcome_code", "listener_failure", "windows", "sends",
             "input_tokens", "output_tokens", "paced_seconds", "exchange_seconds", "started_at", "finished_at",
+            "free_tier", "handover_of",
         ])
         #expect(Set(runs[1].keys) == Set(runs[0].keys))
         #expect(runs[0]["run_id"] as? String == "6F1C2A3B-0000-4000-8000-000000000001")

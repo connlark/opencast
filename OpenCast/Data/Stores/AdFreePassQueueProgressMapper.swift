@@ -37,6 +37,7 @@ struct AdFreePassQueueProgressMapper: Equatable {
         finishedItemCount = queueContext.finishedItemCount
         totalItemCount = max(queueContext.totalItemCount, 1)
 
+        episodeMapper.noteAttempt(of: stage, position: episodePosition)
         let episodeUnits = episodeMapper.update(for: stage, stageElapsed: stageElapsed)
         completedUnitCount = max(completedUnitCount, min(composite(episodeUnits), totalUnitCount))
         return completedUnitCount
@@ -50,10 +51,7 @@ struct AdFreePassQueueProgressMapper: Equatable {
         stageElapsed: TimeInterval
     ) -> Int64 {
         let units = update(for: stage, queueContext: queueContext, stageElapsed: stageElapsed)
-        guard let sliceCeiling = EpisodeAdFreePassProgressMapper.creepCeiling(
-            for: stage,
-            subunitsPerUnit: episodeMapper.subunitsPerUnit
-        ) else {
+        guard let sliceCeiling = episodeMapper.creepCeiling(for: stage) else {
             return units
         }
         completedUnitCount = max(units, min(units + 1, composite(sliceCeiling)))
@@ -70,6 +68,14 @@ struct AdFreePassQueueProgressMapper: Equatable {
         finishedItemCount = 0
         totalItemCount = 1
         completedUnitCount = 0
+    }
+
+    /// This mapper's position in the episode's units. Creep moves
+    /// `completedUnitCount` alone, so the episode mapper is behind it, and a
+    /// handover based there could not move this mapper at all.
+    private var episodePosition: Int64 {
+        let position = completedUnitCount * Int64(totalItemCount) - Int64(finishedItemCount) * totalUnitCount
+        return min(max(position, episodeMapper.completedUnitCount), totalUnitCount)
     }
 
     private func composite(_ episodeUnits: Int64) -> Int64 {

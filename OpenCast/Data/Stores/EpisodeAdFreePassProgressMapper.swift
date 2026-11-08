@@ -9,6 +9,13 @@ struct EpisodeAdFreePassProgressMapper: Equatable {
 
     let subunitsPerUnit: Int64
     private(set) var completedUnitCount: Int64 = 0
+    private var attemptID: String?
+    /// Where a handover's steps begin: this mapper's position when the
+    /// attempt changed. Its slices share what is left of the analyzing band,
+    /// because a new attempt's steps start over and a mapper that never moves
+    /// back would otherwise stall, and the system expires a task that reports
+    /// no progress. `nil` for a run's first attempt.
+    private var attemptBase: Int64?
 
     init(subunitsPerUnit: Int64 = 1) {
         self.subunitsPerUnit = max(subunitsPerUnit, 1)
@@ -22,18 +29,40 @@ struct EpisodeAdFreePassProgressMapper: Equatable {
         for stage: EpisodeAdFreePassStage,
         stageElapsed: TimeInterval = 0
     ) -> Int64 {
+        noteAttempt(of: stage, position: completedUnitCount)
         let mappedUnits = Self.units(
             for: stage,
             stageElapsed: stageElapsed,
             currentUnits: completedUnitCount,
-            subunitsPerUnit: subunitsPerUnit
+            subunitsPerUnit: subunitsPerUnit,
+            attemptBase: attemptBase
         )
         completedUnitCount = max(completedUnitCount, mappedUnits)
         return completedUnitCount
     }
 
+    /// Rebases on `position` when `stage` belongs to a new attempt of the
+    /// run. The queue mapper passes its own position, which holds creep this
+    /// mapper never saw.
+    mutating func noteAttempt(of stage: EpisodeAdFreePassStage, position: Int64) {
+        guard case .analyzing(let steps) = stage, let id = steps?.attemptID else {
+            return
+        }
+        if let attemptID, attemptID != id {
+            attemptBase = position
+        }
+        attemptID = id
+    }
+
+    /// `creepCeiling` for the current attempt.
+    func creepCeiling(for stage: EpisodeAdFreePassStage) -> Int64? {
+        Self.creepCeiling(for: stage, subunitsPerUnit: subunitsPerUnit, attemptBase: attemptBase)
+    }
+
     mutating func reset() {
         completedUnitCount = 0
+        attemptID = nil
+        attemptBase = nil
     }
 
     /// `currentUnits` and the result are on the scale `subunitsPerUnit`
@@ -42,12 +71,13 @@ struct EpisodeAdFreePassProgressMapper: Equatable {
         for stage: EpisodeAdFreePassStage,
         stageElapsed: TimeInterval = 0,
         currentUnits: Int64 = 0,
-        subunitsPerUnit: Int64 = 1
+        subunitsPerUnit: Int64 = 1,
+        attemptBase: Int64? = nil
     ) -> Int64 {
         let subunits = max(subunitsPerUnit, 1)
         switch stage {
         case .analyzing(let steps):
-            return analyzingUnits(steps: steps, stageElapsed: stageElapsed, subunitsPerUnit: subunits)
+            return analyzingUnits(steps: steps, stageElapsed: stageElapsed, subunitsPerUnit: subunits, attemptBase: attemptBase)
         case .awaitingModelDownloadConsent, .failed, .unavailable, .interrupted, .cloudUnavailable, .cloudParked:
             return currentUnits
         default:
@@ -57,11 +87,15 @@ struct EpisodeAdFreePassProgressMapper: Equatable {
 
     /// The highest units an analyzing step's creep may reach: one unit (on
     /// the given scale) short of its slice end. `nil` for any other stage.
-    static func creepCeiling(for stage: EpisodeAdFreePassStage, subunitsPerUnit: Int64 = 1) -> Int64? {
+    static func creepCeiling(
+        for stage: EpisodeAdFreePassStage,
+        subunitsPerUnit: Int64 = 1,
+        attemptBase: Int64? = nil
+    ) -> Int64? {
         guard case .analyzing(let steps) = stage else {
             return nil
         }
-        let slice = analyzingSlice(steps: steps, subunitsPerUnit: max(subunitsPerUnit, 1))
+        let slice = analyzingSlice(steps: steps, subunitsPerUnit: max(subunitsPerUnit, 1), attemptBase: attemptBase)
         return slice.end.map { max(slice.start, $0 - 1) }
     }
 
@@ -122,9 +156,10 @@ struct EpisodeAdFreePassProgressMapper: Equatable {
     private static func analyzingUnits(
         steps: EpisodeAdFreePassAnalysisSteps?,
         stageElapsed: TimeInterval,
-        subunitsPerUnit: Int64
+        subunitsPerUnit: Int64,
+        attemptBase: Int64?
     ) -> Int64 {
-        let slice = analyzingSlice(steps: steps, subunitsPerUnit: subunitsPerUnit)
+        let slice = analyzingSlice(steps: steps, subunitsPerUnit: subunitsPerUnit, attemptBase: attemptBase)
         guard let end = slice.end else {
             return slice.start
         }
@@ -137,13 +172,15 @@ struct EpisodeAdFreePassProgressMapper: Equatable {
     /// The current step's slice; no end once every step is answered.
     private static func analyzingSlice(
         steps: EpisodeAdFreePassAnalysisSteps?,
-        subunitsPerUnit: Int64
+        subunitsPerUnit: Int64,
+        attemptBase: Int64?
     ) -> (start: Int64, end: Int64?) {
         let steps = steps ?? .unknownRun
         let total = Int64(steps.total)
         let completed = Int64(steps.completed)
-        let bandStart = analyzingBandStart * subunitsPerUnit
-        let bandWidth = analyzingBandWidth * subunitsPerUnit
+        let bandEnd = (analyzingBandStart + analyzingBandWidth) * subunitsPerUnit
+        let bandStart = min(max(analyzingBandStart * subunitsPerUnit, attemptBase ?? 0), bandEnd)
+        let bandWidth = bandEnd - bandStart
         let start = bandStart + bandWidth * completed / total
         guard completed < total else {
             return (start, nil)

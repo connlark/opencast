@@ -63,7 +63,7 @@ nonisolated struct AnalysisKeyPresenceGuardTransport: AnalysisProviderTransport 
     }
 
     /// Why the run's key no longer stands, read from the Keychain now.
-    private static func removal(
+    static func removal(
         provider: AnalysisProvider,
         keyDigest: Data,
         keys: any AnalysisProviderKeyStoring

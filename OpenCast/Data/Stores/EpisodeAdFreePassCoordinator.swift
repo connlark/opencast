@@ -2046,10 +2046,10 @@ final class EpisodeAdFreePassCoordinator {
                             if let reason = record.failureKind?.keyRequiredReason {
                                 throw PassStop.keyRequired(reason)
                             }
-                            throw PassFailure(
-                                record.errorMessage
-                                    ?? adAnalyses.lastErrorMessage(for: episodeID)
-                                    ?? FailureMessage.analysisFailed
+                            throw analysisPassFailure(
+                                episodeID: episodeID,
+                                adAnalyses: adAnalyses,
+                                recorded: record.errorMessage ?? adAnalyses.lastErrorMessage(for: episodeID)
                             )
                         }
                         try startAnalysisOrThrowOnSecondAttempt(
@@ -2066,9 +2066,10 @@ final class EpisodeAdFreePassCoordinator {
                         throw PassFailure(unavailableMessage)
                     }
                     guard !didStartAnalysis else {
-                        throw PassFailure(
-                            adAnalyses.lastErrorMessage(for: episodeID)
-                                ?? FailureMessage.analysisFailed
+                        throw analysisPassFailure(
+                            episodeID: episodeID,
+                            adAnalyses: adAnalyses,
+                            recorded: adAnalyses.lastErrorMessage(for: episodeID)
                         )
                     }
                     try startAnalysisOrThrowOnSecondAttempt(
@@ -2108,9 +2109,10 @@ final class EpisodeAdFreePassCoordinator {
             if let reason = adAnalyses.record(for: episodeID)?.failureKind?.keyRequiredReason {
                 throw PassStop.keyRequired(reason)
             }
-            throw PassFailure(
-                adAnalyses.lastErrorMessage(for: episodeID)
-                    ?? FailureMessage.analysisFailed
+            throw analysisPassFailure(
+                episodeID: episodeID,
+                adAnalyses: adAnalyses,
+                recorded: adAnalyses.lastErrorMessage(for: episodeID)
             )
         }
 
@@ -2123,6 +2125,19 @@ final class EpisodeAdFreePassCoordinator {
         )
         didStartAnalysis = true
         publishAnalyzing(steps: analysisSteps(for: episodeID, adAnalyses: adAnalyses))
+    }
+
+    /// How a pass reports a failed run: the card's copy for the kinds that
+    /// have it, or else what the run recorded.
+    private func analysisPassFailure(
+        episodeID: String,
+        adAnalyses: EpisodeAdAnalysisStore,
+        recorded: String?
+    ) -> PassFailure {
+        if let kind = adAnalyses.record(for: episodeID)?.failureKind, kind.passUsesCardCopy {
+            return PassFailure(EpisodePipelineState.analysisFailedMessage(for: kind))
+        }
+        return PassFailure(recorded ?? FailureMessage.analysisFailed)
     }
 
     private func analysisSteps(

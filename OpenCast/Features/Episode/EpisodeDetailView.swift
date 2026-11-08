@@ -201,7 +201,8 @@ struct EpisodeDetailView: View {
             queueSnapshot: appModel.adFreePass.queueSnapshot,
             downloadRecord: downloadRecord,
             transcription: transcription,
-            analysis: analysis
+            analysis: analysis,
+            usesTrialForFreeTier: appModel.adAnalyses.analysisProgress(for: episode.episodeID)?.isFreeTierTrial == true
         )
         let chips = EpisodeMetadataChips.make(
             publishedAt: episode.publishedAt,
@@ -841,7 +842,8 @@ private struct EpisodeDetailPipelineSection: View {
             downloadRecord: downloadRecord,
             downloadLiveProgress: appModel.downloads.byteProgress(for: episodeID),
             transcription: transcription,
-            analysis: analysis
+            analysis: analysis,
+            usesTrialForFreeTier: appModel.adAnalyses.analysisProgress(for: episodeID)?.isFreeTierTrial == true
         ) {
             EpisodePipelineCard(state: state, onAction: onAction)
         }

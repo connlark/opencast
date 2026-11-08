@@ -310,7 +310,8 @@ final class OpenCastAppRuntime {
         return FixedAnalysisKeyTester(
             results: launchConfiguration.uiTestAnalysisKeyTestResults ?? [.accepted],
             delay: .milliseconds(launchConfiguration.uiTestAnalysisKeyTestDelayMilliseconds ?? 0),
-            gate: launchConfiguration.uiTestAnalysisKeyTestGated ? AnalysisKeyTestReleaseGate() : nil
+            gate: launchConfiguration.uiTestAnalysisKeyTestGated ? AnalysisKeyTestReleaseGate() : nil,
+            tierAnswer: launchConfiguration.uiTestAnalysisTransport?.tierAnswer ?? .inconclusive
         )
     }
 

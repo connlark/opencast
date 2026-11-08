@@ -54,6 +54,14 @@ struct EpisodePipelineState: Equatable {
             "Your provider didn't accept the key. Check it in Settings › AI Services."
         case .providerLimited:
             "Your provider is busy or at its limit. Try again later."
+        case .providerDailyLimit:
+            "Your Google key has used its daily limit, which resets at midnight Pacific time."
+        case .providerFreeTier:
+            "Your Google key is on Google's free tier, which is too limited for ad detection. Set up billing for its project in Google AI Studio."
+        case .providerFreeTierRetry:
+            "Your Google key is on Google's free tier, and opencast's trial service couldn't finish this episode right now. Try again later."
+        case .providerFreeTierRunBound:
+            "Your Google key is on Google's free tier, and this run needs more than opencast's trial service allows. Set up billing for the key's project in Google AI Studio."
         case .providerUnavailable:
             "Couldn't reach your provider. Try again."
         case .keyRequiredNoKey:
@@ -80,7 +88,8 @@ struct EpisodePipelineState: Equatable {
         downloadRecord: EpisodeDownloadRecord?,
         downloadLiveProgress: DownloadByteProgress? = nil,
         transcription: EpisodeTranscriptionJobState,
-        analysis: EpisodeAdAnalysisJobState?
+        analysis: EpisodeAdAnalysisJobState?,
+        usesTrialForFreeTier: Bool = false
     ) -> EpisodePipelineState? {
         if queueStatus == .running {
             return activePassState(
@@ -220,7 +229,7 @@ struct EpisodePipelineState: Equatable {
             return EpisodePipelineState(
                 title: analyzingTitle,
                 steps: [EpisodePipelineStep(kind: .detectAds, status: .running(fraction: nil, detail: nil))],
-                footnote: nil,
+                footnote: usesTrialForFreeTier ? AIServicesCopy.freeTierCardFootnote : nil,
                 action: nil
             )
         case .failed(let record, isStale: false):
@@ -275,11 +284,11 @@ struct EpisodePipelineState: Equatable {
                 footnote: nil,
                 action: .cancelPass
             )
-        case .analyzing:
+        case .analyzing(let steps):
             return EpisodePipelineState(
                 title: passTitle,
                 steps: passSteps(download: .done, transcribe: .done, detect: .running(fraction: nil, detail: nil)),
-                footnote: nil,
+                footnote: steps?.isFreeTierTrial == true ? AIServicesCopy.freeTierCardFootnote : nil,
                 action: .cancelPass
             )
         case .cloudQueued:

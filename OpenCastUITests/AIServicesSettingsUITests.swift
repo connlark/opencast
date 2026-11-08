@@ -52,6 +52,7 @@ final class AIServicesSettingsUITests: XCTestCase {
         attachSmokeScreenshot(named: "ai_services_no_keys")
 
         openKeySheet("google", title: "Google Gemini", in: app)
+        assertExists(app.staticTexts["AI Services Google Key Requirement"], named: "billing requirement above the Google key field")
         let save = app.buttons["AI Services Save Key"]
         let test = app.buttons["AI Services Test Key"]
         XCTAssertFalse(save.isEnabled, "Save needs a typed key")
@@ -327,6 +328,68 @@ final class AIServicesSettingsUITests: XCTestCase {
         onlyGemini.tap()
     }
 
+    // MARK: Free tier
+
+    @MainActor
+    func testKeySheetTestShowsTheFreeTierResultAndTheAnswerFollowsTheKey() throws {
+        let app = makeApp(tierAnswer: "free-tier")
+        app.launch()
+        openSettingsScreen("AI Services", in: app)
+        let mark = app.descendants(matching: .any)["AI Services Free Tier Mark"].firstMatch
+
+        openKeySheet("google", title: "Google Gemini", in: app)
+        typeKey(Self.googleFixtureKey, in: app)
+        app.buttons["AI Services Test Key"].tap()
+        assertTestResult(
+            "Key works, but it is on Google's free tier, which is too limited for these features. Set up billing for its project in Google AI Studio.",
+            in: app
+        )
+        attachSmokeScreenshot(named: "ai_services_key_sheet_free_tier")
+
+        // The typed key's answer lands once that same key is saved.
+        app.buttons["AI Services Save Key"].tap()
+        assertDoesNotExist(app.navigationBars["Google Gemini"], named: "key sheet after Save", timeout: 5)
+        assertExists(mark, named: "the mark after saving the tested key", timeout: 5)
+
+        // Turning sync off changes the key in hand, so the answer goes.
+        openKeySheet("google", title: "Google Gemini", in: app)
+        tapToggle(app.switches["AI Services Sync Toggle"], to: false)
+        app.buttons["AI Services Save Key"].tap()
+        assertDoesNotExist(app.navigationBars["Google Gemini"], named: "key sheet after sync off", timeout: 5)
+        assertDoesNotExist(mark, named: "the mark after sync off", timeout: 5)
+    }
+
+    @MainActor
+    func testTestingASavedKeyMarksItAndRemovingTheKeyClearsTheMark() throws {
+        let app = makeApp(seedsGoogleKey: true, tierAnswer: "free-tier")
+        app.launch()
+        openSettingsScreen("AI Services", in: app)
+        let mark = app.descendants(matching: .any)["AI Services Free Tier Mark"].firstMatch
+
+        openKeySheet("google", title: "Google Gemini", in: app)
+        app.buttons["AI Services Test Key"].tap()
+        assertTestResult(
+            "Key works, but it is on Google's free tier, which is too limited for these features. Set up billing for its project in Google AI Studio.",
+            in: app
+        )
+        app.buttons["AI Services Cancel"].tap()
+        assertDoesNotExist(app.navigationBars["Google Gemini"], named: "key sheet after Cancel", timeout: 5)
+        assertExists(mark, named: "the mark after testing the saved key", timeout: 5)
+        attachSmokeScreenshot(named: "ai_services_free_tier_mark")
+
+        openKeySheet("google", title: "Google Gemini", in: app)
+        let remove = app.buttons["AI Services Remove Key"]
+        scrollUntilHittable(remove, in: app)
+        remove.tap()
+        let confirm = app.buttons.matching(
+            NSPredicate(format: "label == %@ AND identifier != %@", "Remove Key", "AI Services Remove Key")
+        ).firstMatch
+        assertHittable(confirm, named: "Remove Key confirmation")
+        confirm.tap()
+        assertDoesNotExist(app.navigationBars["Google Gemini"], named: "key sheet after Remove", timeout: 5)
+        assertDoesNotExist(mark, named: "the mark after removing the key", timeout: 5)
+    }
+
     // MARK: Notice and key screen
 
     @MainActor
@@ -341,28 +404,28 @@ final class AIServicesSettingsUITests: XCTestCase {
         let makeAdFree = app.buttons["Make Ad-Free"]
         assertHittable(makeAdFree, named: "Make Ad-Free")
         makeAdFree.tap()
-        let later = app.buttons["AI Key Notice Later"]
-        assertHittable(later, named: "notice Later button", timeout: 10)
-        assertExists(app.buttons["AI Key Notice Add Key"], named: "notice Add a key button")
+        let ok = app.buttons["AI Key Notice OK"]
+        assertHittable(ok, named: "notice OK button", timeout: 10)
+        assertExists(app.buttons["AI Key Notice Learn More"], named: "notice Learn More button")
         assertDoesNotExist(app.buttons["Detect On This Device"], named: "mode dialog while the notice holds the tap")
         attachSmokeScreenshot(named: "analysis_key_notice")
 
-        later.tap()
-        assertDoesNotExist(later, named: "notice after Later", timeout: 5)
-        assertExists(app.buttons["Detect On This Device"], named: "mode dialog after Later", timeout: 10)
+        ok.tap()
+        assertDoesNotExist(ok, named: "notice after OK", timeout: 5)
+        assertExists(app.buttons["Detect On This Device"], named: "mode dialog after OK", timeout: 10)
         dismissDialog(in: app)
         assertDoesNotExist(app.buttons["Detect On This Device"], named: "mode dialog after dismissal", timeout: 5)
 
         assertHittable(makeAdFree, named: "Make Ad-Free for the second tap")
         makeAdFree.tap()
         assertExists(app.buttons["Detect On This Device"], named: "mode dialog on the second tap", timeout: 10)
-        XCTAssertFalse(app.buttons["AI Key Notice Later"].exists, "The notice shows once")
+        XCTAssertFalse(app.buttons["AI Key Notice OK"].exists, "The notice shows once")
     }
 
     @MainActor
-    func testAnalysisKeyNoticeAddKeyFromGenerateOpensAIServices() throws {
+    func testAnalysisKeyNoticeLearnMoreFromGenerateOpensTheKeysHelp() throws {
         // Generate is offered from the route (the trial, seeded with units
-        // left); Add a key never runs it.
+        // left); Learn More never runs it.
         let app = makeApp(
             trialStatus: "units-left-3",
             seedsLibrary: true,
@@ -375,17 +438,17 @@ final class AIServicesSettingsUITests: XCTestCase {
         let generate = app.buttons["Generate Chapters & Summary"]
         scrollUntilHittable(generate, in: app, maxSwipes: 8)
         generate.tap()
-        let addKey = app.buttons["AI Key Notice Add Key"]
-        assertHittable(addKey, named: "notice Add a key button", timeout: 10)
+        let learnMore = app.buttons["AI Key Notice Learn More"]
+        assertHittable(learnMore, named: "notice Learn More button", timeout: 10)
         attachSmokeScreenshot(named: "analysis_key_notice_generate")
-        addKey.tap()
+        learnMore.tap()
 
-        assertScreen("AI Services", named: "AI Services after Add a key", in: app, timeout: 10)
+        assertExists(app.staticTexts["Using your own API key"], named: "the ai-keys help topic", timeout: 10)
         assertDoesNotExist(
             app.staticTexts["Generate Chapters & Summary?"],
-            named: "generate disclosure after Add a key"
+            named: "generate disclosure after Learn More"
         )
-        attachSmokeScreenshot(named: "analysis_key_notice_opened_ai_services")
+        attachSmokeScreenshot(named: "analysis_key_notice_opened_help")
     }
 
     @MainActor
@@ -426,7 +489,8 @@ final class AIServicesSettingsUITests: XCTestCase {
         presentsKeyRequiredFor feature: String? = nil,
         seedsLibrary: Bool = false,
         seedsCompletedTranscript: Bool = false,
-        forcesKeyNotice: Bool = false
+        forcesKeyNotice: Bool = false,
+        tierAnswer: String? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += ["--opencast-ui-testing", "--opencast-force-dark-mode"]
@@ -472,6 +536,9 @@ final class AIServicesSettingsUITests: XCTestCase {
         }
         if forcesKeyNotice {
             app.launchArguments.append("--opencast-force-analysis-key-notice")
+        }
+        if let tierAnswer {
+            app.launchArguments.append("--opencast-ui-test-analysis-tier=\(tierAnswer)")
         }
         return app
     }

@@ -88,6 +88,12 @@ nonisolated struct AnalysisRunRecord: Codable, Sendable, Hashable, Identifiable 
     /// launch.
     var usageRecorded: Bool?
     var finishedAt: Date?
+    /// The run used the trial service because Google named the key free
+    /// tier. Operational: a resumed run keeps its failure policy from it.
+    var freeTier: Bool?
+    /// The direct run this one took over from, when there was one.
+    /// Operational: it decides which of two open records remains.
+    var handoverOf: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -115,6 +121,8 @@ nonisolated struct AnalysisRunRecord: Codable, Sendable, Hashable, Identifiable 
         case background
         case usageRecorded = "usage_recorded"
         case finishedAt = "finished_at"
+        case freeTier = "free_tier"
+        case handoverOf = "handover_of"
     }
 }
 
@@ -129,7 +137,9 @@ nonisolated extension AnalysisRunRecord {
         inputDigest: String? = nil,
         resolution: AnalysisRouteResolution,
         policy: AnalysisRoutePolicy,
-        startedAt: Date = .now
+        startedAt: Date = .now,
+        freeTier: Bool? = nil,
+        handoverOf: String? = nil
     ) {
         self.id = id
         self.feature = feature
@@ -151,6 +161,8 @@ nonisolated extension AnalysisRunRecord {
         outputTokens = 0
         pacedSeconds = 0
         exchangeSeconds = 0
+        self.freeTier = freeTier
+        self.handoverOf = handoverOf
     }
 }
 

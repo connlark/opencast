@@ -12,6 +12,8 @@ enum EpisodeAdAnalysisError: LocalizedError, Sendable, Equatable {
     case keyRequired(AnalysisKeyRequiredReason)
     /// A run that did not survive the last process could not resume.
     case runInterrupted
+    /// Google named the key free tier and the run ended; the kind says how.
+    case freeTierFailure(EpisodeAnalysisFailureKind)
 
     var errorDescription: String? {
         switch self {
@@ -33,6 +35,8 @@ enum EpisodeAdAnalysisError: LocalizedError, Sendable, Equatable {
             "Promo/ad analysis needs a key in Settings › AI Services (\(reason.rawValue))."
         case .runInterrupted:
             "Promo/ad analysis was interrupted."
+        case .freeTierFailure(let kind):
+            "Promo/ad analysis failed (\(kind.rawValue))."
         }
     }
 }

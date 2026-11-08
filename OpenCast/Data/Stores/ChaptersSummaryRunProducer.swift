@@ -216,7 +216,11 @@ final class ChaptersSummaryRunProducer: ChaptersSummaryProducing {
             if let reason = dependencies.keyRemoval(request.runID) ?? (listenerFailure == .keyRequired ? .noKey : nil) {
                 return .failed(ChaptersSummaryFailureMapping.failure(keyRequired: reason))
             }
-            let mapped = ChaptersSummaryFailureMapping.failure(failure, listenerFailure: listenerFailure)
+            let mapped = ChaptersSummaryFailureMapping.failure(
+                failure,
+                listenerFailure: listenerFailure,
+                namedFreeTier: sends.contains { $0.freeTier && !$0.cancelled }
+            )
             if let reason = mapped.kind.keyRequiredReason {
                 if reason == .trialExhausted || reason == .trialPaused {
                     dependencies.refreshTrialStatus()

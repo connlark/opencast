@@ -756,7 +756,7 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(presentation.primaryActionTitle == "Resume")
     }
 
-    @Test("An analysis failure surfaces its message as a per-episode failure")
+    @Test("An analysis failure surfaces the card's words as a per-episode failure, never the recorded code")
     func analysisFailureSurfacesMessage() async throws {
         let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
         analysisEnvironment.answer = .failure(.rejected(status: 400), status: 400, listener: .invalidKey)
@@ -765,12 +765,7 @@ struct EpisodeAdFreePassCoordinatorTests {
             analysisEnvironment: analysisEnvironment
         )
         let episode = makeEpisode(episodeID: "ad-free-provider-error")
-        let expectedMessage = EpisodeAdAnalysisHTTPError(
-            statusCode: 503,
-            code: "gemini_http_error",
-            detail: nil,
-            listenerFailure: .invalidKey
-        ).localizedDescription
+        let expectedMessage = EpisodePipelineState.analysisFailedMessage(for: .providerRejectedKey)
 
         fixture.enqueue(episode)
 
@@ -828,6 +823,257 @@ struct EpisodeAdFreePassCoordinatorTests {
         let expectedMessage = "Your free analyses are used. Add a key in Settings › AI Services."
         #expect(fixture.presentation(for: first).stage == .failed(message: expectedMessage))
         #expect(fixture.presentation(for: first).primaryActionTitle == "Retry")
+    }
+
+    @Test(
+        "A pass that ends on a free-tier key or a daily limit says so in the card's words, and never stops as needing a key",
+        arguments: [
+            (
+                ScriptedAdAnswer.freeTierFailure(.quotaExhausted, listener: .billingOrQuota),
+                "Your Google key is on Google's free tier, which is too limited for ad detection. Set up billing for its project in Google AI Studio."
+            ),
+            (
+                .failure(.quotaExhausted, status: 429, listener: .dailyLimit),
+                "Your Google key has used its daily limit, which resets at midnight Pacific time."
+            ),
+        ]
+    )
+    func freeTierEndingNeverStopsAsKeyRequired(answer: ScriptedAdAnswer, message: String) async throws {
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.answer = answer
+        analysisEnvironment.tierAnswer = .notFreeTier
+        let fixture = try await makeFixture(
+            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
+            analysisEnvironment: analysisEnvironment
+        )
+        var presentedReasons: [AnalysisKeyRequiredReason] = []
+        fixture.coordinator.onKeyRequired = { presentedReasons.append($0) }
+        let episode = makeEpisode(episodeID: "free-tier-pass")
+
+        fixture.enqueue(episode)
+        #expect(await waitUntil { fixture.coordinator.queueState == .idle })
+
+        #expect(presentedReasons.isEmpty)
+        #expect(analysisEnvironment.presentedReasons.isEmpty)
+        #expect(fixture.presentation(for: episode).stage == .failed(message: message))
+        #expect(fixture.coordinator.drainOutcomes.first?.kind == .failed(message: message))
+    }
+
+    /// A queue of two: the first hands over after Google names the free tier
+    /// and ends as `trialEnding` says, and the second must still run.
+    private func passOverHandover(
+        _ analysisEnvironment: ScriptedAdAnalysisRunEnvironment,
+        trialEnding: ScriptedAdAnswer?,
+        prepare: (QueueFixture, EpisodeListItemSnapshot) -> Void = { _, _ in }
+    ) async throws -> (fixture: QueueFixture, first: EpisodeListItemSnapshot, second: EpisodeListItemSnapshot, presented: () -> [AnalysisKeyRequiredReason]) {
+        analysisEnvironment.handoverWindowOpen = true
+        analysisEnvironment.googleKeyTier = .notFreeTier
+        let refusal = ScriptedAdAnswer.freeTierFailure(.quotaExhausted, listener: .billingOrQuota)
+        analysisEnvironment.answerForRun = { run in
+            switch run {
+            case 1: refusal
+            case 2: trialEnding ?? .sponsorRead
+            default: .sponsorRead
+            }
+        }
+        let fixture = try await makeFixture(
+            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
+            analysisEnvironment: analysisEnvironment
+        )
+        var presentedReasons: [AnalysisKeyRequiredReason] = []
+        fixture.coordinator.onKeyRequired = { presentedReasons.append($0) }
+        let first = makeEpisode(episodeID: "handover-pass-1")
+        let second = makeEpisode(episodeID: "handover-pass-2")
+        prepare(fixture, first)
+
+        fixture.enqueue(first)
+        fixture.enqueue(second)
+        #expect(await waitUntil { fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 2 })
+        return (fixture, first, second, { presentedReasons })
+    }
+
+    private func expectDrainWentOn(_ fixture: QueueFixture, past first: EpisodeListItemSnapshot, to second: EpisodeListItemSnapshot) {
+        #expect(fixture.coordinator.drainOutcomes.map(\.episodeID) == [first.episodeID, second.episodeID])
+        #expect(fixture.adAnalyses.record(for: second.episodeID)?.state == .completed)
+    }
+
+    @Test(
+        "Every ending of a handed-over trial run gives its kind through a pass, with no key screen, and the drain goes on",
+        arguments: [
+            (AnalysisProviderFailure.trialExhausted, EpisodeAnalysisFailureKind.providerFreeTier),
+            (.trialPaused, .providerFreeTierRetry),
+            (.trialUnavailable, .providerFreeTierRetry),
+            (.unreachable, .providerFreeTierRetry),
+            (.rateLimited, .providerFreeTierRetry),
+            (.overloaded, .providerFreeTierRetry),
+            (.trialRunBound, .providerFreeTierRunBound),
+            (.invalidKey, .providerFreeTierRetry),
+            (.billingOrQuota, .providerFreeTierRetry),
+            (.dailyLimit, .providerFreeTierRetry),
+            (.modelUnavailable, .providerFreeTierRetry),
+            (.requestRejected, .generic),
+            (.keyRequired, .generic),
+            (.timeout, .timedOut),
+            (.malformedAnswer, .generic),
+        ]
+    )
+    func handedOverTrialEndingsThroughThePass(listener: AnalysisProviderFailure, kind: EpisodeAnalysisFailureKind) async throws {
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.handoverAnswer = .available
+
+        let (fixture, first, second, presented) = try await passOverHandover(
+            analysisEnvironment,
+            trialEnding: .failure(.rejected(status: 400), status: 400, listener: listener)
+        )
+
+        #expect(presented().isEmpty, "\(listener)")
+        #expect(analysisEnvironment.presentedReasons.isEmpty, "\(listener)")
+        let record = fixture.adAnalyses.record(for: first.episodeID)
+        #expect(record?.failureKind == kind, "\(listener)")
+        #expect(record?.failureKind?.keyRequiredReason == nil, "\(listener)")
+        guard case .failed(let message) = fixture.coordinator.drainOutcomes.first?.kind else {
+            Issue.record("the pass did not fail: \(listener)")
+            return
+        }
+        #expect(!message.contains("providerFreeTier"), "\(listener)")
+        expectDrainWentOn(fixture, past: first, to: second)
+    }
+
+    @Test(
+        "A handover that cannot start gives its kind through a pass, with no key screen, and the drain goes on",
+        arguments: [
+            (ScriptedAdAnalysisRunEnvironment.HandoverAnswer.notOpen, EpisodeAnalysisFailureKind.providerFreeTier),
+            (.unavailable, .providerFreeTierRetry),
+        ]
+    )
+    func handoverThatCannotStartThroughThePass(handover: ScriptedAdAnalysisRunEnvironment.HandoverAnswer, kind: EpisodeAnalysisFailureKind) async throws {
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.handoverAnswer = handover
+
+        // No trial transport is built, so the second item's run is the second.
+        let (fixture, first, second, presented) = try await passOverHandover(analysisEnvironment, trialEnding: nil)
+
+        #expect(presented().isEmpty)
+        #expect(analysisEnvironment.presentedReasons.isEmpty)
+        #expect(fixture.adAnalyses.record(for: first.episodeID)?.failureKind == kind)
+        expectDrainWentOn(fixture, past: first, to: second)
+    }
+
+    @Test("A handover record that cannot be written ends a pass as generic, with no key screen, and the drain goes on")
+    func handoverRecordCannotBeWrittenThroughThePass() async throws {
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.handoverAnswer = .available
+        let runsDirectory = analysisEnvironment.runs.directory
+        // A file where the records go makes the next write fail.
+        analysisEnvironment.onHandover = {
+            try? FileManager.default.removeItem(at: runsDirectory)
+            FileManager.default.createFile(atPath: runsDirectory.path(percentEncoded: false), contents: Data())
+        }
+        // The next item's check comes before its record, so only the handover's
+        // write fails, and a drain that stopped could not hide behind a second one.
+        analysisEnvironment.onTierCheck = { try? FileManager.default.removeItem(at: runsDirectory) }
+
+        let (fixture, first, second, presented) = try await passOverHandover(analysisEnvironment, trialEnding: nil)
+
+        #expect(presented().isEmpty)
+        #expect(analysisEnvironment.presentedReasons.isEmpty)
+        #expect(fixture.adAnalyses.record(for: first.episodeID)?.failureKind == .generic)
+        // Nothing was handed over: the first item's direct run, then the second's.
+        #expect(analysisEnvironment.transportRunIDs.count == 2)
+        #expect(analysisEnvironment.runs.records(limit: 10).allSatisfy { $0.route == .direct })
+        guard case .failed = fixture.coordinator.drainOutcomes.first?.kind else {
+            Issue.record("the pass did not fail")
+            return
+        }
+        expectDrainWentOn(fixture, past: first, to: second)
+    }
+
+    @Test("A good trial answer whose document cannot be installed ends a pass as generic, with no key screen, and the drain goes on")
+    func failedInstallThroughThePass() async throws {
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.handoverAnswer = .available
+
+        let (fixture, first, second, presented) = try await passOverHandover(analysisEnvironment, trialEnding: nil) { fixture, first in
+            // A directory where the document goes. Its path comes from the
+            // transcript the pass makes, so it is known once the record is.
+            let fileStore = EpisodeAdAnalysisFileStore(baseDirectory: fixture.transcriptFileStore.baseDirectory)
+            let adAnalyses = fixture.adAnalyses
+            let episodeID = first.episodeID
+            analysisEnvironment.onHandover = {
+                guard let path = adAnalyses.record(for: episodeID)?.analysisRelativePath else {
+                    Issue.record("the episode has no record at the handover")
+                    return
+                }
+                let blocker = fileStore.fileURL(relativePath: path)
+                try? FileManager.default.createDirectory(at: blocker, withIntermediateDirectories: true)
+                try? Data("blocker".utf8).write(to: blocker.appending(path: "occupied"))
+            }
+        }
+
+        #expect(presented().isEmpty)
+        #expect(analysisEnvironment.presentedReasons.isEmpty)
+        #expect(fixture.adAnalyses.record(for: first.episodeID)?.failureKind == .generic)
+        // The trial answered and its run stays open, so a later start pays nothing.
+        let trial = analysisEnvironment.runs.records(limit: 10).first { $0.route == .trial }
+        #expect(trial?.state == .dispatched)
+        guard case .failed = fixture.coordinator.drainOutcomes.first?.kind else {
+            Issue.record("the pass did not fail")
+            return
+        }
+        expectDrainWentOn(fixture, past: first, to: second)
+    }
+
+    @Test(
+        "A failed pass puts the card's words on the queue row for every provider failure a run ends with, and the record keeps its code",
+        arguments: [
+            (AnalysisProviderFailure.rateLimited, EpisodeAnalysisFailureKind.providerLimited),
+            (.overloaded, .providerLimited),
+            (.invalidKey, .providerRejectedKey),
+            (.billingOrQuota, .providerRejectedKey),
+            (.dailyLimit, .providerDailyLimit),
+            (.modelUnavailable, .providerUnavailable),
+            (.unreachable, .providerUnavailable),
+            (.timeout, .timedOut),
+        ]
+    )
+    func providerFailureRowUsesTheCardsWords(listener: AnalysisProviderFailure, kind: EpisodeAnalysisFailureKind) async throws {
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.answer = .failure(.rejected(status: 400), status: 400, listener: listener)
+        let fixture = try await makeFixture(
+            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
+            analysisEnvironment: analysisEnvironment
+        )
+        let episode = makeEpisode(episodeID: "card-words-\(listener.rawValue)")
+
+        fixture.enqueue(episode)
+        #expect(await waitUntil { fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 1 })
+
+        let record = fixture.adAnalyses.record(for: episode.episodeID)
+        #expect(record?.failureKind == kind, "\(listener)")
+        #expect(record?.errorMessage?.contains(listener.rawValue) == true, "\(listener)")
+        let card = EpisodePipelineState.analysisFailedMessage(for: kind)
+        let queue = AdDetectionQueuePresentation(snapshot: fixture.coordinator.queueSnapshot, isBackgroundSessionArmed: false)
+        #expect(queue.finishedRows.map(\.statusText) == [card], "\(listener)")
+        #expect(!card.contains(listener.rawValue), "\(listener)")
+    }
+
+    @Test("A failure with no card message of its own keeps the recorded text on the queue row")
+    func genericFailureRowKeepsTheRecordedText() async throws {
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.answer = .failure(.rejected(status: 400), status: 400, listener: .requestRejected)
+        let fixture = try await makeFixture(
+            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
+            analysisEnvironment: analysisEnvironment
+        )
+        let episode = makeEpisode(episodeID: "card-words-generic")
+
+        fixture.enqueue(episode)
+        #expect(await waitUntil { fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 1 })
+
+        let record = try #require(fixture.adAnalyses.record(for: episode.episodeID))
+        #expect(record.failureKind == .generic)
+        let queue = AdDetectionQueuePresentation(snapshot: fixture.coordinator.queueSnapshot, isBackgroundSessionArmed: false)
+        #expect(queue.finishedRows.map(\.statusText) == [try #require(record.errorMessage)])
     }
 
     @Test("An automatic item that needs a key ends silently, with its reason on the queue")
@@ -1099,7 +1345,8 @@ struct EpisodeAdFreePassCoordinatorTests {
         fixture.enqueue(episode)
         #expect(await waitUntil { analysisEnvironment.sends.count == 1 })
         // One window and, while the run goes, the step still to come.
-        let started = EpisodeAdFreePassStage.analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 0, total: 2))
+        let attemptID = try #require(analysisEnvironment.latestRun).id
+        let started = EpisodeAdFreePassStage.analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 0, total: 2, attemptID: attemptID))
         #expect(await waitUntil { fixture.coordinator.currentStage == started })
         #expect(fixture.coordinator.queueSnapshot.fractionCompleted == 0.91)
 
@@ -1133,7 +1380,8 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(await waitUntil { analysisEnvironment.sends.count(of: .adRepair(index: 0)) == 1 })
 
         // The window's reply counted it answered; the repair is still out.
-        let repairing = EpisodeAdFreePassStage.analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 1, total: 2))
+        let attemptID = try #require(analysisEnvironment.latestRun).id
+        let repairing = EpisodeAdFreePassStage.analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 1, total: 2, attemptID: attemptID))
         #expect(await waitUntil { fixture.coordinator.currentStage == repairing })
         #expect(fixture.coordinator.queueSnapshot.fractionCompleted == 0.942)
         #expect(await waitUntil { handle.adFreeUnits == 942 })

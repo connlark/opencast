@@ -34,9 +34,13 @@ final class ScriptedHTTPClient: AnalysisHTTPClient {
     }
 
     private let state: Mutex<(steps: [Step], requests: [AnalysisHTTPRequest], timeouts: [Double])>
+    private let cancelsCaller: Bool
 
-    init(_ steps: [Step]) {
+    /// `cancelsCaller` cancels the calling task during each send; its reply
+    /// arrives anyway.
+    init(_ steps: [Step], cancelsCaller: Bool = false) {
         state = Mutex((steps, [], []))
+        self.cancelsCaller = cancelsCaller
     }
 
     convenience init(status: Int, body: String, retryAfter: String? = nil) {
@@ -55,6 +59,9 @@ final class ScriptedHTTPClient: AnalysisHTTPClient {
             state.requests.append(request)
             state.timeouts.append(timeoutSeconds)
             return state.steps.isEmpty ? nil : state.steps.removeFirst()
+        }
+        if cancelsCaller {
+            withUnsafeCurrentTask { $0?.cancel() }
         }
         switch step {
         case .respond(let response)?:

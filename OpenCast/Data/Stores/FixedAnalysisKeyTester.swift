@@ -11,16 +11,23 @@ nonisolated struct FixedAnalysisKeyTester: AnalysisKeyTesting {
     let results: [AnalysisKeyTestResult]
     let delay: Duration
     let gate: AnalysisKeyTestReleaseGate?
+    let tierAnswer: AnalysisTierCheckResult
     private let calls = CallCounter()
 
     init(result: AnalysisKeyTestResult = .accepted, delay: Duration = .zero) {
         self.init(results: [result], delay: delay)
     }
 
-    init(results: [AnalysisKeyTestResult], delay: Duration = .zero, gate: AnalysisKeyTestReleaseGate? = nil) {
+    init(
+        results: [AnalysisKeyTestResult],
+        delay: Duration = .zero,
+        gate: AnalysisKeyTestReleaseGate? = nil,
+        tierAnswer: AnalysisTierCheckResult = .inconclusive
+    ) {
         self.results = results.isEmpty ? [.accepted] : results
         self.delay = delay
         self.gate = gate
+        self.tierAnswer = tierAnswer
     }
 
     func test(_ key: AnalysisProviderKey, provider: AnalysisProvider, snapshot: AnalysisPolicySnapshot) async -> AnalysisKeyTestResult {
@@ -35,6 +42,10 @@ nonisolated struct FixedAnalysisKeyTester: AnalysisKeyTesting {
             }.value
         }
         return results[min(call, results.count) - 1]
+    }
+
+    func checkTier(_ key: AnalysisProviderKey, snapshot: AnalysisPolicySnapshot) async -> AnalysisTierCheckResult {
+        tierAnswer
     }
 }
 

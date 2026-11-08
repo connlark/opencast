@@ -6,12 +6,68 @@ import OpenCastAnalysis
 /// named as such. Every other exchange takes the pipeline-facing error from
 /// ``GeminiErrorClassifier`` unchanged (the analysis services' rules), and
 /// the listener-facing case from the error envelope's status, message and
-/// detail reasons.
+/// detail reasons. Whether the answer names the free tier is read apart from
+/// all of that (``namesFreeTier(status:body:)``).
 public enum GeminiProviderErrors {
-    public static func classify(status: Int, retryAfter: String?, body: String) -> AnalysisProviderErrorClassification {
+    /// - Parameter freeTierIsFinal: A free-tier answer ends the attempt: its
+    ///   transport error becomes `.quotaExhausted`, so it is neither retried
+    ///   nor paced. When false the transport and listener cases are exactly
+    ///   what they would be without the free-tier reading.
+    public static func classify(
+        status: Int,
+        retryAfter: String?,
+        body: String,
+        freeTierIsFinal: Bool = false
+    ) -> AnalysisProviderErrorClassification {
         // The provider bound holds for error bodies too: one nested past it
         // is classified by its status alone.
         let body = ProviderJSON.refusesBody(body) ? "" : body
+        var classification = classifyExchange(status: status, retryAfter: retryAfter, body: body)
+        classification.freeTier = namesFreeTier(status: status, body: body)
+        if classification.freeTier, freeTierIsFinal {
+            classification.transport = .quotaExhausted
+        }
+        return classification
+    }
+
+    /// Whether a reply is Google saying the key is on its free tier: a 429
+    /// `RESOURCE_EXHAUSTED` whose `QuotaFailure` lists at least one violation
+    /// with a `quotaId` containing `FreeTier` or a `quotaMetric` containing
+    /// `free_tier`. Unlike ``QuotaDetails`` it does not need the interval,
+    /// the allocation or a delay: the recorded refusals say "limit: 0" and
+    /// carry no `quotaValue`. The envelope itself must be readable as
+    /// ``QuotaDetails`` reads it, because this answer can move a run off the
+    /// listener's key: the message (when present) is a string, every detail
+    /// an object with a string `@type`, and every `QuotaFailure` holds a list
+    /// of violations that are all objects. An empty list is readable and
+    /// names nothing, so it neither refuses nor makes the answer. Anything
+    /// else is not free tier.
+    public static func namesFreeTier(status: Int, body: String) -> Bool {
+        guard status == 429, !ProviderJSON.refusesBody(body),
+              let error = ProviderJSON.parse(body)?["error"],
+              error["status"]?.stringValue == "RESOURCE_EXHAUSTED",
+              ProviderJSON.isAbsent(error["message"]) || error["message"]?.stringValue != nil,
+              let details = error["details"]?.arrayValue
+        else {
+            return false
+        }
+        var named = false
+        for detail in details {
+            guard case .object = detail, let type = detail["@type"]?.stringValue else { return false }
+            guard type == "type.googleapis.com/google.rpc.QuotaFailure" else { continue }
+            guard let violations = detail["violations"]?.arrayValue else { return false }
+            for violation in violations {
+                guard case .object = violation else { return false }
+                if violation["quotaId"]?.stringValue?.contains("FreeTier") == true
+                    || violation["quotaMetric"]?.stringValue?.contains("free_tier") == true {
+                    named = true
+                }
+            }
+        }
+        return named
+    }
+
+    private static func classifyExchange(status: Int, retryAfter: String?, body: String) -> AnalysisProviderErrorClassification {
         if status == 429, let quota = QuotaDetails(body) {
             switch quota.interval {
             case .minute:

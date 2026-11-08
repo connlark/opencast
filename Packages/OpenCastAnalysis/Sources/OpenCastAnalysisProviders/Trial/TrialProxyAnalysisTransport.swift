@@ -161,9 +161,13 @@ public struct TrialProxyAnalysisTransport: AnalysisProviderTransport {
 
     /// Classifies a non-2xx reply: the service's own refusals by their code,
     /// everything else (Gemini's errors, passed through) by the Gemini table.
+    /// A passed-through error is about opencast's key, never the listener's,
+    /// so a trial run cannot produce a free-tier answer.
     public static func classify(status: Int, retryAfter: String?, body: String) -> AnalysisProviderErrorClassification {
         guard let refusal = TrialProxyRefusal(body: body) else {
-            return GeminiProviderErrors.classify(status: status, retryAfter: retryAfter, body: body)
+            var classification = GeminiProviderErrors.classify(status: status, retryAfter: retryAfter, body: body)
+            classification.freeTier = false
+            return classification
         }
         let rejected = AnalysisTransportError.rejected(status: status)
         switch refusal.code {

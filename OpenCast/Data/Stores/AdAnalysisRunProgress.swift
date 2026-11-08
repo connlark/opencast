@@ -13,13 +13,19 @@ nonisolated struct AdAnalysisRunProgress: Sendable, Hashable {
     /// plus the longest pause between them. Progress paces its creep inside
     /// a step over this, so a slow step never reaches its end early.
     let stepBudgetSeconds: Double
+    /// The run record these steps count for.
+    let attemptID: String?
+    /// The run uses the trial service because Google named the key free tier.
+    let isFreeTierTrial: Bool
     private var answered: Set<AnalysisProviderRequest.Purpose> = []
     private var repairs: Set<Int> = []
     private let windowCount: Int
 
     /// `model` is the entry the run uses; without one, the slowest entry
     /// the baked bundle qualifies for ad detection.
-    init(windowCount: Int, model: AnalysisModelEntry? = nil) {
+    init(windowCount: Int, model: AnalysisModelEntry? = nil, attemptID: String? = nil, isFreeTierTrial: Bool = false) {
+        self.attemptID = attemptID
+        self.isFreeTierTrial = isFreeTierTrial
         self.windowCount = max(windowCount, 1)
         total = self.windowCount
         stepBudgetSeconds = Self.stepBudgetSeconds(

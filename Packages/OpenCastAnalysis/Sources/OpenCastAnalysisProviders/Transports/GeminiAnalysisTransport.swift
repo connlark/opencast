@@ -11,6 +11,13 @@ public struct GeminiAnalysisTransport: AnalysisKeyedTransport {
     private let urls: AnalysisProviderURLs
     private let key: AnalysisProviderKey
     private let exchange: AnalysisProviderExchange
+    private let freeTierIsFinal: Bool
+
+    /// The model the tier check asks when the bundle names none: an alias
+    /// Google does not offer on its free tier, which outlives model versions.
+    public static let tierCheckModelID = "gemini-pro-latest"
+    /// Fixed, so the check carries none of the listener's content.
+    static let tierCheckBody = #"{"contents":[{"parts":[{"text":"Reply with the single word OK."}],"role":"user"}],"generationConfig":{"maxOutputTokens":16}}"#
 
     /// - Parameters:
     ///   - endpoint: The bundle's `providers.google`; refused unless it is
@@ -19,6 +26,8 @@ public struct GeminiAnalysisTransport: AnalysisKeyedTransport {
     ///   - observer: Receives a record of every send.
     ///   - preDispatch: Runs after the pacer admits each send, right before
     ///     it leaves; a refusal fails the send unsent.
+    ///   - freeTierIsFinal: A 429 naming the free tier ends the attempt
+    ///     instead of being retried or paced.
     public init(
         endpoint: AnalysisProviderEndpoint,
         key: AnalysisProviderKey,
@@ -27,10 +36,12 @@ public struct GeminiAnalysisTransport: AnalysisKeyedTransport {
         observer: (any AnalysisProviderSendObserver)? = nil,
         logger: RedactingLogger = RedactingLogger(),
         clock: any AnalysisClock = AnalysisSystemClock(),
-        preDispatch: AnalysisPreDispatchCheck? = nil
+        preDispatch: AnalysisPreDispatchCheck? = nil,
+        freeTierIsFinal: Bool = false
     ) throws(AnalysisProviderConfigurationError) {
         urls = try AnalysisProviderURLs(provider: .google, endpoint: endpoint)
         self.key = key
+        self.freeTierIsFinal = freeTierIsFinal
         exchange = AnalysisProviderExchange(
             provider: .google,
             client: client,
@@ -48,7 +59,9 @@ public struct GeminiAnalysisTransport: AnalysisKeyedTransport {
             request,
             http: generateRequest(request),
             interpret: Self.interpret,
-            classify: GeminiProviderErrors.classify
+            classify: { status, retryAfter, body in
+                GeminiProviderErrors.classify(status: status, retryAfter: retryAfter, body: body, freeTierIsFinal: freeTierIsFinal)
+            }
         )
     }
 
@@ -105,6 +118,26 @@ public struct GeminiAnalysisTransport: AnalysisKeyedTransport {
             guard !(200..<300).contains(reply.status) else { return .accepted }
             return .failed(GeminiProviderErrors.classify(status: reply.status, retryAfter: reply.retryAfter, body: reply.text).listener)
         }
+    }
+
+    /// One tiny `generateContent` to a model Google does not offer on its
+    /// free tier: refused at no charge for a free-tier key, billed about 20
+    /// tokens to a paid one. `countTokens` cannot tell them apart, because it
+    /// is not a model request. Anything but a clean refusal or a success says
+    /// nothing about the tier, and neither does a reply to a cancelled task,
+    /// however it reads. Unpaced and outside any run; a caller that can be
+    /// cancelled still checks that itself, since inconclusive does not say
+    /// why.
+    public func checkTier() async -> AnalysisTierCheckResult {
+        let modelID = urls.endpoint.tierCheckModel ?? Self.tierCheckModelID
+        guard !Task.isCancelled, let url = urls.url(path: urls.endpoint.generatePath, modelID: modelID) else {
+            return .inconclusive
+        }
+        let http = AnalysisHTTPRequest(method: "POST", url: url, headers: headers, body: Data(Self.tierCheckBody.utf8))
+        let exchanged = await exchange.auxiliary(http)
+        guard !Task.isCancelled, case .success(let reply) = exchanged else { return .inconclusive }
+        if (200..<300).contains(reply.status) { return .notFreeTier }
+        return GeminiProviderErrors.namesFreeTier(status: reply.status, body: reply.text) ? .freeTier : .inconclusive
     }
 
     private var headers: [AnalysisHTTPHeader] {

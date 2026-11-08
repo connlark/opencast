@@ -190,4 +190,78 @@ struct EpisodeAdFreePassProgressMapperTests {
             currentText: nil
         )
     }
+
+    @Test("A handover's steps fill what is left of the band above this mapper's position")
+    func handoverFillsTheRestOfTheBand() {
+        var mapper = EpisodeAdFreePassProgressMapper()
+        // 910 + 65 × 4/6.
+        let shown = mapper.update(for: .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 4, total: 6, attemptID: "direct")))
+        #expect(shown == 953)
+
+        #expect(mapper.update(for: .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 0, total: 11, attemptID: "handover"))) == 953)
+        // 953 + 22 × 4/11: a fresh 4 of 10 sits above 4/6, not below it.
+        #expect(mapper.update(for: .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 4, total: 11, attemptID: "handover"))) == 961)
+        #expect(mapper.update(for: .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 11, total: 11, attemptID: "handover"))) == 975)
+    }
+
+    @Test("On the fine scale a handover starts from this mapper's creep, not from the step, and moves on every tick")
+    func handoverStartsFromTheCreepOnTheFineScale() {
+        var mapper = EpisodeAdFreePassProgressMapper(subunitsPerUnit: 1_000)
+        let direct = EpisodeAdFreePassStage.analyzing(
+            steps: EpisodeAdFreePassAnalysisSteps(completed: 4, total: 6, stepBudgetSeconds: 250, attemptID: "direct")
+        )
+        func handover(_ completed: Int) -> EpisodeAdFreePassStage {
+            .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: completed, total: 11, stepBudgetSeconds: 250, attemptID: "handover"))
+        }
+        // 910,000 + 65,000 × 4/6.
+        #expect(mapper.update(for: direct) == 953_333)
+        // Half the step's budget: 953,333 + 10,832 × 1/2, where 10,832 is the
+        // room below the slice end of 964,166.
+        let crept = mapper.update(for: direct, stageElapsed: 125)
+        #expect(crept == 958_749)
+
+        #expect(mapper.update(for: handover(0)) == crept)
+        // 958,749 + 16,251 × 1/11, one short; from the step alone it would be
+        // 955,302 less one, already below where this mapper stands.
+        #expect(mapper.creepCeiling(for: handover(0)) == 960_225)
+
+        var previous = crept
+        for completed in 0...4 {
+            for tick in 1...125 {
+                let units = mapper.update(for: handover(completed), stageElapsed: Double(tick * 2))
+                #expect(units > previous, "step \(completed), tick \(tick)")
+                previous = units
+            }
+        }
+    }
+
+    @Test("A handover's creep ceiling comes from the same base as its slices")
+    func handoverCreepCeilingSharesTheBase() {
+        var mapper = EpisodeAdFreePassProgressMapper()
+        _ = mapper.update(for: .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 4, total: 6, attemptID: "direct")))
+        let handover = EpisodeAdFreePassStage.analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 0, total: 11, attemptID: "handover"))
+        _ = mapper.update(for: handover)
+
+        // 953 + 22 × 1/11, one short.
+        #expect(mapper.creepCeiling(for: handover) == 954)
+    }
+
+    @Test("A run's first attempt starts from the band, whatever its identity")
+    func firstAttemptDoesNotRebase() {
+        var mapper = EpisodeAdFreePassProgressMapper()
+        _ = mapper.update(for: .analyzing(steps: nil))
+
+        #expect(mapper.update(for: .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 1, total: 2, attemptID: "only"))) == 942)
+    }
+
+    @Test("A reset forgets the attempt, so the next episode starts from the band")
+    func resetForgetsTheAttempt() {
+        var mapper = EpisodeAdFreePassProgressMapper()
+        _ = mapper.update(for: .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 4, total: 6, attemptID: "direct")))
+        _ = mapper.update(for: .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 0, total: 11, attemptID: "handover")))
+
+        mapper.reset()
+
+        #expect(mapper.update(for: .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 1, total: 2, attemptID: "next"))) == 942)
+    }
 }

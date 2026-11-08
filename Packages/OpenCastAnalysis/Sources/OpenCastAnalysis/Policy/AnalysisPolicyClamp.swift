@@ -163,6 +163,9 @@ public enum AnalysisPolicyClamp {
             if let keyPage = endpoint.keyPage, !isValidKeyPage(keyPage) {
                 throw .outOfBounds(field: "\(path).key_url")
             }
+            if let model = endpoint.tierCheckModel, !isValidModelID(model) {
+                throw .outOfBounds(field: "\(path).tier_check_model")
+            }
             guard endpoint.versionHeaders.count <= maximumVersionHeaders,
                   endpoint.versionHeaders.allSatisfy(isSafeVersionHeader)
             else {

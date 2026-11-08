@@ -59,15 +59,15 @@ struct AnalysisKeyPromptLayout: View {
 
 #Preview("Dark") {
     AnalysisKeyPromptLayout(
-        title: AIServicesCopy.noticeTitle,
+        title: AIServicesCopy.noticeTitle(date: "January 1, 2027"),
         paragraphs: [
             AIServicesCopy.noticeFirstParagraph(date: "January 1, 2027"),
-            AIServicesCopy.noticeSecondParagraph(date: "January 1, 2027", units: 5)
+            AIServicesCopy.noticeSecondParagraph(units: 5)
         ],
-        primaryTitle: AIServicesCopy.noticeAddKey,
+        primaryTitle: AIServicesCopy.noticeOK,
         primaryIdentifier: "Preview Primary",
         onPrimary: {},
-        secondaryTitle: AIServicesCopy.noticeLater,
+        secondaryTitle: AIServicesCopy.noticeLearnMore,
         secondaryIdentifier: "Preview Secondary",
         onSecondary: {}
     )

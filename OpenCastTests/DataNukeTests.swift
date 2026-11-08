@@ -451,6 +451,56 @@ struct DataNukeTests {
         #expect(try context.fetch(FetchDescriptor<LocalPreferenceRecord>()).isEmpty)
     }
 
+    @Test("Delete Data clears a free-tier state in the live store and on disk")
+    func nukeClearsTheKeyTier() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let fileStore = EpisodeDownloadFileStore(
+            baseDirectory: temporaryDirectory.appending(path: "ApplicationSupport", directoryHint: .isDirectory)
+        )
+        let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
+            cacheController: OpenCastCacheController(
+                rootDirectory: temporaryDirectory.appending(path: "Caches", directoryHint: .isDirectory)
+            ),
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            downloads: DownloadStore(fileStore: fileStore),
+            transcriptions: EpisodeTranscriptionStore(
+                fileStore: EpisodeTranscriptFileStore(baseDirectory: fileStore.baseDirectory)
+            ),
+            adAnalyses: EpisodeAdAnalysisStore(
+                client: UnusedEpisodeAdAnalysisClient(),
+                fileStore: EpisodeAdAnalysisFileStore(baseDirectory: fileStore.baseDirectory)
+            ),
+            transcriptAnalyses: EpisodeTranscriptAnalysisStore(
+                client: ScriptedTranscriptAnalysisDrainClient(),
+                fileStore: EpisodeTranscriptAnalysisFileStore(baseDirectory: fileStore.baseDirectory)
+            ),
+            syncStatus: SyncStatusStore(
+                accountStatusProvider: SequencedCloudKitAccountStatusProvider(statuses: [.available])
+            ),
+            allowsAutomaticFeedRefresh: false
+        )
+        let answeredDay = Date(timeIntervalSince1970: 1_793_000_000)
+        appModel.analysisKeyTier.apply(
+            AnalysisKeyTierStore.Answer(result: .freeTier, keyDigest: Data("key".utf8), answeredAt: answeredDay),
+            savedKeyDigest: Data("key".utf8),
+            modelContext: context
+        )
+        #expect(appModel.analysisKeyTier.state == .freeTier(day: answeredDay))
+
+        try await appModel.nukeAllData(modelContext: context)
+
+        #expect(appModel.analysisKeyTier.state == .unknown)
+        let reloaded = AnalysisKeyTierStore()
+        reloaded.load(modelContext: context)
+        #expect(reloaded.state == .unknown)
+        #expect(try context.fetch(FetchDescriptor<LocalPreferenceRecord>()).allSatisfy { record in
+            record.key != AnalysisKeyTierStore.preferenceKey
+        })
+    }
+
     @Test("Delete Data leaves no usage behind: a billed run awaiting resume and a run whose usage never saved count nothing afterwards")
     func nukeLeavesNoUsageFromRunJournals() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

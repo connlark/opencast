@@ -32,24 +32,47 @@ nonisolated enum AIServicesCopy {
 
     // MARK: Notice
 
-    static let noticeTitle = "Ad detection and Chapters & Summary are moving to your own key"
-    static let noticeAddKey = "Add a key"
-    static let noticeLater = "Later"
+    static let noticeOK = "OK"
+    static let noticeLearnMore = "Learn More"
+    static let noticeTitleFromTrialDate = "Ad detection and Chapters & Summary use your own key"
 
-    static func noticeFirstParagraph(date: String) -> String {
-        "From \(date), these two features use an API key from Google or OpenAI that you add in Settings. Your transcripts go straight from your device to the provider you choose; opencast is no longer in the middle."
+    static func noticeTitle(date: String) -> String {
+        "Ad detection and Chapters & Summary are included until \(date)"
     }
 
-    static func noticeSecondParagraph(date: String, units: Int) -> String {
-        "Until then nothing changes. After \(date), every install keeps \(units.formatted()) free analyses, then asks for a key. A Gemini key is free to create."
+    static func noticeFirstParagraph(date: String) -> String {
+        "Nothing to set up. Both features work as they do today until \(date)."
+    }
+
+    static func noticeSecondParagraph(units: Int) -> String {
+        "After that, every install keeps \(units.formatted()) free analyses. Beyond those, the two features use an API key from Google or OpenAI that you add in Settings › AI Services, and that provider bills you for what you use."
+    }
+
+    static func noticeBodyCountKnown(_ units: Int) -> String {
+        switch units {
+        case 0:
+            "This install has used its free analyses. The two features now use an API key from Google or OpenAI that you add in Settings › AI Services, and that provider bills you for what you use."
+        case 1:
+            "This install has 1 free analysis left. After that, the two features use an API key from Google or OpenAI that you add in Settings › AI Services, and that provider bills you for what you use."
+        default:
+            "This install has \(units.formatted()) free analyses left. After those, the two features use an API key from Google or OpenAI that you add in Settings › AI Services, and that provider bills you for what you use."
+        }
+    }
+
+    static func noticeBodyCountUnknown(units: Int) -> String {
+        "Every install keeps \(units.formatted()) free analyses. After those, the two features use an API key from Google or OpenAI that you add in Settings › AI Services, and that provider bills you for what you use."
     }
 
     static func noticeRowBeforeTrial(date: String, units: Int) -> String {
-        "Moving to your own key on \(date) · \(units.formatted()) free analyses remain"
+        "Included until \(date) · then \(units.formatted()) free analyses"
+    }
+
+    static func noticeRowCountUnknown(units: Int) -> String {
+        "Every install keeps \(units.formatted()) free analyses"
     }
 
     static func noticeRowUnitsLeft(_ units: Int) -> String {
-        "\(units.formatted()) free analyses remain"
+        units == 1 ? "1 free analysis remains" : "\(units.formatted()) free analyses remain"
     }
 
     static let noticeRowExhausted = "Your free analyses are used"
@@ -66,7 +89,14 @@ nonisolated enum AIServicesCopy {
     static let providerHeader = "Provider"
     static let usageHeader = "Usage"
     static let providersFooter = "Ad detection and Chapters & Summary run on your device and call the provider you choose with your own key. Recap and Ask use Apple's Private Cloud Compute and need no key."
-    static let geminiPrivacyFootnote = "Google's free tier may use prompts to improve its products. With a paid Gemini key, Google doesn't use your prompts or responses to improve its products. See Google's terms."
+
+    /// The footer inside the handover window: the plain footer plus what
+    /// happens to a free-tier Google key until `date`.
+    static func providersFooterInHandoverWindow(date: String) -> String {
+        "\(providersFooter) Until \(date), when Google says a Google key is on its free tier, opencast runs ad detection on its trial service instead when that service is available."
+    }
+
+    static let geminiPrivacyFootnote = "Use a key from a Google project with billing set up, or an OpenAI account with credit. A key on Google's free tier is too limited for these features, and Google may use what a free-tier key sends to improve its products."
     static let noKey = "No key"
     static let keySaved = "Key saved"
     /// The provider row when the last Keychain read failed.
@@ -84,6 +114,26 @@ nonisolated enum AIServicesCopy {
         hasSavedKey ? keySaved : noKey
     }
 
+    // MARK: Free tier
+
+    /// The running card while a run uses the trial service for a free-tier key.
+    static let freeTierCardFootnote = "Your Google key is on Google's free tier. Using opencast's trial service."
+
+    /// The day Google answered, on the listener's own calendar.
+    static func answerDay(_ date: Date) -> String {
+        date.formatted(date: .long, time: .omitted)
+    }
+
+    /// The Settings mark inside the handover window.
+    static func freeTierMarkInHandoverWindow(day: String, date: String) -> String {
+        "On \(day), Google answered that your Google key is on its free tier, which is too limited for ad detection. Until \(date), opencast runs ad detection on its trial service instead when that service is available. To use your key, set up billing for its project in Google AI Studio."
+    }
+
+    /// The Settings mark outside the handover window.
+    static func freeTierMark(day: String) -> String {
+        "On \(day), Google answered that your Google key is on its free tier, which is too limited for ad detection. To use your key, set up billing for its project in Google AI Studio."
+    }
+
     // MARK: Usage
 
     static let usageFooter = "Usage is counted on your device from provider responses. Your provider's dashboard is the bill."
@@ -99,6 +149,8 @@ nonisolated enum AIServicesCopy {
 
     // MARK: Key sheet
 
+    /// Above the Google key field.
+    static let googleKeyRequirement = "Needs a Google project with billing set up. Keys on Google's free tier are too limited for these features."
     static let test = "Test"
     static let save = "Save"
     static let cancel = "Cancel"
@@ -140,6 +192,9 @@ nonisolated enum AIServicesCopy {
         }
     }
 
+    /// Test on a key Google accepted and then named free tier.
+    static let testResultFreeTier = "Key works, but it is on Google's free tier, which is too limited for these features. Set up billing for its project in Google AI Studio."
+
     static func testResult(_ result: AnalysisKeyTestResult, provider: AnalysisProvider) -> String {
         let name = shortName(provider)
         switch result {
@@ -178,6 +233,8 @@ nonisolated enum AIServicesCopy {
         switch status {
         case .exhausted:
             "Your \(lifetimeUnits.formatted()) free analyses are used. Add a Gemini or OpenAI key in Settings to run ad detection and Chapters & Summary on your own account."
+        case .unitsLeft(1):
+            "You have 1 free analysis left. Add a Gemini or OpenAI key in Settings to run ad detection and Chapters & Summary on your own account."
         case .unitsLeft(let units):
             "You have \(units.formatted()) free analyses left. Add a Gemini or OpenAI key in Settings to run ad detection and Chapters & Summary on your own account."
         case .notStarted:

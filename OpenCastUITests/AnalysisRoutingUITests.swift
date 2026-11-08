@@ -33,6 +33,31 @@ final class AnalysisRoutingUITests: XCTestCase {
     }
 
     @MainActor
+    func testASavedGoogleKeyOnTheFreeTierCompletesOnTheTrialAndTheMarkShows() throws {
+        // Every direct send would fail here, so a zone proves the trial
+        // service took the run.
+        let app = makeApp(seedsGoogleKey: true, transportAnswer: "direct-overloaded", tierAnswer: "free-tier")
+        app.launch()
+
+        detectAdsFromInbox(in: app)
+        openEpisodeDetailFromInbox(in: app)
+        assertAdsDetected(in: app)
+        assertSponsorLineAnnotated(in: app)
+
+        openSettingsScreen("AI Services", in: app)
+        let mark = app.descendants(matching: .any)["AI Services Free Tier Mark"].firstMatch
+        assertExists(mark, named: "the free-tier mark", timeout: 10)
+        XCTAssertTrue(
+            mark.label.contains("Google answered that your Google key is on its free tier, which is too limited for ad detection."),
+            "The mark should say what Google answered, read \(mark.label)"
+        )
+        attachSmokeScreenshot(named: "analysis_route_free_tier_mark")
+
+        // The trial's run is opencast's, not the listener's provider usage.
+        assertUsageRow("google", contains: "No runs yet", in: app)
+    }
+
+    @MainActor
     func testDetectAdsWithoutAKeyRunsOnTheFreeAnalyses() throws {
         let app = makeApp(trialStatus: "units-left-3")
         app.launch()
@@ -126,6 +151,7 @@ final class AnalysisRoutingUITests: XCTestCase {
         seedsGoogleKey: Bool = false,
         trialStatus: String? = nil,
         transportAnswer: String? = nil,
+        tierAnswer: String? = nil,
         holdsTransport: Bool = false,
         seedsCompletedAdAnalysis: Bool = false,
         seedsSecondEpisode: Bool = false,
@@ -152,6 +178,9 @@ final class AnalysisRoutingUITests: XCTestCase {
         }
         if let transportAnswer {
             app.launchArguments.append("--opencast-ui-test-analysis-transport=\(transportAnswer)")
+        }
+        if let tierAnswer {
+            app.launchArguments.append("--opencast-ui-test-analysis-tier=\(tierAnswer)")
         }
         if holdsTransport {
             app.launchArguments.append("--opencast-ui-test-analysis-transport-hold")
@@ -266,6 +295,18 @@ final class AnalysisRoutingUITests: XCTestCase {
         line: UInt = #line
     ) {
         openSettingsScreen("AI Services", in: app, file: file, line: line)
+        assertUsageRow(provider, contains: text, in: app, file: file, line: line)
+    }
+
+    /// For a test already on the AI Services screen.
+    @MainActor
+    private func assertUsageRow(
+        _ provider: String,
+        contains text: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
         let usage = app.descendants(matching: .any)["AI Services Usage \(provider)"].firstMatch
         scrollUntilHittable(usage, in: app, maxSwipes: 8, file: file, line: line)
         XCTAssertTrue(

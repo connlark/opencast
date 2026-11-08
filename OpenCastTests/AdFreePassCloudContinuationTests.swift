@@ -445,9 +445,20 @@ struct AdFreePassCloudContinuationTests {
         process.enqueueCloud(device.episode(episodeID))
         let handle = process.armAndLaunch()
 
-        // Two windows and, while the run goes, the step still to come.
-        let halfway = EpisodeAdFreePassStage.analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 1, total: 3))
-        #expect(await waitUntil { process.pass.currentStage == halfway })
+        // Two windows and, while the run goes, the step still to come. The
+        // live steps carry the run record's id, which their equality reads.
+        #expect(await waitUntil {
+            if case .analyzing(let steps?) = process.pass.currentStage {
+                steps.completed == 1 && steps.total == 3
+            } else {
+                false
+            }
+        })
+        guard case .analyzing(let halfway?) = process.pass.currentStage else {
+            Issue.record("the pass left the analyzing stage")
+            return
+        }
+        #expect(halfway.attemptID == analysis.latestRun?.id)
         #expect(api.createRequests.count == 1)
         #expect(api.createRequests.allSatisfy { $0.adAnalysisRequested == nil && $0.podcastID == nil })
         #expect(analysis.resolvedRunIDs == [nil])

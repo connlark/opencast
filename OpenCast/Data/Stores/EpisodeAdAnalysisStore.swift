@@ -41,6 +41,9 @@ final class EpisodeAdAnalysisStore {
     @ObservationIgnored private var keyRemovedEpisodeIDs: Set<String> = []
     /// The active device run's steps; observed so progress surfaces follow.
     private var activeProgress: AdAnalysisRunProgress?
+    /// The run record `activeProgress` counts for. A late callback from a
+    /// direct attempt must not count toward its handover.
+    @ObservationIgnored private var activeAttemptID: String?
     @ObservationIgnored private let failures = AnalysisFailureSurface()
     @ObservationIgnored var onEpisodeStateChanged: ((String) -> Void)?
 
@@ -157,6 +160,9 @@ final class EpisodeAdAnalysisStore {
     /// run. A run killed after its document was installed is finished.
     func load(modelContext: ModelContext) {
         do {
+            if let runEnvironment {
+                normalizeHandovers(environment: runEnvironment, modelContext: modelContext)
+            }
             let resume = try reconcile(modelContext: modelContext)
             try recordSet.reload(modelContext: modelContext)
             finishInstalledRuns(modelContext: modelContext)
@@ -626,6 +632,7 @@ final class EpisodeAdAnalysisStore {
             relativePath = preparation.relativePath
             try ensureOwnsActiveRun(episodeID: document.episodeID, runID: runID)
 
+            normalizeHandovers(environment: environment, modelContext: modelContext)
             let resumableRunID: String?
             if let launchRunRecordID {
                 // Kept replies are reused only for the same inputs: the
@@ -645,10 +652,40 @@ final class EpisodeAdAnalysisStore {
                     runs: environment.runs
                 )
             }
-            let resolution = await environment.resolveRoute(resumingRunID: resumableRunID)
+            let resolved = await environment.resolveRoute(resumingRunID: resumableRunID)
             try ensureOwnsActiveRun(episodeID: document.episodeID, runID: runID)
-            if launchRunRecordID != nil, resolution.resumingRunID == nil {
+
+            // Before the first wait below: Remove in AI Services finds the
+            // run through this, and a removal during the wait must not miss it.
+            if case .direct(let provider) = resolved.route {
+                activeDirectProvider = provider
+            }
+            let plan: RunPlan
+            do {
+                plan = try await planRun(
+                    resolved,
+                    resumableRunID: resumableRunID,
+                    isLaunchResume: launchRunRecordID != nil,
+                    episodeID: document.episodeID,
+                    runID: runID,
+                    environment: environment,
+                    modelContext: modelContext
+                )
+            } catch EpisodeAdAnalysisError.runInterrupted {
+                // The launch's own record stands; it fails as it is.
                 throw EpisodeAdAnalysisError.runInterrupted
+            } catch {
+                // Nothing was dispatched and a plain stop leaves the episode
+                // as it was, but a run that ends here still ends through the
+                // episode's record, as a run with no route does.
+                if !(error is CancellationError) || activeCancelReason == .keyRemoved {
+                    try beginEpisodeRecord(document, preparation: preparation, modelContext: modelContext)
+                }
+                throw error
+            }
+            let resolution = plan.resolution
+            if case .trial = resolution.route {
+                activeDirectProvider = nil
             }
 
             try beginEpisodeRecord(document, preparation: preparation, modelContext: modelContext)
@@ -656,9 +693,6 @@ final class EpisodeAdAnalysisStore {
                 throw EpisodeAdAnalysisError.keyRequired(resolution.keyRequiredReason ?? .proxyUnavailable)
             }
 
-            if case .direct(let provider) = resolution.route {
-                activeDirectProvider = provider
-            }
             let runRecordID: String
             if let resumingRunID = resolution.resumingRunID {
                 runRecordID = resumingRunID
@@ -666,30 +700,15 @@ final class EpisodeAdAnalysisStore {
                 closeOpenRuns(episodeID: document.episodeID, environment: environment, modelContext: modelContext)
                 runRecordID = UUID().uuidString
             }
-            activeProgress = AdAnalysisRunProgress(
-                windowCount: AdWindowing.windowCount(
-                    segmentCount: preparation.request.segments.count,
-                    policy: policy.settings
-                ),
-                model: policy.model
+            var attempt = try makeAttempt(
+                resolution: resolution,
+                policy: policy,
+                runRecordID: runRecordID,
+                isFreeTierTrial: plan.isFreeTierTrial,
+                preparation: preparation,
+                runID: runID,
+                environment: environment
             )
-            let sendLog = AnalysisProviderSendLog()
-            let onStep = progressHandler(runID: runID)
-            let transport: any AnalysisProviderTransport
-            do {
-                transport = try environment.makeTransport(
-                    for: resolution,
-                    runID: runRecordID,
-                    observer: AnalysisSendObservers(observers: [
-                        sendLog,
-                        environment.runs.observer(runID: runRecordID),
-                        AdAnalysisRunProgress.SendObserver(onSend: onStep),
-                    ]),
-                    onReused: { request in onStep(request.purpose, true) }
-                )
-            } catch {
-                throw Self.transportFailure(error)
-            }
             if resolution.resumingRunID == nil {
                 try environment.runs.begin(AnalysisRunRecord(
                     id: runRecordID,
@@ -699,20 +718,21 @@ final class EpisodeAdAnalysisStore {
                     transcriptFingerprint: preparation.fingerprint,
                     inputDigest: preparation.inputDigest,
                     resolution: resolution,
-                    policy: .adDetection(policy)
+                    policy: .adDetection(policy),
+                    freeTier: plan.isFreeTierTrial ? true : nil
                 ))
             }
             run = DeviceRun(id: runRecordID)
 
-            let outcome = await Self.detectAds(
+            var outcome = await Self.detectAds(
                 preparation.request,
-                policy: policy,
-                transport: transport,
+                policy: attempt.policy,
+                transport: attempt.transport,
                 clock: environment.clock
             )
             run?.outcome = outcome
             if case .failed = outcome {
-                run?.listenerFailure = AnalysisProviderFailure.resolve(outcome, sends: sendLog.sends)
+                run?.listenerFailure = AnalysisProviderFailure.resolve(outcome, sends: attempt.sendLog.sends)
             }
             try ensureOwnsActiveRun(episodeID: document.episodeID, runID: runID)
             // The listener's key went away mid-run: the run needs a key again.
@@ -720,7 +740,73 @@ final class EpisodeAdAnalysisStore {
                let removal = environment.keyRemoval(runID: runRecordID) {
                 throw EpisodeAdAnalysisError.keyRequired(removal)
             }
-            let response = try Self.response(from: outcome, listenerFailure: run?.listenerFailure, policy: policy)
+
+            var isFreeTierTrial = plan.isFreeTierTrial
+            switch try await freeTierEnding(
+                of: outcome,
+                listenerFailure: run?.listenerFailure,
+                sends: attempt.sendLog.sends,
+                plan: plan,
+                episodeID: document.episodeID,
+                runID: runID,
+                environment: environment,
+                modelContext: modelContext
+            ) {
+            case nil:
+                break
+            case .failed(let kind):
+                throw EpisodeAdAnalysisError.freeTierFailure(kind)
+            case .handOver(let trial):
+                guard let trialPolicy = trial.policy?.adDetection else {
+                    throw EpisodeAdAnalysisError.freeTierFailure(.providerFreeTierRetry)
+                }
+                // The handover record first: a kill between the two leaves
+                // both open, and normalizing keeps this one. A failed write
+                // leaves the direct run to end as failed below.
+                let handoverID = UUID().uuidString
+                try environment.runs.begin(AnalysisRunRecord(
+                    id: handoverID,
+                    feature: .adDetection,
+                    episodeID: document.episodeID,
+                    podcastID: document.podcastID,
+                    transcriptFingerprint: preparation.fingerprint,
+                    inputDigest: preparation.inputDigest,
+                    resolution: trial,
+                    policy: .adDetection(trialPolicy),
+                    freeTier: true,
+                    handoverOf: runRecordID
+                ))
+                if let run { endRun(run, environment: environment, modelContext: modelContext) }
+                // Removing the Google key no longer concerns this run.
+                activeDirectProvider = nil
+                run = DeviceRun(id: handoverID)
+                isFreeTierTrial = true
+                attempt = try makeAttempt(
+                    resolution: trial,
+                    policy: trialPolicy,
+                    runRecordID: handoverID,
+                    isFreeTierTrial: true,
+                    preparation: preparation,
+                    runID: runID,
+                    environment: environment
+                )
+                outcome = await Self.detectAds(
+                    preparation.request,
+                    policy: attempt.policy,
+                    transport: attempt.transport,
+                    clock: environment.clock
+                )
+                run?.outcome = outcome
+                if case .failed = outcome {
+                    run?.listenerFailure = AnalysisProviderFailure.resolve(outcome, sends: attempt.sendLog.sends)
+                }
+                try ensureOwnsActiveRun(episodeID: document.episodeID, runID: runID)
+            }
+            if isFreeTierTrial,
+               let kind = Self.freeTierTrialFailureKind(of: outcome, listenerFailure: run?.listenerFailure) {
+                throw EpisodeAdAnalysisError.freeTierFailure(kind)
+            }
+            let response = try Self.response(from: outcome, listenerFailure: run?.listenerFailure, policy: attempt.policy)
 
             let coarseDocument = makeDocument(
                 transcript: document,
@@ -740,6 +826,10 @@ final class EpisodeAdAnalysisStore {
                 modelContext: modelContext
             )
             failures.clear(episodeID: document.episodeID)
+            if !isFreeTierTrial, resolution.route == .direct(provider: .google),
+               case .freeTier = environment.googleKeyTier {
+                environment.resetGoogleKeyTier(modelContext: modelContext)
+            }
             if let run { endRun(run, environment: environment, modelContext: modelContext) }
         } catch is CancellationError {
             endStoppedRun(run, transcript: document, relativePath: relativePath, runID: runID, environment: environment, modelContext: modelContext)
@@ -781,6 +871,245 @@ final class EpisodeAdAnalysisStore {
 
         var succeeded: Bool {
             if case .adDetection = outcome { true } else { false }
+        }
+    }
+
+    /// What preparation decided for a run: its route, and what Google said
+    /// about the key before anything was sent.
+    private struct RunPlan {
+        var resolution: AnalysisRouteResolution
+        /// A trial run for a key Google named free tier.
+        var isFreeTierTrial = false
+        /// When Google answered free tier and the trial could not take the
+        /// run: it goes direct and is not asked again if that fails.
+        var freeTierAnsweredAt: Date?
+    }
+
+    /// One attempt's transport and what it reports to.
+    private struct RunAttempt {
+        var transport: any AnalysisProviderTransport
+        var policy: AdDetectionAnalysisPolicy
+        var sendLog: AnalysisProviderSendLog
+    }
+
+    /// How a failed direct Google run ends once Google named the free tier.
+    private enum FreeTierEnding {
+        case failed(EpisodeAnalysisFailureKind)
+        case handOver(AnalysisRouteResolution)
+    }
+
+    /// The failures a tier check can explain: every way Google turned the
+    /// run away. Anything else says nothing about the key's tier.
+    private static let googleSideFailures: Set<AnalysisProviderFailure> = [
+        .rateLimited, .dailyLimit, .billingOrQuota, .overloaded, .timeout,
+    ]
+
+    /// The preparation between the route and the episode's record, so an
+    /// interruption here leaves no run to resume and the last document in
+    /// place. A resumed run keeps its route and is not checked. The stored
+    /// tier only decides whether to ask; the answer decides the route.
+    ///
+    /// A trial run for a free-tier key is decided first, on a launch as on a
+    /// retry: the date, then whether the service can be reached, then the
+    /// resume. Only the date closes the run; a service out of reach can come
+    /// back, so the run stays open for the next start. A record that no
+    /// longer applies is not being resumed, so it
+    /// falls to the rule for any other: a launch never starts a replacement
+    /// run, and a new start closes it.
+    private func planRun(
+        _ resolved: AnalysisRouteResolution,
+        resumableRunID: String?,
+        isLaunchResume: Bool,
+        episodeID: String,
+        runID: UUID,
+        environment: any EpisodeAdAnalysisRunEnvironment,
+        modelContext: ModelContext
+    ) async throws -> RunPlan {
+        if let resumableRunID, environment.runs.record(id: resumableRunID)?.freeTier == true,
+           resolved.keyRequiredReason != nil || resolved.resumingRunID == resumableRunID {
+            let isOpen = await environment.isHandoverWindowOpen()
+            try ensureOwnsActiveRun(episodeID: episodeID, runID: runID)
+            if environment.isPastTrialDate {
+                closeRun(resumableRunID, environment: environment, modelContext: modelContext)
+                throw EpisodeAdAnalysisError.freeTierFailure(.providerFreeTier)
+            }
+            guard isOpen, resolved.keyRequiredReason == nil else {
+                throw EpisodeAdAnalysisError.freeTierFailure(.providerFreeTierRetry)
+            }
+            return RunPlan(resolution: resolved, isFreeTierTrial: true)
+        }
+        if isLaunchResume, resolved.resumingRunID == nil {
+            throw EpisodeAdAnalysisError.runInterrupted
+        }
+        guard resolved.resumingRunID == nil, resolved.freeTierHandover, let key = resolved.key,
+              environment.googleKeyTier != .notFreeTier
+        else {
+            return RunPlan(resolution: resolved)
+        }
+        let answer = await environment.checkTier(key: key)
+        let answeredAt = environment.now
+        try ensureOwnsActiveRun(episodeID: episodeID, runID: runID)
+        guard answer != .inconclusive else {
+            return RunPlan(resolution: resolved)
+        }
+        try ensureKeyStands(key, environment: environment)
+        guard answer == .freeTier else {
+            environment.noteGoogleKeyTier(answer, answeredAt: answeredAt, modelContext: modelContext)
+            return RunPlan(resolution: resolved)
+        }
+        let handover = await environment.resolveHandover()
+        try ensureOwnsActiveRun(episodeID: episodeID, runID: runID)
+        // Written after the last read, so an answer never lands on a key
+        // that replaced this one during the status call.
+        try ensureKeyStands(key, environment: environment)
+        environment.noteGoogleKeyTier(answer, answeredAt: answeredAt, modelContext: modelContext)
+        if case .available(let trial) = handover {
+            return RunPlan(resolution: trial, isFreeTierTrial: true)
+        }
+        return RunPlan(resolution: resolved, freeTierAnsweredAt: answeredAt)
+    }
+
+    /// Decides a failed direct Google run: `nil` leaves the failure as it
+    /// is. Google named the free tier in a send, before the run, or to a
+    /// check made now because the run failed on Google's side, which is what
+    /// catches a key that changed through iCloud Keychain.
+    private func freeTierEnding(
+        of outcome: AnalysisOutcome,
+        listenerFailure: AnalysisProviderFailure?,
+        sends: [AnalysisProviderSendRecord],
+        plan: RunPlan,
+        episodeID: String,
+        runID: UUID,
+        environment: any EpisodeAdAnalysisRunEnvironment,
+        modelContext: ModelContext
+    ) async throws -> FreeTierEnding? {
+        guard case .failed(let failure) = outcome, failure.code != .cancelled,
+              plan.resolution.route == .direct(provider: .google), let key = plan.resolution.key
+        else {
+            return nil
+        }
+        let failedOnGoogleSide = listenerFailure.map(Self.googleSideFailures.contains) ?? false
+        // A send's answer is this run's; one from before the run keeps its time.
+        let namedInSend = sends.contains { $0.freeTier && !$0.cancelled }
+        let namedAt = namedInSend ? environment.now : failedOnGoogleSide ? plan.freeTierAnsweredAt : nil
+        guard namedAt != nil || failedOnGoogleSide else {
+            return nil
+        }
+        let answer: AnalysisTierCheckResult
+        let answeredAt: Date
+        if let namedAt {
+            answer = .freeTier
+            answeredAt = namedAt
+        } else {
+            answer = await environment.checkTier(key: key)
+            answeredAt = environment.now
+            try ensureOwnsActiveRun(episodeID: episodeID, runID: runID)
+        }
+        guard answer != .inconclusive else {
+            return nil
+        }
+        try ensureKeyStands(key, environment: environment)
+        guard answer == .freeTier, plan.resolution.freeTierHandover else {
+            environment.noteGoogleKeyTier(answer, answeredAt: answeredAt, modelContext: modelContext)
+            return answer == .freeTier ? .failed(.providerFreeTier) : nil
+        }
+        let handover = await environment.resolveHandover()
+        try ensureOwnsActiveRun(episodeID: episodeID, runID: runID)
+        // No send happens during that wait to find a key removed or replaced
+        // through iCloud Keychain, so it is read here, before the answer is
+        // written.
+        try ensureKeyStands(key, environment: environment)
+        environment.noteGoogleKeyTier(answer, answeredAt: answeredAt, modelContext: modelContext)
+        switch handover {
+        case .available(let trial): return .handOver(trial)
+        case .notOpen: return .failed(.providerFreeTier)
+        case .unavailable: return .failed(.providerFreeTierRetry)
+        }
+    }
+
+    /// Ends the run as a send that found `key` gone ends it.
+    private func ensureKeyStands(_ key: AnalysisProviderKey, environment: any EpisodeAdAnalysisRunEnvironment) throws {
+        if let removal = environment.keyChange(provider: .google, keyDigest: key.digest) {
+            throw EpisodeAdAnalysisError.keyRequired(removal)
+        }
+    }
+
+    /// Fresh steps and a new transport under one run record. A handover gets
+    /// its own: the steps count by request purpose, so two attempts' window
+    /// indices cannot share them.
+    private func makeAttempt(
+        resolution: AnalysisRouteResolution,
+        policy: AdDetectionAnalysisPolicy,
+        runRecordID: String,
+        isFreeTierTrial: Bool,
+        preparation: EpisodeAdAnalysisPreparation,
+        runID: UUID,
+        environment: any EpisodeAdAnalysisRunEnvironment
+    ) throws -> RunAttempt {
+        activeAttemptID = runRecordID
+        activeProgress = AdAnalysisRunProgress(
+            windowCount: AdWindowing.windowCount(
+                segmentCount: preparation.request.segments.count,
+                policy: policy.settings
+            ),
+            model: policy.model,
+            attemptID: runRecordID,
+            isFreeTierTrial: isFreeTierTrial
+        )
+        let sendLog = AnalysisProviderSendLog()
+        let onStep = progressHandler(runID: runID, attemptID: runRecordID)
+        do {
+            let transport = try environment.makeTransport(
+                for: resolution,
+                runID: runRecordID,
+                observer: AnalysisSendObservers(observers: [
+                    sendLog,
+                    environment.runs.observer(runID: runRecordID),
+                    AdAnalysisRunProgress.SendObserver(onSend: onStep),
+                ]),
+                onReused: { request in onStep(request.purpose, true) }
+            )
+            return RunAttempt(transport: transport, policy: policy, sendLog: sendLog)
+        } catch {
+            // A trial run for a free-tier key never reads as needing a key.
+            throw isFreeTierTrial ? EpisodeAdAnalysisError.freeTierFailure(.providerFreeTierRetry) : Self.transportFailure(error)
+        }
+    }
+
+    /// How a trial run for a free-tier key ended, or `nil` when it ends as
+    /// any trial run does: a refused request, a timeout or a bad answer.
+    /// Google's errors here are about opencast's key, so none of them may
+    /// read as the listener's key being refused, and nothing here opens the
+    /// key screen.
+    private static func freeTierTrialFailureKind(
+        of outcome: AnalysisOutcome,
+        listenerFailure: AnalysisProviderFailure?
+    ) -> EpisodeAnalysisFailureKind? {
+        guard case .failed(let failure) = outcome, failure.code != .cancelled, let listenerFailure else {
+            return nil
+        }
+        switch listenerFailure {
+        case .trialExhausted:
+            return .providerFreeTier
+        case .trialRunBound:
+            return .providerFreeTierRunBound
+        case .trialPaused, .trialUnavailable, .unreachable, .rateLimited, .overloaded,
+             .invalidKey, .billingOrQuota, .dailyLimit, .modelUnavailable:
+            return .providerFreeTierRetry
+        case .keyRequired:
+            return .generic
+        case .requestRejected, .timeout, .malformedAnswer:
+            return nil
+        }
+    }
+
+    /// Before any open run is chosen: a kill after a handover record was
+    /// written can leave it and the run it took over from both open, and
+    /// only the handover may go on. The direct run's tokens still count.
+    private func normalizeHandovers(environment: any EpisodeAdAnalysisRunEnvironment, modelContext: ModelContext) {
+        for runID in environment.runs.runsTakenOverByOpenHandovers(feature: .adDetection) {
+            recordUsage(ofRunID: runID, environment: environment, modelContext: modelContext)
+            environment.runs.finishTakenOver(runID: runID)
         }
     }
 
@@ -1019,17 +1348,17 @@ final class EpisodeAdAnalysisStore {
     }
 
     /// Steps reported from the transport's threads hop to the main actor
-    /// and count only for the run that is still active.
-    private func progressHandler(runID: UUID) -> @Sendable (AnalysisProviderRequest.Purpose, Bool) -> Void {
+    /// and count only for the attempt that is still active.
+    private func progressHandler(runID: UUID, attemptID: String) -> @Sendable (AnalysisProviderRequest.Purpose, Bool) -> Void {
         { [weak self] purpose, answered in
             Task { @MainActor [weak self] in
-                self?.noteProgress(purpose, answered: answered, runID: runID)
+                self?.noteProgress(purpose, answered: answered, runID: runID, attemptID: attemptID)
             }
         }
     }
 
-    private func noteProgress(_ purpose: AnalysisProviderRequest.Purpose, answered: Bool, runID: UUID) {
-        guard activeRunID == runID else {
+    private func noteProgress(_ purpose: AnalysisProviderRequest.Purpose, answered: Bool, runID: UUID, attemptID: String) {
+        guard activeRunID == runID, activeAttemptID == attemptID else {
             return
         }
         activeProgress?.note(purpose, answered: answered)
@@ -1070,6 +1399,7 @@ final class EpisodeAdAnalysisStore {
         activeCancelReason = nil
         activeDirectProvider = nil
         activeProgress = nil
+        activeAttemptID = nil
         keyRemovedEpisodeIDs.remove(episodeID)
     }
 
@@ -1083,6 +1413,7 @@ final class EpisodeAdAnalysisStore {
         activeCancelReason = nil
         activeDirectProvider = nil
         activeProgress = nil
+        activeAttemptID = nil
         failures.stateChanges.notify()
     }
 
@@ -1618,6 +1949,8 @@ final class EpisodeAdAnalysisStore {
                 return .timedOut
             case .runInterrupted:
                 return .interrupted
+            case .freeTierFailure(let kind):
+                return kind
             case .clientDisabled, .appAttestUnavailable, .transcriptNotCompleted, .analysisDocumentMissing,
                  .anotherJobActive, .unrecognizedSpanKind:
                 return .generic
@@ -1662,8 +1995,10 @@ final class EpisodeAdAnalysisStore {
         switch listener {
         case .invalidKey, .billingOrQuota:
             .providerRejectedKey
-        case .rateLimited, .dailyLimit, .overloaded:
+        case .rateLimited, .overloaded:
             .providerLimited
+        case .dailyLimit:
+            .providerDailyLimit
         case .modelUnavailable, .unreachable:
             .providerUnavailable
         case .timeout:

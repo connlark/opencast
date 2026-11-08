@@ -41,6 +41,8 @@ struct AnalysisRouteResolverTests {
         let connection: FixedTrialConnection
         let exchange = RecordingTrialProxyExchange()
         let statusFetches = AnalysisTestCounter()
+        let reachabilityReads = AnalysisTestCounter()
+        let trialReachability: AnalysisTrialReachability
         let snapshot: AnalysisPolicySnapshot
         let resolver: AnalysisRouteResolver
         private let suiteName = "opencast-route-resolver-tests-\(UUID().uuidString)"
@@ -52,7 +54,9 @@ struct AnalysisRouteResolverTests {
             effective: AnalysisProvider? = .google,
             status: AnalysisTrialProxyStatus? = AnalysisRouteResolverTests.open,
             hasTrialRoute: Bool = true,
-            duringStatusFetch: @escaping @Sendable () -> Void = {}
+            isReachable: Bool? = nil,
+            duringStatusFetch: @escaping @Sendable () -> Void = {},
+            now: @escaping () -> Date = { Date.now }
         ) {
             self.snapshot = snapshot
             storage = InMemoryAnalysisProviderKeyStorage(
@@ -63,6 +67,11 @@ struct AnalysisRouteResolverTests {
             runs = AnalysisRunRecordStore(directory: AnalysisRunTestFixtures.temporaryDirectory())
             connection = FixedTrialConnection(exchange: hasTrialRoute ? exchange : nil, isConfigured: hasTrialRoute)
             let fetches = statusFetches
+            let reads = reachabilityReads
+            trialReachability = AnalysisTrialReachability {
+                reads.add()
+                return isReachable ?? hasTrialRoute
+            }
             resolver = AnalysisRouteResolver(
                 keys: keys,
                 policy: .fixed(snapshot),
@@ -73,7 +82,9 @@ struct AnalysisRouteResolverTests {
                     return status
                 }),
                 trial: connection,
-                runs: runs
+                trialReachability: trialReachability,
+                runs: runs,
+                now: now
             )
         }
 
@@ -280,6 +291,194 @@ struct AnalysisRouteResolverTests {
         #expect(Stack().resolver.isTrialRouteConfigured)
     }
 
+    // MARK: The handover window
+
+    private static func snapshot(trialStartsIn seconds: TimeInterval) -> AnalysisPolicySnapshot {
+        var bundle = AnalysisPolicyBundle.baked
+        bundle.trial.startsAt = Date.now.addingTimeInterval(seconds)
+        return AnalysisPolicySnapshot(bundle: bundle, source: .baked, fallbackReason: nil, lastRefreshFailure: nil)
+    }
+
+    private static let googleKeyed: [AnalysisProvider: AnalysisProviderKey] = [.google: AnalysisKeyFixtures.key(AnalysisKeyFixtures.googleText)]
+
+    @Test("The window is open for a Google ad-detection run only before the date", arguments: [(3_600.0, true), (-3_600.0, false)])
+    func windowFollowsTheDate(seconds: TimeInterval, isOpen: Bool) async {
+        let stack = Stack(snapshot: Self.snapshot(trialStartsIn: seconds), keys: Self.googleKeyed)
+
+        let resolution = await stack.resolve(.adDetection)
+
+        #expect(resolution.route == .direct(provider: .google))
+        #expect(resolution.freeTierHandover == isOpen)
+        #expect(stack.statusFetches.count == 0)
+    }
+
+    @Test("The window needs the trial service reachable")
+    func windowNeedsReachability() async {
+        let stack = Stack(snapshot: Self.snapshot(trialStartsIn: 3_600), keys: Self.googleKeyed, isReachable: false)
+
+        #expect(await !stack.resolve(.adDetection).freeTierHandover)
+        #expect(stack.trialReachability.state == .unavailable)
+    }
+
+    @Test("Resolving waits for an unknown reachability instead of reading it as unavailable")
+    func windowWaitsForReachability() async {
+        let stack = Stack(snapshot: Self.snapshot(trialStartsIn: 3_600), keys: Self.googleKeyed)
+        #expect(stack.trialReachability.state == .unknown)
+
+        #expect(await stack.resolve(.adDetection).freeTierHandover)
+        #expect(stack.trialReachability.state == .available)
+    }
+
+    @Test("The window is never set for Chapters & Summary, an OpenAI key or a run with no key")
+    func windowIsAdDetectionOnGoogleOnly() async {
+        let chapters = Stack(snapshot: Self.snapshot(trialStartsIn: 3_600), keys: Self.googleKeyed)
+        #expect(await chapters.resolve(.chaptersSummary).route == .direct(provider: .google))
+        #expect(await !chapters.resolve(.chaptersSummary).freeTierHandover)
+
+        let openAI = Stack(snapshot: Self.snapshot(trialStartsIn: 3_600), keys: [.openai: Self.openAIKey], effective: .openai)
+        #expect(await !openAI.resolve(.adDetection).freeTierHandover)
+
+        let noKey = Stack(snapshot: Self.snapshot(trialStartsIn: 3_600))
+        #expect(await noKey.resolve(.adDetection).route == .trial)
+        #expect(await !noKey.resolve(.adDetection).freeTierHandover)
+    }
+
+    @Test("A handover is available when the policy exists, the exchange connects and the service says open, from a fresh status")
+    func handoverAvailable() async throws {
+        let stack = Stack(snapshot: Self.snapshot(trialStartsIn: 3_600), keys: Self.googleKeyed)
+
+        guard case .available(let resolution) = await stack.resolver.resolveHandover(feature: .adDetection) else {
+            Issue.record("the handover was not available")
+            return
+        }
+        #expect(resolution.route == .trial)
+        #expect(resolution.key == nil)
+        #expect(resolution.trialExchange != nil)
+        #expect(!resolution.freeTierHandover)
+        #expect(stack.statusFetches.count == 1)
+
+        _ = await stack.resolver.resolveHandover(feature: .adDetection)
+        #expect(stack.statusFetches.count == 2)
+    }
+
+    @Test("A handover is not open once the window has closed or the service says the trial began")
+    func handoverNotOpen() async {
+        let closed = Stack(snapshot: Self.snapshot(trialStartsIn: -3_600), keys: Self.googleKeyed)
+        guard case .notOpen = await closed.resolver.resolveHandover(feature: .adDetection) else {
+            Issue.record("a closed window read as open")
+            return
+        }
+        #expect(closed.statusFetches.count == 0)
+
+        let trialMode = AnalysisTrialProxyStatus(mode: .trial, unitsRemaining: 5, startsAt: .distantPast, monthPaused: false)
+        let began = Stack(snapshot: Self.snapshot(trialStartsIn: 3_600), keys: Self.googleKeyed, status: trialMode)
+        guard case .notOpen = await began.resolver.resolveHandover(feature: .adDetection) else {
+            Issue.record("trial mode read as open")
+            return
+        }
+    }
+
+    @Test("A handover is unavailable with no exchange or a status that could not be read")
+    func handoverUnavailable() async {
+        let noExchange = Stack(snapshot: Self.snapshot(trialStartsIn: 3_600), keys: Self.googleKeyed, hasTrialRoute: false, isReachable: true)
+        guard case .unavailable = await noExchange.resolver.resolveHandover(feature: .adDetection) else {
+            Issue.record("no exchange read as available")
+            return
+        }
+
+        let noStatus = Stack(snapshot: Self.snapshot(trialStartsIn: 3_600), keys: Self.googleKeyed, status: nil)
+        guard case .unavailable = await noStatus.resolver.resolveHandover(feature: .adDetection) else {
+            Issue.record("an unreadable status read as available")
+            return
+        }
+    }
+
+    @Test("A service out of reach before the date is unavailable, never not open, and asks for no status")
+    func handoverOutOfReachBeforeTheDate() async {
+        let stack = Stack(snapshot: Self.snapshot(trialStartsIn: 3_600), keys: Self.googleKeyed, isReachable: false)
+
+        guard case .unavailable = await stack.resolver.resolveHandover(feature: .adDetection) else {
+            Issue.record("a service out of reach read as the date")
+            return
+        }
+        #expect(stack.statusFetches.count == 0)
+    }
+
+    @Test("Past the date a service out of reach is not open: the date comes first")
+    func handoverOutOfReachPastTheDate() async {
+        let stack = Stack(snapshot: Self.snapshot(trialStartsIn: -3_600), keys: Self.googleKeyed, isReachable: false)
+
+        guard case .notOpen = await stack.resolver.resolveHandover(feature: .adDetection) else {
+            Issue.record("past the date read as unavailable")
+            return
+        }
+        #expect(stack.statusFetches.count == 0)
+    }
+
+    @Test("The date is passed from its own instant on, whatever the reachability", arguments: [true, false])
+    func pastTheDateIsTheDateAlone(isReachable: Bool) {
+        let startsAt = Date.now.addingTimeInterval(3_600)
+        var bundle = AnalysisPolicyBundle.baked
+        bundle.trial.startsAt = startsAt
+        let snapshot = AnalysisPolicySnapshot(bundle: bundle, source: .baked, fallbackReason: nil, lastRefreshFailure: nil)
+        let clock = MovableClock(startsAt.addingTimeInterval(-1))
+        let stack = Stack(snapshot: snapshot, isReachable: isReachable, now: { clock.now })
+
+        #expect(!stack.resolver.isPastTrialDate)
+        clock.move(to: startsAt)
+        #expect(stack.resolver.isPastTrialDate)
+    }
+
+    @Test("A status reply that lands past the date opens no handover; one that lands before it does")
+    func handoverRereadsTheWindowAfterTheStatus() async {
+        let startsAt = Date.now.addingTimeInterval(3_600)
+        var bundle = AnalysisPolicyBundle.baked
+        bundle.trial.startsAt = startsAt
+        let snapshot = AnalysisPolicySnapshot(bundle: bundle, source: .baked, fallbackReason: nil, lastRefreshFailure: nil)
+
+        let crossing = MovableClock(startsAt.addingTimeInterval(-1))
+        let late = Stack(snapshot: snapshot, keys: Self.googleKeyed, duringStatusFetch: { crossing.move(to: startsAt) }, now: { crossing.now })
+        guard case .notOpen = await late.resolver.resolveHandover(feature: .adDetection) else {
+            Issue.record("a reply past the date opened a handover")
+            return
+        }
+        #expect(late.statusFetches.count == 1)
+
+        let staying = MovableClock(startsAt.addingTimeInterval(-2))
+        let timely = Stack(snapshot: snapshot, keys: Self.googleKeyed, duringStatusFetch: { staying.move(to: startsAt.addingTimeInterval(-1)) }, now: { staying.now })
+        guard case .available = await timely.resolver.resolveHandover(feature: .adDetection) else {
+            Issue.record("a reply before the date opened no handover")
+            return
+        }
+    }
+
+    @Test("A status that fails past the date is not open: trying again later would not help")
+    func handoverWindowOutranksAFailedStatus() async {
+        let startsAt = Date.now.addingTimeInterval(3_600)
+        var bundle = AnalysisPolicyBundle.baked
+        bundle.trial.startsAt = startsAt
+        let snapshot = AnalysisPolicySnapshot(bundle: bundle, source: .baked, fallbackReason: nil, lastRefreshFailure: nil)
+        let clock = MovableClock(startsAt.addingTimeInterval(-1))
+        let stack = Stack(snapshot: snapshot, keys: Self.googleKeyed, status: nil, duringStatusFetch: { clock.move(to: startsAt) }, now: { clock.now })
+
+        guard case .notOpen = await stack.resolver.resolveHandover(feature: .adDetection) else {
+            Issue.record("a closed window read as unavailable")
+            return
+        }
+    }
+
+    @Test("The first route resolution resolves reachability, once for the session")
+    func firstResolutionResolvesReachability() async {
+        let stack = Stack(status: Self.open)
+        #expect(stack.trialReachability.state == .unknown)
+
+        _ = await stack.resolve(.adDetection)
+        _ = await stack.resolve(.chaptersSummary)
+
+        #expect(await stack.trialReachability.resolve() == .available)
+        #expect(stack.reachabilityReads.count == 1)
+    }
+
     @Test("A bundle without the trial's model entry is proxyUnavailable for both features")
     func noTrialEntry() async {
         var bundle = AnalysisPolicyBundle.baked
@@ -428,6 +627,23 @@ struct AnalysisRouteResolverTests {
 }
 
 /// Runs an action set after the stack exists, from inside its status fetch.
+/// A clock a status fetch can move, so a reply can land after the date.
+private final class MovableClock: Sendable {
+    private let date: Mutex<Date>
+
+    init(_ date: Date) {
+        self.date = Mutex(date)
+    }
+
+    var now: Date {
+        date.withLock { $0 }
+    }
+
+    func move(to newDate: Date) {
+        date.withLock { $0 = newDate }
+    }
+}
+
 private final class StatusFetchHook: Sendable {
     private let action = Mutex<(@Sendable () -> Void)?>(nil)
 

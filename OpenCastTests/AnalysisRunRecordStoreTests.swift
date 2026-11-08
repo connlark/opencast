@@ -251,6 +251,64 @@ struct AnalysisRunRecordStoreTests {
         #expect(store.latestDispatched(feature: .adDetection, episodeID: "episode-3") == nil)
     }
 
+    @Test("A handover and the run it took over, reloaded with equal timestamps, resolve by relationship and never by time")
+    func handoverRelationshipBeatsTime() throws {
+        let directory = AnalysisRunTestFixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let writer = AnalysisRunRecordStore(directory: directory)
+        var handover = Self.record(id: "handover-run", startedAt: Self.start)
+        handover.freeTier = true
+        handover.handoverOf = "direct-run"
+        try writer.begin(Self.record(id: "direct-run", startedAt: Self.start))
+        try writer.begin(handover)
+
+        let reloaded = AnalysisRunRecordStore(directory: directory)
+        #expect(reloaded.record(id: "handover-run")?.freeTier == true)
+        #expect(reloaded.record(id: "handover-run")?.handoverOf == "direct-run")
+        #expect(reloaded.runsTakenOverByOpenHandovers(feature: .adDetection) == ["direct-run"])
+
+        reloaded.saveReply(.geminiBody("{}"), for: AnalysisRunReplyKey(purpose: "ad_window_0", payloadSHA256: "ab"), runID: "direct-run")
+        reloaded.finishTakenOver(runID: "direct-run")
+
+        #expect(reloaded.record(id: "direct-run")?.state == .failed)
+        #expect(reloaded.replies(runID: "direct-run").isEmpty)
+        #expect(reloaded.latestDispatched(feature: .adDetection, episodeID: "episode-1")?.id == "handover-run")
+        #expect(reloaded.runsTakenOverByOpenHandovers(feature: .adDetection).isEmpty)
+    }
+
+    @Test("Only an open handover takes over, and only from an open run")
+    func onlyOpenHandoversTakeOver() throws {
+        let directory = AnalysisRunTestFixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AnalysisRunRecordStore(directory: directory)
+        var handover = Self.record(id: "handover-run")
+        handover.handoverOf = "direct-run"
+        try store.begin(Self.record(id: "direct-run"))
+        try store.begin(handover)
+
+        store.markCancelled(runID: "handover-run")
+        #expect(store.runsTakenOverByOpenHandovers(feature: .adDetection).isEmpty)
+
+        var second = Self.record(id: "second-handover")
+        second.handoverOf = "gone-run"
+        try store.begin(second)
+        #expect(store.runsTakenOverByOpenHandovers(feature: .adDetection).isEmpty)
+    }
+
+    @Test("A record written before these fields reads them as absent, and writes none back")
+    func recordsWithoutTheFields() throws {
+        let directory = AnalysisRunTestFixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try AnalysisRunRecordStore(directory: directory).begin(Self.record(id: "older-run"))
+
+        let text = try String(contentsOf: directory.appending(path: "older-run.json"), encoding: .utf8)
+        #expect(!text.contains("free_tier"))
+        #expect(!text.contains("handover_of"))
+        let reloaded = AnalysisRunRecordStore(directory: directory).record(id: "older-run")
+        #expect(reloaded?.freeTier == nil)
+        #expect(reloaded?.handoverOf == nil)
+    }
+
     @Test("records(limit:) lists the newest first")
     func recordsNewestFirst() throws {
         let directory = Directory()
