@@ -68,7 +68,36 @@ Cloudflare account resources, database IDs or credentials.
   returns ends the step instead of holding its scan permit. A permit older than 240 seconds is reclaimed on the next acquisition
   and logged as `scan_permit_reclaimed`. A poll that finds the scanner busy is
   counted as `scan_busy`; once the oldest permit is a minute old it retries
-  after a flat 60 seconds instead of the jittered delay.
+  after a flat 60 seconds instead of the jittered delay. An origin slot belongs
+  to the permit that took it: reclaiming the permit frees its slot
+  (`origin_slot_reclaimed`, reason `permit_reclaimed`), the next origin entry
+  sweeps a slot whose owner left by any other path (`owner_gone`), and a late
+  guard drop frees only its own slot.
+- **A poll delivery can run placed.** Every storage operation is a round trip
+  to Hyperdrive's pool, and Cloudflare runs the queue handler wherever it puts
+  it. Placement (`placement.region`) moves only the default export's
+  `fetch`, so on the placed route the queue handler forwards a poll delivery to
+  this script's own default `fetch` through the `POLL_PLACED` binding (the
+  script bound to itself) and only waits and acknowledges; the engine runs near
+  your database. A poll wake takes the placed route when its feed id's first two
+  hex digits read below `POLL_PLACED_SHARE`, the binding exists and the
+  `POLL_PLACED_KEY` secret is usable; every other delivery, the dead-letter
+  consumer and the cron handlers run in process. The default `fetch` answers
+  only `POST /consume` carrying the `x-poll-placed-key` header equal to the
+  script's own key (compared in constant time); everything else is 404 without
+  entering Rust. The queue handler acknowledges only a fully read `ok` or 400
+  response carrying `x-poll-engine-ms`; anything else is retried a minute later,
+  and a rejected call or body read (the caller stops waiting at 230 seconds)
+  throws out of `queue()` unacknowledged, with no in-process fallback. A placed
+  engine is not cancelled when its caller gives up: its work commits and the
+  Queue's redelivery finds a settled obligation or durable work to resume under
+  the fence. The message id is therefore withheld on this route (a redelivery
+  would otherwise reclaim a live engine's permits), its permits are freed by the
+  engine or the 240-second age reclaim, and because placed calls spread over
+  many isolates the queue's `max_concurrency` bounds queue invocations, not
+  engines at once. A placed delivery logs `poll_hop_start` and `poll_hop` (the
+  caller) and `poll_placed` (the callee), joined by a 16-hex token sent in
+  `x-poll-hop`.
 - **Cadence.** Each successful poll re-runs the adaptive policy: a 15-minute hot
   floor, 1-hour, 6-hour and 24-hour age tiers, and a cadence accelerator.
   Revoking user interest takes effect immediately.
@@ -101,7 +130,11 @@ binds:
   aborts incomplete multipart uploads after seven days;
 - a **poll Queue and dead-letter Queue** (`POLL_QUEUE`) with four-day retention;
 - a **service binding** `NOTIFICATION_EVENTS` → your NotificationsWorker's
-  `FeedEvents` entrypoint.
+  `FeedEvents` entrypoint;
+- in the deployed lanes, the **self-binding** `POLL_PLACED` → this lane's own
+  Worker name, and `placement.region` set to the region nearest your
+  PostgreSQL host (the template's value is an example; `tests/placed-consume.mjs`
+  pins the committed region and shares, so change both together).
 
 Queue names are not placeholders. NotificationsWorker's ingress checks each
 message against `opencast-notification-{event,episode,job}-<lane>` and this
@@ -199,6 +232,22 @@ The private `PollingControl` service entrypoint accepts POST:
   controls or event expiry.
 - `/consume` and `/dead-letter`: the Queue adapter's own calls.
 
+The placed route has two more controls. `POLL_PLACED_SHARE` (a variable) is the
+canary and the off switch: exactly a decimal integer from 1 to 256 routes the
+feeds whose id begins below it ("32" is the ids beginning `00`-`1f`, "256"
+every feed); "0" or anything else routes nothing. `POLL_PLACED_KEY` is a Worker
+secret of 64 hex digits, generated in the pipe and never written down:
+
+```sh
+openssl rand -hex 32 | yarn workspace @opencast/feed-polling-worker exec wrangler secret put POLL_PLACED_KEY --env <lane>
+```
+
+Both ends of the hop are this script, so nobody keeps the value; replacing it
+deploys a version, and a delivery that meets the two versions gets the unmarked
+404 and is retried. A key that is missing or shorter than 32 characters turns
+the route off, so an unkeyed deployment runs every delivery in process whatever
+the share says.
+
 `poll_delivery` logs every delivery that is not a plain success, every first
 delivery that waited more than 120 seconds in the Queue, and every delivery
 longer than five seconds; other unchanged successes are sampled at 1 in 64.
@@ -207,7 +256,8 @@ it includes planned delays and retry backoff), `initial_queue_wait_ms` (first
 attempts of undelayed wakeups only), `claim_ms`, `publisher_fetch_ms` and
 `storage_ms`, with opaque feed and origin keys only.
 
-Every public HTTP path returns 404, spoofed capability headers included. Bind
+Every public HTTP path returns 404, spoofed capability headers included,
+except the keyed placed consume above. Bind
 operators privately and close temporary operator sessions afterward. Publisher
 errors keep their normal retry and backoff; do not confuse them with internal
 handling failures.
@@ -283,6 +333,10 @@ done
 (cd Server/FeedPollingWorker && worker-build --release --out-dir /tmp/opencast-polling-fixture-build --features storage-fixture)
 node Server/FeedPollingWorker/tests/hooks-runtime.mjs
 node Server/FeedPollingWorker/tests/staging-concurrency.mjs
+OPENCAST_POLLING_FIXTURE_BUILD=/tmp/opencast-polling-fixture-build node Server/FeedPollingWorker/tests/origin-reclaim.mjs
+# The placed route through the shipped queue() and default fetch; about five
+# minutes, one case holding the 230-second bound in real time. PLACED_CASES=<n,...> runs a subset.
+node Server/FeedPollingWorker/tests/placed-consume.mjs
 OPENCAST_POLLING_FIXTURE_BUILD=/tmp/opencast-polling-fixture-build STORAGE_PHASES_ROWS_OUT=/tmp/opencast-storage-phases-rows.jsonl node Server/FeedPollingWorker/tests/witness-runtime.mjs
 STORAGE_PHASES_ROWS=/tmp/opencast-storage-phases-rows.jsonl python3 -B -m unittest discover -s Server/FeedPollingWorker/storage_phases
 ```
@@ -313,7 +367,9 @@ alert-webhook stub (`tests/webhook-stub.mjs`, with its idempotency ledger)
 and a synchronous isolate stall (`/test/stall`, scheduled from a wire-proxy
 fire by `controls.stall`). The polling Worker's `storage-fixture` feature
 (never in a shipped manifest) adds the polling loop's fixture clock and gate
-and the core's close delay behind private fixture routes;
+and the core's close delay behind private fixture routes, with a read-only
+readout of the isolate's origin slots (`/origin-slots`, which
+`origin-reclaim.mjs` reads);
 `harness(..., { pollingBuild })` runs that build. `hooks-runtime.mjs`
 qualifies every hook (`OPENCAST_POLLING_FIXTURE_BUILD` names the fixture
 build, default `/tmp/opencast-polling-fixture-build`). Per-operation R2
@@ -331,3 +387,9 @@ fixture build (its close-delay and maxima cases fail without it), and
 every line it read; the parser's unittest discovery with
 `STORAGE_PHASES_ROWS=<file>` then also parses each of them (the round trip;
 without it that one test is skipped).
+
+The harness's placed mode (`harness(..., { placed })`, or
+`OPENCAST_POLL_PLACED_SHARE=<share>` for an unmodified suite) binds each polling
+Worker to its own default export and delivers through the shipped `queue()`.
+Each placed harness prints one `PLACED-ROUTE` line and fails when no delivery
+took the binding.

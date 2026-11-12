@@ -520,6 +520,12 @@ jobs:
             --features storage-fixture
           OPENCAST_POLLING_FIXTURE_BUILD="$RUNNER_TEMP/opencast-polling-fixture-build" \
             node tests/staging-concurrency.mjs
+          # Origin-slot reclaim reads the fixture build's /origin-slots readout.
+          OPENCAST_POLLING_FIXTURE_BUILD="$RUNNER_TEMP/opencast-polling-fixture-build" \
+            node tests/origin-reclaim.mjs
+          # The placed route through the shipped queue() and default fetch;
+          # about five minutes, one case holding the 230-second bound in real time.
+          node tests/placed-consume.mjs
           python3 -B -m unittest discover -s storage_phases
 
   services:
