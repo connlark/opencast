@@ -300,6 +300,9 @@ pub(crate) async fn execute(
     if acquisition.reclaimed > 0 {
         crate::polling::stat(&db, crate::database::polling::Counter::PermitReclaims).await?;
     }
+    // The acquisition stays intact until the origin session's guards are
+    // disposed; its first permit owns the origin slots, which die with it.
+    let owner = acquisition.permits[0].owner_id();
     let _permit = acquisition.permits;
     let Some(authority) = crate::database::execute(
         &db,
@@ -330,7 +333,7 @@ pub(crate) async fn execute(
     };
     let origin = poll
         .clone()
-        .map(|p| crate::polling::origin::Session::new(db.clone(), p));
+        .map(|p| crate::polling::origin::Session::new(db.clone(), p, owner));
     feed.etag = authority["etag"].as_str().map(str::to_string);
     feed.last_modified = authority["last_modified"].as_str().map(str::to_string);
     feed.validator_url = authority["validator_url"].as_str().map(str::to_string);

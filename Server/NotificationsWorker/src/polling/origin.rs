@@ -2,6 +2,9 @@
 //! redirect destinations included; consumer concurrency bounds the fleet. No database
 //! row is held across network I/O. `n_poll_origin` is publisher backoff schedule
 //! state only: written when an origin fails or recovers, never by a healthy poll.
+//! The origin slot belongs to the scan permit that took it and dies with it
+//! (`feed_scan_admission::OriginSlot`): a cancelled invocation that never drops
+//! its guard leaves a dead slot the permit's reclaims and the next entry remove.
 use super::{policy, Fence};
 use crate::database::{self, polling::Operation};
 use crate::{
@@ -10,43 +13,11 @@ use crate::{
         wire::{hash, int},
     },
     feed_fetch::FeedFetchError,
+    feed_scan_admission::OriginSlot,
 };
 use serde_json::json;
-use std::{cell::RefCell, collections::HashMap};
 use worker::{Headers, Result};
 
-thread_local! {
-    // Scalar occupancy only: never request I/O, buffers or futures.
-    static ACTIVE: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
-}
-/// Dropping the scan, including cancellation, frees the origin.
-struct Guard(String);
-impl Guard {
-    fn enter(key: &str) -> Option<Self> {
-        ACTIVE.with(|active| {
-            let mut active = active.borrow_mut();
-            let count = active.entry(key.into()).or_insert(0);
-            if *count >= policy::ORIGIN_LIMIT_PER_CONSUMER {
-                return None;
-            }
-            *count += 1;
-            Some(Self(key.into()))
-        })
-    }
-}
-impl Drop for Guard {
-    fn drop(&mut self) {
-        ACTIVE.with(|active| {
-            let mut active = active.borrow_mut();
-            if let Some(count) = active.get_mut(&self.0) {
-                *count = count.saturating_sub(1);
-                if *count == 0 {
-                    active.remove(&self.0);
-                }
-            }
-        });
-    }
-}
 pub fn key(url: &url::Url) -> String {
     hash(&["origin-v1", &url.origin().ascii_serialization()])
 }
@@ -54,17 +25,22 @@ pub fn key(url: &url::Url) -> String {
 pub struct Session {
     db: crate::database::Authority,
     fence: Fence,
-    current: Option<Guard>,
+    /// The scan permit owner whose origin slots this session takes.
+    owner: u64,
+    current: Option<OriginSlot>,
     /// Backoff state of the origin being fetched, read before its request.
     failures: i64,
     /// Set when a deferral should wait for a publisher cooldown.
     pub cooldown_until: Option<i64>,
 }
 impl Session {
-    pub fn new(db: crate::database::Authority, fence: Fence) -> Self {
+    /// `owner` is the first permit of the scan's acquisition, which stays
+    /// intact until this session's guards are disposed.
+    pub fn new(db: crate::database::Authority, fence: Fence, owner: u64) -> Self {
         Self {
             db,
             fence,
+            owner,
             current: None,
             failures: 0,
             cooldown_until: None,
@@ -76,19 +52,15 @@ impl Session {
         let key = key(url);
         // A redirect within the origin keeps its slot; one to another origin
         // gives up the previous slot first. Every hop rechecks the fence.
-        let guard = match self.current.take() {
-            Some(guard) if guard.0 == key => Some(guard),
-            previous => {
-                drop(previous);
-                Guard::enter(&key)
+        let guard = match OriginSlot::hop(self.current.take(), &key, self.owner) {
+            Ok(guard) => guard,
+            Err(refused) => {
+                worker::console_log!(
+                    "{}",
+                    json!({"event":"poll_outcome","outcome":"origin_deferred","reason":"consumer_busy","cause":refused.cause,"holder_slot_age_seconds":refused.holder_slot_age_seconds,"isolate":refused.isolate})
+                );
+                return Err(FeedFetchError::OriginDeferred);
             }
-        };
-        let Some(guard) = guard else {
-            worker::console_log!(
-                "{}",
-                json!({"event":"poll_outcome","outcome":"origin_deferred","reason":"consumer_busy"})
-            );
-            return Err(FeedFetchError::OriginDeferred);
         };
         // One read, immediately before the request, covers the cooldown and
         // the message fence, so a revoked generation cannot follow another hop.
@@ -123,7 +95,11 @@ impl Session {
         Ok(())
     }
     pub async fn response(&mut self, status: u16, headers: &Headers) -> Result<()> {
-        let Some(key) = self.current.as_ref().map(|guard| guard.0.clone()) else {
+        let Some(key) = self
+            .current
+            .as_ref()
+            .map(|guard| guard.origin().to_string())
+        else {
             return Ok(());
         };
         let t = now();

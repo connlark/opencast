@@ -1,5 +1,7 @@
 // Isolated workerd instrumentation. Never included in either deployed bundle.
 import Worker, { PollingControl } from '../adapter/index.js';
+// The adapter's exports by name, for a function a base adapter may not have.
+import * as adapterModule from '../adapter/index.js';
 const NativeDate = Date;
 // `frozen` pins the wall clock so two executions can share one integer second.
 let offset = 0, fault, frozen, releaseHang;
@@ -8,6 +10,10 @@ globalThis.Date = class extends NativeDate {
   static now() { return (frozen ?? NativeDate.now()) + offset; }
 };
 const wakeups = [], controllers = new Map(), gates = new Map();
+// Placed mode's invocation identity: each instrumented callee /consume gets a sequence number while it runs, and
+// each poll_placed line and consume storage_phases line records which callees were in flight when it was written
+// (one in flight = the line is that invocation's). Null until placed mode's first request.
+let placedLines = null, calleeSeq = 0; const calleesInFlight = new Set();
 // `d1` and `max_d1` are the storage statement counters (their names kept for
 // the suites that assert them); `rows_read` and `rollup_rows_read` read 0, as
 // the PostgreSQL counters report statements and rows written only.
@@ -19,7 +25,7 @@ for(const method of ['log','warn','error']){const native=console[method].bind(co
   totals.log_events++;
   // Failures are always logged; healthy polls are only sampled. Exact outcome
   // counts come from the consume results, failure classes from these events.
-  try { const event=JSON.parse(args[0]);if(event.event==='poll_delivery'){totals.deliveries.push(event);if(totals.deliveries.length>100)totals.deliveries.shift();}if(event.event==='poll_cleanup')totals.cleanup.push(event);if(event.event==='poll_alert_delivery')totals.alert_deliveries.push({level:method,...event});if(event.event==='poll_outcome'){const key=`${event.outcome}:${event.reason??''}`;totals.logged[key]=(totals.logged[key]??0)+1;} } catch {}
+  try { const event=JSON.parse(args[0]);if(event.event==='poll_delivery'){totals.deliveries.push(event);if(totals.deliveries.length>100)totals.deliveries.shift();}if(event.event==='poll_cleanup')totals.cleanup.push(event);if(event.event==='poll_alert_delivery')totals.alert_deliveries.push({level:method,...event});if(event.event==='poll_outcome'){const key=`${event.outcome}:${event.reason??''}`;totals.logged[key]=(totals.logged[key]??0)+1;}if(placedLines&&(event.event==='poll_placed'||(event.event==='storage_phases'&&event.handler==='consume'))){placedLines.push({event:event.event,hop:event.hop??null,feed:event.chain?.feed??null,inflight:[...calleesInFlight]});if(placedLines.length>300)placedLines.shift();} } catch {}
   native(...args);
 };}
 const hooks = fixtureHooks({ totals, now: () => NativeDate.now(), fault: () => fault, setFault: value => { fault = value; }, hang: release => { releaseHang = release; } });
@@ -149,9 +155,169 @@ function instrument(env, trace) {
     const value = Reflect.get(target, key); return typeof value === 'function' ? value.bind(target) : value;
   } });
   const instrumented={ ...env, FEED_SNAPSHOTS: bucket, POLL_QUEUE: env.TEST_REAL_QUEUE==='true'?env.POLL_QUEUE:queue };
+  if (env.TEST_PLACED === 'true' && env.POLL_PLACED) instrumented.POLL_PLACED = placedBinding(env, trace);
   if(fault==='missing_events'){fault=undefined;delete instrumented.NOTIFICATION_EVENTS;}
   hooks.instrument(instrumented);
   return instrumented;
+}
+// Placed mode (the harness's `placed`; TEST_PLACED is bound only then). Route
+// counts: a delivery that took the binding, or one that ran in process and
+// why; the caller's hops (what the binding received and answered); the stub
+// the caller's binding answers with; the test's aborts of a caller's call.
+const placed = { binding: 0, in_process: 0, reasons: {}, dead_letter: 0, callee: { entered: 0, refused: 0 }, hops: [], stub: null, aborts: new Map(), leaks: { caller_request: 0, caller_response: 0, callee_response: 0, sent_response: 0 } };
+// Whether a usable key (16 characters or more) appears in a header value or a body: a boolean, never the value.
+const leaks = (key, headers, text) => typeof key === 'string' && key.length >= 16 && ([...headers].some(([, value]) => value.includes(key)) || (text ?? '').includes(key));
+const countRoute = reason => { if (reason === 'binding') placed.binding++; else { placed.in_process++; placed.reasons[reason] = (placed.reasons[reason] ?? 0) + 1; } };
+const rustBoundary = () => globalThis.__opencastRustBoundary ?? { constructed: 0, entries: 0, key_env: 0, key_header: 0, recent: [] };
+const anySignal = signals => {
+  if (AbortSignal.any) return AbortSignal.any(signals);
+  const controller = new AbortController();
+  for (const signal of signals) signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
+  return controller.signal;
+};
+// The caller's POLL_PLACED, as the shipped queue() sees it: the adapter's own
+// request and init are forwarded (its 230 s signal merged with the test's
+// abort, /test/hop-abort), and each call is recorded on the invocation's trace
+// as a hop: header names, the x-poll-* values, the key only as present, equal
+// and length, then the status, the marker header and the body text. A stub
+// (/test/placed-stub) answers instead: {mode:'status', status, header},
+// 'reject' (the fetch rejects), 'body_reject' (the body read rejects) or
+// 'never' (forwarded with the adapter's own init to TEST_PLACED_NEVER, which
+// never answers, so the runtime's timer ends it); `times` bounds a stub.
+function placedBinding(env, trace) {
+  return new Proxy(env.POLL_PLACED, { get(target, key) {
+    if (key === 'constructor') return target.constructor;
+    if (key !== 'fetch') { const value = Reflect.get(target, key); return typeof value === 'function' ? value.bind(target) : value; }
+    return async (input, init) => {
+      const request = new Request(input, init), sent = request.headers.get('x-poll-placed-key');
+      // The request may carry the key in x-poll-placed-key alone: not in another header, not in its body.
+      const requestBody = await request.clone().text();
+      if (leaks(env.POLL_PLACED_KEY, [...request.headers].filter(([name]) => name !== 'x-poll-placed-key'), requestBody)) placed.leaks.caller_request++;
+      const hop = { at: NativeDate.now(), method: request.method, path: new URL(request.url).pathname, header_names: [...request.headers.keys()],
+        message_id: request.headers.get('x-poll-message-id'), attempts: request.headers.get('x-poll-attempts'), enqueued: request.headers.get('x-poll-enqueued-ms'),
+        hop: request.headers.get('x-poll-hop'), feed: (() => { try { return JSON.parse(requestBody).feed_id ?? null; } catch { return null; } })(), key: { present: sent !== null, equals_key: sent !== null && sent === env.POLL_PLACED_KEY, length: sent?.length ?? 0 },
+        signal: !!init?.signal, stub: null, status: null, engine: null, engine_ms: null, text: null, error: null, settled: null };
+      (trace.hops ??= []).push(hop); placed.hops.push(hop); if (placed.hops.length > 200) placed.hops.shift();
+      const stub = placed.stub;
+      if (stub && stub.times !== undefined && --stub.times <= 0) placed.stub = null;
+      hop.stub = stub?.mode ?? null;
+      const controller = new AbortController();
+      if (trace.hopKey) placed.aborts.set(trace.hopKey, controller);
+      try {
+        let response;
+        if (!stub) response = await target.fetch(request, { signal: init?.signal ? anySignal([init.signal, controller.signal]) : controller.signal });
+        else if (stub.mode === 'status') response = new Response('stub', { status: stub.status, headers: stub.header ? { 'x-poll-engine-ms': '0' } : {} });
+        else if (stub.mode === 'reject') throw new TypeError('fixture:placed_binding_rejected');
+        else if (stub.mode === 'body_reject') response = new Response(new ReadableStream({ pull(source) { source.error(new Error('fixture:placed_body_rejected')); } }), { status: 200, headers: { 'x-poll-engine-ms': '0' } });
+        else if (stub.mode === 'never') response = await env.TEST_PLACED_NEVER.fetch(request, { signal: init?.signal });
+        else throw Error(`placed stub ${stub.mode}`);
+        hop.status = response.status; hop.engine = response.headers.has('x-poll-engine-ms'); hop.engine_ms = response.headers.get('x-poll-engine-ms');
+        if (stub?.mode !== 'body_reject') { hop.text = await response.clone().text(); if (leaks(env.POLL_PLACED_KEY, response.headers, hop.text)) { placed.leaks.caller_response++; hop.text = '<withheld: the key>'; } }
+        hop.settled = NativeDate.now();
+        return response;
+      } catch (error) {
+        hop.error = `${error?.name ?? 'Error'}: ${error?.message ?? error}`; hop.settled = NativeDate.now();
+        throw error;
+      } finally { if (trace.hopKey && placed.aborts.get(trace.hopKey) === controller) placed.aborts.delete(trace.hopKey); }
+    };
+  } });
+}
+// Every counter and total an instrumented consume adds, as /test/* does.
+function account(trace, start) {
+  trace.wall_ms = performance.now() - start;
+  totals.calls++;
+  for (const name of COUNTERS) totals[name] += trace[name];
+  totals.max_d1 = Math.max(totals.max_d1, trace.d1);
+  totals.max_r2 = Math.max(totals.max_r2, trace.get + trace.put + trace.head + trace.delete + trace.list + trace.multipart);
+  totals.max_r2_in_flight = Math.max(totals.max_r2_in_flight, trace.r2_in_flight_peak ?? 0);
+  totals.recent.push(trace); if (totals.recent.length > 100) totals.recent.shift();
+}
+async function noteOutcome(trace, response) {
+  try { const { outcome, passes } = await response.clone().json(); trace.outcome = outcome; totals.outcomes[outcome] = (totals.outcomes[outcome] ?? 0) + 1; if (passes > 0) { trace.passes = passes; totals.passes[passes] = (totals.passes[passes] ?? 0) + 1; } } catch {}
+}
+// The placed-mode routes; undefined lets the entry's own routing go on.
+async function placedRoutes(worker, path, request) {
+  const { env, ctx } = worker;
+  // The Rust boundary compares what Rust receives with this isolate's key.
+  globalThis.__opencastPlacedKey = env.POLL_PLACED_KEY;
+  placedLines ??= [];
+  if (path === '/metrics') { const r = rustBoundary(); return Response.json({ ...totals, placed: { binding: placed.binding, in_process: placed.in_process, reasons: placed.reasons, dead_letter: placed.dead_letter, callee: placed.callee, leaks: placed.leaks, lines: placedLines, hops: placed.hops.slice(-50), rust: { constructed: r.constructed, entries: r.entries, key_env: r.key_env, key_header: r.key_header, recent: r.recent.slice(-100), consumes: r.consumes ?? [] } } }); }
+  if (path === '/test/placed-stub') { const body = await request.text(); placed.stub = body ? JSON.parse(body) : null; return Response.json({ stub: placed.stub }); }
+  if (path === '/test/hop-abort') { const controller = placed.aborts.get(await request.text()); controller?.abort(new Error('fixture:caller_gave_up')); return Response.json({ aborted: !!controller }); }
+  if (path === '/test/placed-route') {
+    const { cases } = await request.json();
+    if (typeof adapterModule.placedRoute !== 'function') return Response.json({ missing: 'placedRoute is not exported by adapter/index.js' });
+    return Response.json({ results: cases.map(({ env: e, body }) => adapterModule.placedRoute(e, body)) });
+  }
+  if (path === '/test/placed-send') {
+    // A request sent through the real self-binding; '<KEY>' stands for this
+    // Worker's own key, so the key never leaves the isolate.
+    const spec = await request.json();
+    const headers = Object.fromEntries(Object.entries(spec.headers ?? {}).map(([name, value]) => [name, value === '<KEY>' ? env.POLL_PLACED_KEY : value]));
+    const response = await env.POLL_PLACED.fetch(`https://polling.invalid${spec.path}`, { method: spec.method, headers, ...(spec.method === 'GET' ? {} : { body: spec.body ?? '' }) });
+    let text = await response.text();
+    if (leaks(env.POLL_PLACED_KEY, response.headers, text)) { placed.leaks.sent_response++; text = '<withheld: the key>'; }
+    return Response.json({ status: response.status, engine: response.headers.has('x-poll-engine-ms'), header_names: [...response.headers.keys()], text });
+  }
+  if (path === '/test/deliver') {
+    // One message through the shipped queue(): a one-message batch whose ack
+    // and retry are recorded; a throw out of queue() is the decision 'throw'.
+    const text = await request.text(); let body; try { body = JSON.parse(text); } catch { body = text; }
+    const id = request.headers.get('x-poll-message-id'), enqueued = request.headers.get('x-poll-enqueued-ms'), queue = request.headers.get('x-test-queue') ?? 'isolated-poll';
+    const record = { id, queue, decision: null, retry: null, error: null, hops: [], rust: null };
+    const message = { id, body, attempts: Number(request.headers.get('x-poll-attempts') ?? 1), timestamp: new Date(enqueued !== null ? Number(enqueued) : Date.now()),
+      ack() { record.decision ??= 'ack'; }, retry(options) { record.decision ??= 'retry'; record.retry = options ?? null; } };
+    // The caller makes no storage call on the placed route; the callee's
+    // window counts the engine. A dead-letter batch runs in process, counted.
+    const trace = { path: '/test/deliver', hopKey: request.headers.get('x-test-hop-key'), hops: record.hops, ...Object.fromEntries(COUNTERS.map(name => [name, 0])) };
+    const run = () => Worker.prototype.queue.call({ ctx, env: instrument(env, trace) }, { queue, messages: [message] });
+    try { await (queue.endsWith('-dlq') ? counted(env, trace, run) : run()); }
+    catch (error) { record.decision ??= 'throw'; record.error = `${error?.name ?? 'Error'}: ${error?.message ?? error}`; }
+    record.decision ??= 'implicit_ack';
+    if (queue.endsWith('-dlq')) placed.dead_letter++; else countRoute(record.hops.length ? 'binding' : 'adapter_route');
+    record.rust = rustBoundary().recent.filter(entry => entry.message_id === id).at(-1) ?? null;
+    return Response.json(record);
+  }
+  if (path === '/consume') {
+    // The default export's fetch as the binding (or anyone) reaches it, run
+    // with the instrumented env inside the storage counter's window, so the
+    // engine's faults, hooks and counts mean what they mean on /test/consume.
+    const trace = { path: '/consume', route: 'placed', ...Object.fromEntries(COUNTERS.map(name => [name, 0])) }, start = performance.now();
+    const invocation = trace.invocation = ++calleeSeq; calleesInFlight.add(invocation);
+    const work = counted(env, trace, () => Worker.prototype.fetch.call({ ctx, env: instrument(env, trace) }, request)).finally(() => calleesInFlight.delete(invocation));
+    // The body's bytes are read completely inside the chain waitUntil holds (a read in the handler's own
+    // continuation never settles in local workerd once the caller has gone), before the response is returned; a
+    // decoded copy is checked and the same status, headers and bytes are returned. So every callee body is checked
+    // whole; one still being read stays in `stage` and one that failed is counted, and both fail case 2b.
+    (placed.callee.stage ??= {})[invocation] = 'engine';
+    const buffered = work.then(async answered => { placed.callee.stage[invocation] = 'reading'; const bytes = await answered.arrayBuffer(); delete placed.callee.stage[invocation]; return { answered, bytes }; })
+      .catch(error => { delete placed.callee.stage[invocation]; throw error; }); // failed, not pending: counted below
+    // EDGE EMULATION (harness only; the shipped adapter calls no waitUntil).
+    // Local workerd cancels a callee whose caller aborts or ends; the edge
+    // let a placed callee run to its end 16 of 16 times (plan §1.5). Holding
+    // the instrumented run here gives the engine the edge's lifetime.
+    ctx.waitUntil(buffered.catch(() => {}));
+    let response, text;
+    try {
+      const { answered, bytes } = await buffered;
+      text = new TextDecoder().decode(bytes);
+      response = new Response(bytes.byteLength === 0 ? null : bytes, { status: answered.status, statusText: answered.statusText, headers: answered.headers });
+      return response;
+    } finally {
+      if (response?.headers.has('x-poll-engine-ms')) { placed.callee.entered++; trace.path = '/test/consume'; }
+      else if (response) placed.callee.refused++;
+      else placed.callee.failed = (placed.callee.failed ?? 0) + 1;
+      if (response) {
+        if (leaks(env.POLL_PLACED_KEY, response.headers, text)) placed.leaks.callee_response++;
+        if (trace.path === '/test/consume') {
+          if (response.ok) { try { const { outcome, passes } = JSON.parse(text); trace.outcome = outcome; totals.outcomes[outcome] = (totals.outcomes[outcome] ?? 0) + 1; if (passes > 0) { trace.passes = passes; totals.passes[passes] = (totals.passes[passes] ?? 0) + 1; } } catch {} }
+          account(trace, start);
+        }
+      }
+    }
+  }
+  if (path === '/test/consume') countRoute(request.headers.get('x-test-placed-reason') ?? 'test_consume');
+  return undefined;
 }
 export default class extends Worker {
   async scheduled(controller) {
@@ -170,10 +336,19 @@ export default class extends Worker {
       if (key === 'retry') return options => hooks.retry(target, options);
       const value = Reflect.get(target, key); return typeof value === 'function' ? value.bind(target) : value;
     } }));
-    return counted(this.env, trace, () => Worker.prototype.queue.call({ ctx: this.ctx, env: instrument(this.env, trace) }, { queue: batch.queue, messages }));
+    if (this.env.TEST_PLACED !== 'true' || batch.queue.endsWith('-dlq')) {
+      if (this.env.TEST_PLACED === 'true') { globalThis.__opencastPlacedKey = this.env.POLL_PLACED_KEY; placed.dead_letter += batch.messages.length; }
+      return counted(this.env, trace, () => Worker.prototype.queue.call({ ctx: this.ctx, env: instrument(this.env, trace) }, { queue: batch.queue, messages }));
+    }
+    // Placed mode, a poll batch (one message): no caller window, the callee's
+    // window counts the engine; the route is the hop's presence.
+    globalThis.__opencastPlacedKey = this.env.POLL_PLACED_KEY;
+    try { return await Worker.prototype.queue.call({ ctx: this.ctx, env: instrument(this.env, trace) }, { queue: batch.queue, messages }); }
+    finally { for (const _ of batch.messages) countRoute(trace.hops?.length ? 'binding' : 'adapter_route'); }
   }
   async fetch(request) {
     const path = new URL(request.url).pathname;
+    if (this.env.TEST_PLACED === 'true') { const handled = await placedRoutes(this, path, request); if (handled) return handled; }
     if (path === '/clock') { offset = Number(await request.text()) * 1000; return new Response('ok'); }
     if (path === '/fault') { fault = await request.text(); if (this.env.TEST_STORAGE) await storage(this.env, { op: 'arm', kind: 'fault', name: fault }); return new Response('ok'); }
     if (path === '/fault-state') {
@@ -294,9 +469,13 @@ export default class extends Worker {
 //      other request's timers and I/O wait behind it), timed on
 //      performance.now(), which advances during execution here; the proxy's
 //      controls.stall schedules it from another hook's fire.
+//  /test/refuse-events {"from":<k>,"count":<n>}  FeedEvents posts k to k+n-1,
+//      counted from the arming, reject without reaching the binding (as the
+//      platform's invocation limit would refuse them); each is a witness
+//      `refuse_events` record. An empty body disarms.
 function fixtureHooks({ totals, now, fault, setFault, hang }) {
   const witness = totals.hooks = { batches: [], retries: [], r2: [], service: [], outbound: [] };
-  let retryDelay = 1;
+  let retryDelay = 1, refuse = null;
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   const scoped = (name, key) => {
     const value = fault(), m = typeof value === 'string' && typeof key === 'string' && (name === 'slow_get' ? /^slow_get:(\d+):(.+)$/ : /^hang_get:(.+)$/).exec(value);
@@ -322,6 +501,10 @@ function fixtureHooks({ totals, now, fault, setFault, hang }) {
       if (events) env.NOTIFICATION_EVENTS = new Proxy(events, { get(target, key) {
         if (key === 'constructor') return target.constructor;
         if (key === 'fetch') return async (...args) => {
+          if (refuse) {
+            const k = ++refuse.seen;
+            if (k >= refuse.from && k < refuse.from + refuse.count) { witness.service.push({ hook: 'refuse_events', k, at: now() }); throw new Error('fixture:feed_events_refused'); }
+          }
           const m = /^hold_service_body:(\d+)$/.exec(fault() ?? '');
           if (!m) return target.fetch(...args);
           setFault(undefined);
@@ -361,6 +544,11 @@ function fixtureHooks({ totals, now, fault, setFault, hang }) {
         if (!(Number.isSafeInteger(ms) && ms >= 0 && ms <= 60000)) return new Response('stall takes whole milliseconds, 0-60000', { status: 400 });
         const start = performance.now(), date = now(); while (performance.now() - start < ms) {}
         return Response.json({ ms, elapsed: performance.now() - start, date_start: date, date_end: now() });
+      }
+      if (path === '/test/refuse-events') {
+        const text = await request.text(); const body = text ? JSON.parse(text) : null;
+        refuse = body ? { from: body.from, count: body.count, seen: 0 } : null;
+        return Response.json({ refuse });
       }
       if (path !== '/test/retry-delay') return undefined;
       const text = (await request.text()).trim(), seconds = Number(text);

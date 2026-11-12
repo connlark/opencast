@@ -61,14 +61,15 @@ pub async fn loop_gate() -> bool {
 /// polling operations: POST /loop-clock <ms> sets the loop clock's offset,
 /// POST /loop-gate arm|release drives the gate, POST /loop-probe stands where
 /// the loop's guard stands (it awaits the gate, then reads the loop clock
-/// between two `performance.now()` samples, and `Date`), and POST
-/// /close-delay <ms> sets the core's close delay. Any other path is not a
-/// fixture route.
+/// between two `performance.now()` samples, and `Date`), POST
+/// /close-delay <ms> sets the core's close delay, and POST /origin-slots reads
+/// the isolate's origin slots (read-only). Any other path is not a fixture
+/// route.
 pub async fn route(request: &Request, env: &Env) -> Result<Option<Response>> {
     let path = request.path();
     if !matches!(
         path.as_str(),
-        "/loop-clock" | "/loop-gate" | "/loop-probe" | "/close-delay"
+        "/loop-clock" | "/loop-gate" | "/loop-probe" | "/close-delay" | "/origin-slots"
     ) {
         return Ok(None);
     }
@@ -101,6 +102,26 @@ pub async fn route(request: &Request, env: &Env) -> Result<Option<Response>> {
             }
             _ => Response::error("invalid_loop_gate", 400),
         },
+        "/origin-slots" => {
+            let view = crate::feed_scan_admission::origin_slots();
+            let slots: Vec<_> = view
+                .slots
+                .iter()
+                .map(|(origin, owner, owner_live, slot_age_seconds)| {
+                    serde_json::json!({
+                        "origin": origin.get(..16).unwrap_or(origin),
+                        "owner": owner,
+                        "owner_live": owner_live,
+                        "slot_age_seconds": slot_age_seconds,
+                    })
+                })
+                .collect();
+            json(serde_json::json!({
+                "slots": slots,
+                "origin_stale_releases": view.origin_stale_releases,
+                "isolate": view.isolate,
+            }))
+        }
         "/loop-probe" => {
             let waited = loop_gate().await;
             // The loop clock read between two monotonic samples: the clock can

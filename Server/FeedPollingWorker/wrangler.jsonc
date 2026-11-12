@@ -40,7 +40,10 @@
     // Worker are provisioned, migrated and reachable.
     "NOTIFICATION_DISPATCHER_ADMISSION": "false",
     "NOTIFICATION_FEED_OBSERVATION": "false",
-    "NOTIFICATION_CLEANUP": "false"
+    "NOTIFICATION_CLEANUP": "false",
+    // The placed route's share: "0" runs every delivery in process.
+    // Development has no placement and no POLL_PLACED binding.
+    "POLL_PLACED_SHARE": "0"
   },
   "triggers": {
     // The dispatcher runs on a one-minute cron and cleanup on a separate
@@ -120,7 +123,21 @@
         "STORAGE_IDENTITY": "v1;prod-staging;postgres;pg:REPLACE_WITH_DATABASE_NAME:REPLACE_WITH_SYSTEM_IDENTIFIER",
         "NOTIFICATION_DISPATCHER_ADMISSION": "false",
         "NOTIFICATION_FEED_OBSERVATION": "false",
-        "NOTIFICATION_CLEANUP": "false"
+        "NOTIFICATION_CLEANUP": "false",
+        // Feeds whose id's first two hex digits read below this run placed
+        // ("0" to "256"; anything else is "0"). The placed route stays off
+        // until the POLL_PLACED_KEY secret is set (64 hex digits:
+        // openssl rand -hex 32 | yarn wrangler secret put POLL_PLACED_KEY --env <lane>);
+        // without it every delivery runs in process. tests/placed-consume.mjs
+        // pins these committed values; change both together.
+        "POLL_PLACED_SHARE": "0"
+      },
+      // Placement moves only the default export's fetch: the placed consume,
+      // beside your database. Set the region nearest your PostgreSQL host
+      // (and the pinned value in tests/placed-consume.mjs). Cron and Queue
+      // handlers stay where Cloudflare runs them.
+      "placement": {
+        "region": "azure:northcentralus"
       },
       "triggers": {
         "crons": []
@@ -142,6 +159,12 @@
           "binding": "NOTIFICATION_EVENTS",
           "service": "your-notifications-worker-prod-staging",
           "entrypoint": "FeedEvents"
+        },
+        // This script's own default export: the placed consume, keyed by the
+        // POLL_PLACED_KEY secret (wrangler secret put; never in this file).
+        {
+          "binding": "POLL_PLACED",
+          "service": "your-feed-polling-worker-prod-staging"
         }
       ],
       "queues": {
@@ -188,7 +211,21 @@
         "STORAGE_IDENTITY": "v1;production;postgres;pg:REPLACE_WITH_DATABASE_NAME:REPLACE_WITH_SYSTEM_IDENTIFIER",
         "NOTIFICATION_DISPATCHER_ADMISSION": "false",
         "NOTIFICATION_FEED_OBSERVATION": "false",
-        "NOTIFICATION_CLEANUP": "false"
+        "NOTIFICATION_CLEANUP": "false",
+        // Feeds whose id's first two hex digits read below this run placed
+        // ("0" to "256"; anything else is "0"). The placed route stays off
+        // until the POLL_PLACED_KEY secret is set (64 hex digits:
+        // openssl rand -hex 32 | yarn wrangler secret put POLL_PLACED_KEY --env <lane>);
+        // without it every delivery runs in process. tests/placed-consume.mjs
+        // pins these committed values; change both together.
+        "POLL_PLACED_SHARE": "256"
+      },
+      // Placement moves only the default export's fetch: the placed consume,
+      // beside your database. Set the region nearest your PostgreSQL host
+      // (and the pinned value in tests/placed-consume.mjs). Cron and Queue
+      // handlers stay where Cloudflare runs them.
+      "placement": {
+        "region": "azure:northcentralus"
       },
       "triggers": {
         "crons": []
@@ -210,6 +247,12 @@
           "binding": "NOTIFICATION_EVENTS",
           "service": "your-notifications-worker-production",
           "entrypoint": "FeedEvents"
+        },
+        // This script's own default export: the placed consume, keyed by the
+        // POLL_PLACED_KEY secret (wrangler secret put; never in this file).
+        {
+          "binding": "POLL_PLACED",
+          "service": "your-feed-polling-worker-production"
         }
       ],
       "queues": {
