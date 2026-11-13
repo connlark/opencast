@@ -14,9 +14,10 @@ import XCTest
 ///   renders below the show notes, the first tap routes through the
 ///   one-time disclosure dialog, the explicit run reaches cards through the
 ///   visible running state, and a chapter tap seeks playback.
-/// - 03: a `podcast:chapters` feed suppresses generation and explains
-///   (creator metadata wins) — served by the grafted exercise feed, whose
-///   "Bridge Three" declares creator chapters.
+/// - 03: a `podcast:chapters` feed renders the publisher's chapters,
+///   suppresses generation and explains (creator chapters win) — served by
+///   the grafted exercise feed, whose "Bridge Three" declares a two-chapter
+///   document.
 /// - 04: Generate runs on the device under the continued-processing card:
 ///   the app goes to the Home Screen mid-run, the run finishes in the
 ///   background, the cards render on return and Episode Diagnostics shows
@@ -230,9 +231,10 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
         pausePlaybackIfPossible(in: app)
     }
 
-    /// Creator metadata wins: on the grafted feed's `podcast:chapters`
-    /// episode, a completed transcript yields the explanation card — never
-    /// a Generate action, never generated cards.
+    /// Creator chapters win: the grafted feed's `podcast:chapters` episode
+    /// renders the document's chapters under "From the publisher", and a
+    /// completed transcript yields the explanation card — never a Generate
+    /// action, never generated cards.
     @MainActor
     func testDeviceE2E03CreatorChaptersGateSuppressesGeneration() throws {
         try skipUnlessDeviceE2E()
@@ -263,12 +265,18 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
             "creator-chapters episode must not offer Generate"
         )
         XCTAssertFalse(
-            staticText(exactly: "Chapters", in: app).exists,
-            "creator-chapters episode must not get a generated chapters card"
-        )
-        XCTAssertFalse(
             staticText(containing: Self.runningCopy, in: app).exists,
             "creator-chapters episode must not auto-run an analysis"
+        )
+
+        let publisherTag = staticText(exactly: "From the publisher", in: app)
+        sweepDetail(in: app) { publisherTag.exists }
+        assertExists(publisherTag, named: "publisher chapters tag", timeout: 30)
+        assertExists(staticText(exactly: "Rootstock", in: app), named: "first publisher chapter", timeout: 5)
+        assertExists(staticText(exactly: "Scion", in: app), named: "second publisher chapter", timeout: 5)
+        XCTAssertFalse(
+            staticText(exactly: "Generated", in: app).exists,
+            "creator-chapters episode must not get a Generated tag"
         )
         attachTimestampedSmokeScreenshot(named: "03-generation-suppressed")
     }

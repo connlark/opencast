@@ -4,6 +4,8 @@ import OpenCastCore
 nonisolated struct PlaybackChapterList: Equatable, Sendable {
     enum Source: Equatable, Sendable {
         case embedded
+        /// The feed's `podcast:chapters` document.
+        case publisher
         case generated(transcriptSourceSHA256: String)
     }
 

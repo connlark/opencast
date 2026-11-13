@@ -9,6 +9,12 @@ import Testing
 struct SQLiteLocalLibraryCacheStoreTests {
     private static let feedURL = "https://example.com/sqlite-cache.xml"
     private static let otherFeedURL = "https://example.com/sqlite-other.xml"
+    private static let chaptersURL = "https://example.com/chapters/ep-1.json"
+    private static let publisherChaptersColumns = [
+        "publisher_chapters_json",
+        "publisher_chapters_source_url",
+        "publisher_chapters_fetched_at"
+    ]
 
     @Test("Fresh in-memory store loads an empty snapshot without a legacy import marker")
     func emptyStoreLoadsEmptySnapshot() async throws {
@@ -492,6 +498,195 @@ struct SQLiteLocalLibraryCacheStoreTests {
             try columnNames(of: "podcast_cache", databaseURL: databaseURL)
                 .isSuperset(of: ["etag", "last_modified", "body_hash"])
         )
+    }
+
+    @Test("Publisher chapters round-trip on the episode row without touching its timestamp")
+    func publisherChaptersRoundTripWithoutTouchingTimestamp() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        let refreshedAt = Date(timeIntervalSince1970: 1_700_000_500)
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(
+                    id: "ep-1",
+                    title: "First",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_200),
+                    chaptersURL: Self.chaptersURL
+                ),
+                makeEpisode(id: "ep-2", title: "Second", publishedAt: Date(timeIntervalSince1970: 1_700_000_100))
+            ]),
+            refreshedAt: refreshedAt
+        )
+        #expect(try await store.publisherChapters(episodeID: "ep-1") == nil)
+        let changesBeforeStore = try await store.totalRowChangeCount()
+        let entry = makePublisherChaptersEntry(sourceURL: Self.chaptersURL)
+
+        try await store.storePublisherChapters(entry, episodeID: "ep-1")
+
+        #expect(try await store.publisherChapters(episodeID: "ep-1") == entry)
+        #expect(try await store.publisherChapters(episodeID: "ep-2") == nil)
+        #expect(try await store.totalRowChangeCount() == changesBeforeStore + 1)
+        let library = try await store.loadLibrary(activePodcastIDs: [Self.feedURL])
+        #expect(library.episodes.map(\.cachedAt) == [refreshedAt, refreshedAt])
+    }
+
+    @Test("An unknown episode reads no publisher chapters and storing for it writes nothing")
+    func publisherChaptersForUnknownEpisodeAreANoOp() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(id: "ep-1", title: "First", publishedAt: Date(timeIntervalSince1970: 1_700_000_100))
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_500)
+        )
+        #expect(try await store.publisherChapters(episodeID: "ep-missing") == nil)
+        let changesBeforeStore = try await store.totalRowChangeCount()
+
+        try await store.storePublisherChapters(
+            makePublisherChaptersEntry(sourceURL: Self.chaptersURL),
+            episodeID: "ep-missing"
+        )
+
+        #expect(try await store.totalRowChangeCount() == changesBeforeStore)
+        #expect(try await store.publisherChapters(episodeID: "ep-missing") == nil)
+        let library = try await store.loadLibrary(activePodcastIDs: [Self.feedURL])
+        #expect(library.episodes.map(\.episodeID) == ["ep-1"])
+    }
+
+    @Test("Publisher chapters survive identical, content-changed, and chapters-URL-changed feed upserts")
+    func publisherChaptersSurviveFeedUpserts() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        let publishedAt = Date(timeIntervalSince1970: 1_700_000_100)
+        let original = makeFeedSnapshot(episodes: [
+            makeEpisode(id: "ep-1", title: "First", publishedAt: publishedAt, chaptersURL: Self.chaptersURL)
+        ])
+        try await store.upsertCache(from: original, refreshedAt: Date(timeIntervalSince1970: 1_700_000_500))
+        let entry = makePublisherChaptersEntry(sourceURL: Self.chaptersURL)
+        try await store.storePublisherChapters(entry, episodeID: "ep-1")
+
+        try await store.upsertCache(from: original, refreshedAt: Date(timeIntervalSince1970: 1_700_000_600))
+        #expect(try await store.publisherChapters(episodeID: "ep-1") == entry)
+
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(id: "ep-1", title: "First, Retitled", publishedAt: publishedAt, chaptersURL: Self.chaptersURL)
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_700)
+        )
+        #expect(try await store.episodeDetail(episodeID: "ep-1")?.listItem.title == "First, Retitled")
+        #expect(try await store.publisherChapters(episodeID: "ep-1") == entry)
+
+        let movedChaptersURL = "https://example.com/chapters/ep-1-moved.json"
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(id: "ep-1", title: "First, Retitled", publishedAt: publishedAt, chaptersURL: movedChaptersURL)
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_800)
+        )
+        #expect(try await store.episodeDetail(episodeID: "ep-1")?.chaptersURL == movedChaptersURL)
+        #expect(try await store.publisherChapters(episodeID: "ep-1") == entry)
+    }
+
+    @Test("Publisher chapters die with their feed's cache and with the whole local cache")
+    func publisherChaptersDieWithTheCache() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        try await seedTwoFeeds(in: store)
+        let entry = makePublisherChaptersEntry(sourceURL: Self.chaptersURL)
+        try await store.storePublisherChapters(entry, episodeID: "ep-main")
+        try await store.storePublisherChapters(entry, episodeID: "ep-other")
+
+        try await store.deleteCache(forPodcastID: Self.feedURL)
+
+        #expect(try await store.publisherChapters(episodeID: "ep-main") == nil)
+        #expect(try await store.publisherChapters(episodeID: "ep-other") == entry)
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(id: "ep-main", title: "Main Episode", publishedAt: Date(timeIntervalSince1970: 1_700_000_200))
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_400)
+        )
+        #expect(try await store.publisherChapters(episodeID: "ep-main") == nil)
+
+        try await store.deleteAllLocalCache()
+
+        #expect(try await store.publisherChapters(episodeID: "ep-other") == nil)
+    }
+
+    @Test("A canonical version-2 database gains the publisher chapters columns and stamps the current version")
+    func canonicalVersionTwoDatabaseGainsPublisherChapters() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "SQLiteSchemaVersionTests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let databaseURL = directory.appending(path: "LocalLibraryCache.sqlite")
+        let store = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(
+                    id: "ep-1",
+                    title: "First",
+                    publishedAt: Date(timeIntervalSince1970: 1_700_000_100),
+                    chaptersURL: Self.chaptersURL
+                )
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_500)
+        )
+
+        for column in Self.publisherChaptersColumns {
+            try execRawSQL("ALTER TABLE episode_cache DROP COLUMN \(column)", databaseURL: databaseURL)
+        }
+        try execRawSQL(
+            "UPDATE local_cache_meta SET value = '2' WHERE key = 'canonical_schema_version'",
+            databaseURL: databaseURL
+        )
+        #expect(
+            try rawStringColumn(
+                "SELECT value FROM local_cache_meta WHERE key = 'canonical_schema_version'",
+                column: 0,
+                databaseURL: databaseURL
+            ) == ["2"]
+        )
+        #expect(
+            try columnNames(of: "episode_cache", databaseURL: databaseURL)
+                .isDisjoint(with: Self.publisherChaptersColumns)
+        )
+
+        let reopenedStore = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
+        #expect(
+            try await reopenedStore.currentCanonicalSchemaVersion()
+                == SQLiteLocalLibraryCacheStore.canonicalSchemaVersion
+        )
+        #expect(
+            try columnNames(of: "episode_cache", databaseURL: databaseURL)
+                .isSuperset(of: Self.publisherChaptersColumns)
+        )
+        #expect(try await reopenedStore.publisherChapters(episodeID: "ep-1") == nil)
+        let entry = makePublisherChaptersEntry(sourceURL: Self.chaptersURL)
+        try await reopenedStore.storePublisherChapters(entry, episodeID: "ep-1")
+        #expect(try await reopenedStore.publisherChapters(episodeID: "ep-1") == entry)
+    }
+
+    @Test("A corrupt or partial publisher chapters row reads as a miss")
+    func corruptPublisherChaptersReadAsMiss() async throws {
+        let store = SQLiteLocalLibraryCacheStore.inMemory()
+        try await store.upsertCache(
+            from: makeFeedSnapshot(episodes: [
+                makeEpisode(id: "ep-1", title: "First", publishedAt: Date(timeIntervalSince1970: 1_700_000_100))
+            ]),
+            refreshedAt: Date(timeIntervalSince1970: 1_700_000_500)
+        )
+        let entry = makePublisherChaptersEntry(sourceURL: Self.chaptersURL)
+        try await store.storePublisherChapters(entry, episodeID: "ep-1")
+
+        try await execRawSQL("UPDATE episode_cache SET publisher_chapters_json = 'not json'", in: store)
+        #expect(try await store.publisherChapters(episodeID: "ep-1") == nil)
+
+        for column in Self.publisherChaptersColumns {
+            try await store.storePublisherChapters(entry, episodeID: "ep-1")
+            #expect(try await store.publisherChapters(episodeID: "ep-1") == entry)
+            try await execRawSQL("UPDATE episode_cache SET \(column) = NULL", in: store)
+            #expect(try await store.publisherChapters(episodeID: "ep-1") == nil, "NULL \(column)")
+        }
     }
 
     @Test("Installed transcript-segment episode index is dropped on open")
@@ -1675,6 +1870,14 @@ struct SQLiteLocalLibraryCacheStoreTests {
         }
     }
 
+    private func execRawSQL(_ sql: String, in store: SQLiteLocalLibraryCacheStore) async throws {
+        try await store.inspectConnectionForTesting { db in
+            guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
+                throw LocalLibraryCacheStoreError(operation: "test exec", message: String(cString: sqlite3_errmsg(db)))
+            }
+        }
+    }
+
     private func columnNames(of table: String, databaseURL: URL) throws -> Set<String> {
         try rawStringColumn("PRAGMA table_info(\(table))", column: 1, databaseURL: databaseURL)
     }
@@ -1783,7 +1986,8 @@ struct SQLiteLocalLibraryCacheStoreTests {
         publishedAt: Date?,
         showNotesHTML: String? = nil,
         audioURL: String? = nil,
-        artworkURL: String? = nil
+        artworkURL: String? = nil,
+        chaptersURL: String? = nil
     ) -> Episode {
         Episode(
             id: EpisodeID(rawValue: id),
@@ -1796,7 +2000,19 @@ struct SQLiteLocalLibraryCacheStoreTests {
             duration: 120,
             audioURL: URL(string: audioURL ?? "https://example.com/audio/\(id).mp3"),
             artworkURL: artworkURL.flatMap { URL(string: $0) },
-            guid: id
+            guid: id,
+            chaptersURL: chaptersURL.flatMap { URL(string: $0) }
+        )
+    }
+
+    private func makePublisherChaptersEntry(sourceURL: String) -> PublisherChaptersCacheEntry {
+        PublisherChaptersCacheEntry(
+            sourceURL: sourceURL,
+            chapters: [
+                EpisodeChapter(id: 0, title: "Cold open", startTime: 0, endTime: 61.5),
+                EpisodeChapter(id: 1, title: "Interview — part one", startTime: 61.5)
+            ],
+            fetchedAt: Date(timeIntervalSince1970: 1_700_000_900.25)
         )
     }
 

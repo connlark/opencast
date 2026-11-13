@@ -8,6 +8,7 @@ final class TranscriptAnalysisQueue {
     private let transcriptAnalyses: EpisodeTranscriptAnalysisStore
     private let transcriptions: EpisodeTranscriptionStore
     private let library: LibraryStore
+    private let publisherChapters: PublisherChaptersStore
     /// Set by the app model once it is fully initialized; an episode that no
     /// longer resolves can never run.
     var resolveEpisode: (String) -> EpisodeListItemSnapshot? = { _ in nil }
@@ -19,11 +20,13 @@ final class TranscriptAnalysisQueue {
     init(
         transcriptAnalyses: EpisodeTranscriptAnalysisStore,
         transcriptions: EpisodeTranscriptionStore,
-        library: LibraryStore
+        library: LibraryStore,
+        publisherChapters: PublisherChaptersStore
     ) {
         self.transcriptAnalyses = transcriptAnalyses
         self.transcriptions = transcriptions
         self.library = library
+        self.publisherChapters = publisherChapters
     }
 
     /// Explicit episode-detail action for an already-transcribed episode —
@@ -165,10 +168,13 @@ final class TranscriptAnalysisQueue {
             return
         }
 
-        // Creator metadata wins (D3): a feed-declared chapters document
-        // suppresses generation for that episode entirely.
-        if let detail = await library.episodeDetail(for: episodeID),
-           detail.chaptersURL != nil {
+        // Creator chapters win when they exist (D3): a feed-declared
+        // chapters document suppresses generation for that episode unless
+        // this device read it and found nothing usable. A document never
+        // read, or one that failed, still suppresses: unknown stays
+        // conservative. The check reads the cache only, never the network.
+        if let documentURL = await library.episodeDetail(for: episodeID)?.chaptersURL,
+           await !publisherChapters.isDocumentKnownEmpty(episodeID: episodeID, documentURL: documentURL) {
             abandonIfResume(isResume, episodeID: episodeID, modelContext: modelContext)
             return
         }

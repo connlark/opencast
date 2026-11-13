@@ -13,6 +13,14 @@ nonisolated protocol LocalLibraryCacheStore: Sendable {
     /// Full retained refresh-log history, newest first (diagnostics surface).
     func allRefreshLogs() async throws -> [RefreshLogSnapshot]
     func episodeDetail(episodeID: String) async throws -> EpisodeDetailSnapshot?
+    /// The decoded chapters stored for one episode row, whatever URL they
+    /// came from: the caller compares `sourceURL` with the row's current
+    /// `chapters_url`. Absent, partial, or undecodable entries read as nil.
+    func publisherChapters(episodeID: String) async throws -> PublisherChaptersCacheEntry?
+    /// Writes beside the row's `chapters_url` without touching `cached_at`
+    /// (a chapters fetch is not a content change); a no-op when the row is
+    /// gone.
+    func storePublisherChapters(_ entry: PublisherChaptersCacheEntry, episodeID: String) async throws
     func showNotesHTMLByEpisodeID(activePodcastIDs: Set<String>) async throws -> [String: String]
     /// One feed's raw episode descriptions, the summary preferred over the
     /// show notes, each cut to `maximumCharacters`. Rows with neither are
@@ -95,6 +103,12 @@ extension LocalLibraryCacheStore {
                 return summary.isEmpty ? nil : summary
             }
     }
+
+    func publisherChapters(episodeID: String) async throws -> PublisherChaptersCacheEntry? {
+        nil
+    }
+
+    func storePublisherChapters(_ entry: PublisherChaptersCacheEntry, episodeID: String) async throws {}
 
     func prepareEpisodeSearchIndex() async throws {}
 

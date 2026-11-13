@@ -11,6 +11,7 @@ final class PlaybackChaptersCoordinator {
     @ObservationIgnored private let library: LibraryStore
     @ObservationIgnored private let transcriptions: EpisodeTranscriptionStore
     @ObservationIgnored private let transcriptAnalyses: EpisodeTranscriptAnalysisStore
+    @ObservationIgnored private let publisherChapters: PublisherChaptersStore
     /// UI-test seam: served for every episode in place of any real lookup.
     @ObservationIgnored var uiTestOverride: PlaybackChapterList?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
@@ -22,12 +23,14 @@ final class PlaybackChaptersCoordinator {
         playback: AVFoundationPlaybackController,
         library: LibraryStore,
         transcriptions: EpisodeTranscriptionStore,
-        transcriptAnalyses: EpisodeTranscriptAnalysisStore
+        transcriptAnalyses: EpisodeTranscriptAnalysisStore,
+        publisherChapters: PublisherChaptersStore
     ) {
         self.playback = playback
         self.library = library
         self.transcriptions = transcriptions
         self.transcriptAnalyses = transcriptAnalyses
+        self.publisherChapters = publisherChapters
         startItemObservation()
     }
 
@@ -109,10 +112,29 @@ final class PlaybackChaptersCoordinator {
             return .empty
         }
 
-        // Creator-declared chapters win over generated ones even though the
-        // document isn't fetched yet; same rule the detail cards follow.
-        if await library.episodeDetail(for: episodeID)?.chaptersURL != nil {
-            return .empty
+        // The feed's chapters document comes next. One that could not be
+        // read still keeps generated chapters out; one read fine with
+        // nothing usable in it does not. Same rule the detail cards follow.
+        if let documentURL = await library.episodeDetail(for: episodeID)?.chaptersURL {
+            guard !Task.isCancelled else {
+                return .empty
+            }
+            switch await publisherChapters.resolve(episodeID: episodeID, documentURL: documentURL) {
+            case .chapters(let chapters):
+                // A feed refresh that moved the declaration mid-fetch leaves
+                // these to the next refresh, which reads the new one.
+                guard await library.episodeDetail(for: episodeID)?.chaptersURL == documentURL else {
+                    return .empty
+                }
+                return PlaybackChapterList(chapters: chapters, source: .publisher)
+            case .unavailable:
+                return .empty
+            case .documentEmpty:
+                break
+            }
+            guard !Task.isCancelled else {
+                return .empty
+            }
         }
 
         guard transcriptAnalyses.record(for: episodeID)?.state == .completed,

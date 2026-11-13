@@ -40,6 +40,7 @@ final class OpenCastAppModel {
     let remoteTranscriptionPurchases: RemoteTranscriptionPurchaseStore
     let adAnalyses: EpisodeAdAnalysisStore
     let transcriptAnalyses: EpisodeTranscriptAnalysisStore
+    let publisherChapters: PublisherChaptersStore
     /// Which episodes' Private Notes changed, for the views that fetch them.
     let episodeNotes = EpisodeNotesChangeTracker()
     let transcriptIntelligence: TranscriptIntelligenceStore
@@ -333,6 +334,11 @@ final class OpenCastAppModel {
             )
         )
         self.library = resolvedLibrary
+        let publisherChapters = PublisherChaptersStore(
+            httpClient: resolvedHTTPClient,
+            localCache: resolvedLibrary.localCache
+        )
+        self.publisherChapters = publisherChapters
         self.downloads = downloads
         self.downloadSettings = downloadSettings
         self.upNextAutoAddSettings = upNextAutoAddSettings
@@ -441,7 +447,8 @@ final class OpenCastAppModel {
         transcriptAnalysisQueue = TranscriptAnalysisQueue(
             transcriptAnalyses: transcriptAnalyses,
             transcriptions: transcriptions,
-            library: resolvedLibrary
+            library: resolvedLibrary,
+            publisherChapters: publisherChapters
         )
         // Unowned: the library holds this store among its sidecar migrators,
         // so a strong capture is a cycle; the app model keeps both alive.
@@ -508,7 +515,8 @@ final class OpenCastAppModel {
             playback: self.playback,
             library: resolvedLibrary,
             transcriptions: transcriptions,
-            transcriptAnalyses: transcriptAnalyses
+            transcriptAnalyses: transcriptAnalyses,
+            publisherChapters: publisherChapters
         )
         downloadCleanup = DownloadCleanupCoordinator(
             downloads: downloads,

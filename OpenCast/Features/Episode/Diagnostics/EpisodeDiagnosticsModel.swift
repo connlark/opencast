@@ -72,7 +72,11 @@ final class EpisodeDiagnosticsModel {
             .loaded(progressAndSettingsSection(appModel: appModel, episode: episode))
         )
         setSection(.playback, .loaded(playbackSection(snapshot: playbackSnapshot)))
-        setSection(.chaptersSummary, .loaded(chaptersSummarySection(appModel: appModel)))
+        let publisherEntry = await appModel.publisherChapters.cachedEntry(episodeID: episodeID)
+        setSection(
+            .chaptersSummary,
+            .loaded(chaptersSummarySection(appModel: appModel, publisherEntry: publisherEntry))
+        )
         setSection(.analysisRuns, .loaded(analysisRunsSection(appModel: appModel)))
 
         let downloadRecord = appModel.downloads.record(for: episodeID)

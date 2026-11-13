@@ -12,7 +12,7 @@ struct OpenCastSystemActionFixture {
 
     /// `librarySave` stands in for the library's synced-store save, which
     /// every playlist write goes through.
-    static func make(episodeCount: Int = 3, queue: UpNextQueueStore? = nil, downloads: DownloadStore? = nil, librarySave: ((ModelContext) throws -> Void)? = nil) async throws -> Self {
+    static func make(episodeCount: Int = 3, queue: UpNextQueueStore? = nil, downloads: DownloadStore? = nil, httpClient: (any OpenCastHTTPClient)? = nil, librarySave: ((ModelContext) throws -> Void)? = nil) async throws -> Self {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         context.insert(SubscriptionRecord(feedURL: feed, title: "A Show"))
@@ -24,7 +24,7 @@ struct OpenCastSystemActionFixture {
         }
         try await cache.upsertCache(from: FeedSnapshot(podcast: Podcast(id: id, feedURL: URL(string: feed)!, title: "A Show"), episodes: episodes), refreshedAt: .now)
         let library = librarySave.map { LibraryStore(localCache: cache, savePlaybackSkipSettingsModelContext: $0) }
-        let model = OpenCastAppModel(library: library, localLibraryCacheStore: cache, downloads: downloads ?? DownloadStore(), upNextQueue: queue ?? UpNextQueueStore(), allowsAutomaticFeedRefresh: false)
+        let model = OpenCastAppModel(httpClient: httpClient, library: library, localLibraryCacheStore: cache, downloads: downloads ?? DownloadStore(), upNextQueue: queue ?? UpNextQueueStore(), allowsAutomaticFeedRefresh: false)
         return Self(model: model, context: context)
     }
 

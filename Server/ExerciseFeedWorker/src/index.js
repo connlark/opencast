@@ -41,10 +41,9 @@ const EPISODES = [
   },
 ];
 
-// Minimal Podcasting 2.0 chapters document for Bridge Three. The app never
-// fetches this at v1 (presence of the tag alone gates generation), but the
-// fixture stays a real document so a future creator-chapters renderer can
-// exercise it unchanged.
+// Minimal Podcasting 2.0 chapters document for Bridge Three. The app fetches
+// it and renders both chapters under "From the publisher"; a document with
+// chapters also keeps the app from generating its own for this episode.
 const CHAPTERS_003 = {
   version: "1.2.0",
   chapters: [

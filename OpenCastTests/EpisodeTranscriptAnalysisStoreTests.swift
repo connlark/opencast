@@ -977,6 +977,45 @@ struct EpisodeTranscriptAnalysisStoreTests {
         #expect(producer.requests.count == 1)
     }
 
+    @Test("Generate runs for an episode whose declared chapters document was read and held nothing")
+    func generateRunsWhenDeclaredDocumentIsKnownEmpty() async throws {
+        let harness = try await makeQueueHarness(slug: "declared-empty", chapteredEpisodeIndices: [0])
+        let producer = harness.producer
+        let episodeID = harness.episodeIDs[0]
+        let documentURL = try #require(await harness.appModel.library.episodeDetail(for: episodeID)?.chaptersURL)
+        try await harness.appModel.library.localCache.storePublisherChapters(
+            PublisherChaptersCacheEntry(sourceURL: documentURL, chapters: [], fetchedAt: .now),
+            episodeID: episodeID
+        )
+
+        harness.appModel.generateChaptersAndSummary(episodeID: episodeID, modelContext: harness.context)
+
+        #expect(await waitUntil { harness.store.record(for: episodeID)?.state == .completed })
+        #expect(producer.requests.map(\.episodeID) == [episodeID])
+    }
+
+    @Test("Generate skips an episode whose declared chapters document was never read")
+    func generateSkipsDeclaredDocumentNotKnownEmpty() async throws {
+        let harness = try await makeQueueHarness(
+            slug: "declared-unread",
+            episodeCount: 2,
+            chapteredEpisodeIndices: [0]
+        )
+        let producer = harness.producer
+        let declared = harness.episodeIDs[0]
+        let plain = harness.episodeIDs[1]
+
+        // Both requests queue in one main-actor turn and each goes to the
+        // front, so the declared episode is checked first: the plain run
+        // completing proves the check already ran.
+        harness.appModel.generateChaptersAndSummary(episodeID: plain, modelContext: harness.context)
+        harness.appModel.generateChaptersAndSummary(episodeID: declared, modelContext: harness.context)
+
+        #expect(await waitUntil { harness.store.record(for: plain)?.state == .completed })
+        #expect(harness.store.record(for: declared) == nil)
+        #expect(producer.requests.map(\.episodeID) == [plain])
+    }
+
     // MARK: - Unchanged surfaces
 
     @Test("Transcript analysis record is local-only but included in full schema")
@@ -1106,7 +1145,12 @@ struct EpisodeTranscriptAnalysisStoreTests {
         return (store, producer)
     }
 
-    private func makeQueueHarness(slug: String, episodeCount: Int = 1) async throws -> QueueHarness {
+    /// Episodes at `chapteredEpisodeIndices` declare a `podcast:chapters` document.
+    private func makeQueueHarness(
+        slug: String,
+        episodeCount: Int = 1,
+        chapteredEpisodeIndices: Set<Int> = []
+    ) async throws -> QueueHarness {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let localCache = SQLiteLocalLibraryCacheStore.inMemory()
@@ -1117,10 +1161,14 @@ struct EpisodeTranscriptAnalysisStoreTests {
             fileStore: EpisodeTranscriptAnalysisFileStore(baseDirectory: temporaryDirectory)
         )
         let items = (0..<episodeCount).map { index in
-            """
+            let chapters = chapteredEpisodeIndices.contains(index)
+                ? #"<podcast:chapters url="https://example.com/chapters/\#(slug)-\#(index).json" type="application/json+chapters" />"#
+                : ""
+            return """
                 <item>
                   <title>Episode \(index)</title>
                   <guid>\(slug)-\(index)</guid>
+                  \(chapters)
                   <enclosure url="https://example.com/audio/\(slug)-\(index).mp3" type="audio/mpeg" />
                 </item>
             """

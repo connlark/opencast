@@ -1,0 +1,173 @@
+{
+  "version": "1.2.0",
+  "author": "Adam Curry & Dave Jones",
+  "title": "Podcasting 2.0 — Episode 277: x402 Bitch!",
+  "podcastName": "Podcasting 2.0",
+  "fileName": "PC20-277-2026-10-30-Final.mp3",
+  "chapters": [
+    {
+      "startTime": 0,
+      "title": "x402 Bitch! — Welcome to the Boardroom"
+    },
+    {
+      "startTime": 9,
+      "endTime": 19,
+      "img": "https://reflex.livewire.io/ci/917393e3-1b1e-5cef-ace4-edaa54e1f810/8d3fb54dc1c6fea4dec2429fbbfb950bcd8a17e6e2f923f169aee53f212d769f/PVq2N6YVat5FKeN5BGarR8Tu.png?t=1794539907888",
+      "title": "33340 sats from chrislas@fountain.fm",
+      "toc": false
+    },
+    {
+      "startTime": 53,
+      "title": "No No Agenda: the Day After the Final Show"
+    },
+    {
+      "startTime": 386,
+      "title": "Helipad Update and the Booster Grand Ball Stirs"
+    },
+    {
+      "startTime": 473,
+      "title": "What to Do With the Robots Now: a Podcast for One"
+    },
+    {
+      "startTime": 529,
+      "title": "PNWR: \"It's About Discovery. Get It Right.\"",
+      "url": "https://www.buzzsprout.com/1538779/episodes/20044916"
+    },
+    {
+      "startTime": 619,
+      "title": "Normies Can't Build an App? Dave's New-App Flood"
+    },
+    {
+      "startTime": 734,
+      "title": "Agent Clip 1: Small Claims Court"
+    },
+    {
+      "startTime": 799,
+      "title": "Agent Clip 2: 19 Restaurant Reservations and the Tragedy of the Commons"
+    },
+    {
+      "startTime": 991,
+      "title": "PNWR: Sam Sethi Says PC2.0 Left Payments to Rot",
+      "url": "https://www.buzzsprout.com/1538779/episodes/20044916"
+    },
+    {
+      "startTime": 1137,
+      "title": "Strip the Ads: AI Apps Will Make It the Baseline"
+    },
+    {
+      "startTime": 1156,
+      "title": "Smart-TV Debloating: CleanYourTV and DumbTV",
+      "url": "https://cybernews.com/security/smart-tv-debloating-movement-cleanyourtv-explodes-on-github/"
+    },
+    {
+      "startTime": 1247,
+      "title": "The Binance Hack: Tether and Circle Freeze"
+    },
+    {
+      "startTime": 1295,
+      "title": "Cloudflare's x402 Monetization Gateway and a PI Plus Tier"
+    },
+    {
+      "startTime": 1777,
+      "title": "Free Markets: Oil Priced by Hyperliquid and Polymarket"
+    },
+    {
+      "startTime": 1909,
+      "title": "Agentic Passport Renewal; Banks as the Counterparty"
+    },
+    {
+      "startTime": 2031,
+      "title": "Plaid and Read Access to Your Bank"
+    },
+    {
+      "startTime": 2112,
+      "title": "Agent Clip 3: Dick and Paul on Banks Blocking Agents"
+    },
+    {
+      "startTime": 2329,
+      "title": "Give Your Agent a Wallet — x402 Bitch!"
+    },
+    {
+      "startTime": 2368,
+      "title": "What Is Podcasting Selling? Value vs. the Ad Load"
+    },
+    {
+      "startTime": 2576,
+      "title": "Starbucks Hospital Sushi"
+    },
+    {
+      "startTime": 2735,
+      "title": "The Daily Source Code Archive, Podcast Index ID 2004",
+      "url": "https://thedailysourcecode.com/"
+    },
+    {
+      "startTime": 2919,
+      "title": "A Private Key of Four"
+    },
+    {
+      "startTime": 2942,
+      "title": "Dave's Clone Detector: Lawyer Up, File_Lawsuit"
+    },
+    {
+      "startTime": 3051,
+      "title": "The Lock Tag and the Registrar Model"
+    },
+    {
+      "startTime": 3194,
+      "title": "Lookalike Feed Report: How It Works",
+      "url": "https://public.podcastindex.org/lookalike_feeds_backlog.html"
+    },
+    {
+      "startTime": 3375,
+      "title": "Matching on Title, Art and Episode GUIDs; Five Labels"
+    },
+    {
+      "startTime": 3711,
+      "title": "First Stored, Generic Titles, PeerTube and WordPress"
+    },
+    {
+      "startTime": 3864,
+      "title": "SaSPod Dupes"
+    },
+    {
+      "startTime": 3942,
+      "title": "The Numbers: 100,000 Pairs, 1,400 Monetization Copies, 762 on Spreaker"
+    },
+    {
+      "startTime": 3988,
+      "title": "No Agenda Clones and Trademark"
+    },
+    {
+      "startTime": 4049,
+      "title": "Founder Talk Floods Podping"
+    },
+    {
+      "startTime": 4167,
+      "title": "Not Just Spreaker: Free Hosts and Host Migrations"
+    },
+    {
+      "startTime": 4318,
+      "title": "Copycat Lands in the Podcast Index Robot MCP"
+    },
+    {
+      "startTime": 4559,
+      "title": "Boostagrams and PayPals"
+    },
+    {
+      "startTime": 4729,
+      "title": "Dave's Failing Split"
+    },
+    {
+      "startTime": 4827,
+      "title": "Adam's Podping Node Keeps Running Out of Memory"
+    },
+    {
+      "startTime": 5266,
+      "title": "Dokken, Winger and White Lion"
+    },
+    {
+      "startTime": 5458,
+      "title": "Strip Out the Ads — Close"
+    }
+  ]
+}

@@ -71,7 +71,9 @@ struct EpisodeDiagnosticsModelTests {
         #expect(rowValue(model.state(for: .adAnalysis), "Policy") == EpisodeAdAnalysisContract.expectedPolicy)
         // No run record yet: the block says so rather than staying loading.
         #expect(rowValue(model.state(for: .analysisRuns), "Status") == "No analysis runs for this episode.")
-        #expect(model.reportText().contains("== Chapters & Summary ==\nStatus: No chapters/summary record.\n\n== Analysis Runs =="))
+        #expect(model.reportText().contains(
+            "== Chapters & Summary ==\nPublisher Chapters: None cached.\nStatus: No chapters/summary record.\n\n== Analysis Runs =="
+        ))
 
         let spansState = model.state(for: .adSpans)
         let spanRow = try #require(rowValue(spansState, "Span #1 — Host Read"))
@@ -92,6 +94,53 @@ struct EpisodeDiagnosticsModelTests {
         #expect(report.contains("== Zone Matrix =="))
         #expect(report.contains(downloadFileURL))
         #expect(report.contains(Self.audioURL))
+    }
+
+    @Test("The chapters block leads with the cached publisher chapters, even with no analysis record")
+    func chaptersBlockShowsCachedPublisherChapters() async throws {
+        let fixture = try makeFixture()
+        let podcastID = PodcastID(rawValue: Self.feedURL)
+        let chaptersURL = "https://example.com/chapters/episode.json"
+        try await fixture.appModel.library.localCache.upsertCache(
+            from: FeedSnapshot(
+                podcast: Podcast(id: podcastID, feedURL: URL(string: Self.feedURL)!, title: "A Show"),
+                episodes: [Episode(
+                    id: EpisodeID(rawValue: Self.episodeID),
+                    podcastID: podcastID,
+                    podcastTitle: "A Show",
+                    title: "Episode",
+                    audioURL: URL(string: Self.audioURL),
+                    chaptersURL: URL(string: chaptersURL)
+                )]
+            ),
+            refreshedAt: .now
+        )
+        try await fixture.appModel.library.localCache.storePublisherChapters(
+            PublisherChaptersCacheEntry(
+                sourceURL: chaptersURL,
+                chapters: [
+                    EpisodeChapter(id: 0, title: "Opening", startTime: 0),
+                    EpisodeChapter(id: 1, title: "Interview", startTime: 4),
+                ],
+                fetchedAt: Date(timeIntervalSince1970: 1_800_000_000)
+            ),
+            episodeID: Self.episodeID
+        )
+        let model = EpisodeDiagnosticsModel(
+            episodeID: Self.episodeID,
+            dependencies: makeDependencies(
+                fileInspector: SpyFileInspector(),
+                prober: SpyNetworkProber(),
+                counters: fixture.counters
+            )
+        )
+
+        await model.load(appModel: fixture.appModel)
+
+        let chaptersState = model.state(for: .chaptersSummary)
+        #expect(chaptersState.section?.rows.map(\.label) == ["Publisher Chapters", "Status"])
+        #expect(rowValue(chaptersState, "Publisher Chapters")
+            == "2 chapters from \(chaptersURL), fetched 2027-01-15T08:00:00Z")
     }
 
     @Test("A download with no recorded hash skips the full-file hash pass")

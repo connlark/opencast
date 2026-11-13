@@ -2,11 +2,13 @@ import OpenCastCore
 import SwiftUI
 
 /// Chapter list on episode detail: title + start time, tap seeks. Renders
-/// chapters embedded in the audio file or a current generated analysis;
-/// the tag tells them apart.
+/// chapters embedded in the audio file, the feed's chapters document, or a
+/// current generated analysis. Publisher and generated rows carry a tag
+/// naming their source; embedded rows, part of the audio itself, carry none.
 struct EpisodeChaptersCard: View {
     enum Source {
         case embedded
+        case publisher
         case generated
     }
 
@@ -20,7 +22,12 @@ struct EpisodeChaptersCard: View {
                 Label("Chapters", systemImage: "list.bullet")
                     .font(.headline)
                 Spacer()
-                if source == .generated {
+                switch source {
+                case .embedded:
+                    EmptyView()
+                case .publisher:
+                    PublisherContentTag()
+                case .generated:
                     GeneratedContentTag()
                 }
             }
@@ -59,11 +66,16 @@ struct EpisodeChaptersCard: View {
         .accessibilityIdentifier("Episode Chapters Card")
     }
 
+    /// Clamped, because `Duration.seconds` traps on a NaN or a value past
+    /// its range and chapters arrive from feeds and files.
     static func startTimeText(_ startTime: TimeInterval) -> String {
-        let pattern: Duration.TimeFormatStyle.Pattern = startTime >= 3600
+        let seconds = startTime.isNaN
+            ? 0
+            : min(max(startTime, 0), PublisherChaptersDocumentDecoder.maximumTimestamp)
+        let pattern: Duration.TimeFormatStyle.Pattern = seconds >= 3600
             ? .hourMinuteSecond
             : .minuteSecond
-        return Duration.seconds(max(startTime, 0)).formatted(.time(pattern: pattern))
+        return Duration.seconds(seconds).formatted(.time(pattern: pattern))
     }
 }
 
@@ -75,6 +87,18 @@ struct EpisodeChaptersCard: View {
             EpisodeChapter(id: 2, title: "Outro", startTime: 4_000, endTime: 4_100),
         ],
         source: .embedded
+    ) { _ in }
+    .padding()
+}
+
+#Preview("From the publisher") {
+    EpisodeChaptersCard(
+        chapters: [
+            EpisodeChapter(id: 0, title: "Cold Open", startTime: 0),
+            EpisodeChapter(id: 1, title: "Listener Mail", startTime: 133.56, endTime: 900),
+            EpisodeChapter(id: 2, title: "Closing Thoughts", startTime: 3_700),
+        ],
+        source: .publisher
     ) { _ in }
     .padding()
 }

@@ -24,6 +24,7 @@ struct EpisodeDetailView: View {
     @State private var adSection = EpisodeAdAnalysisSectionModel()
     @State private var chaptersSection = EpisodeChaptersSummarySectionModel()
     @State private var embeddedChapters: [EpisodeChapter] = []
+    @State private var publisherSection = EpisodePublisherChaptersSectionModel()
     @State private var privateNotes: [EpisodeNoteRecord] = []
     @State private var isConfirmingClearProgress = false
     @State private var isConfirmingGenerateDisclosure = false
@@ -54,6 +55,7 @@ struct EpisodeDetailView: View {
         let progressRecord = episode.flatMap { appModel.library.progressRecord(for: $0.episodeID) }
         let adAnalysisContentIdentifier = adSection.loadKey(appModel: appModel, episodeID: episode?.episodeID)
         let transcriptAnalysisContentIdentifier = chaptersSection.loadKey(appModel: appModel, episodeID: episode?.episodeID)
+        let publisherChaptersKey = publisherSection.loadKey(episode: episode)
 
         Group {
             if let episode {
@@ -147,6 +149,9 @@ struct EpisodeDetailView: View {
                 return
             }
             embeddedChapters = chapters
+        }
+        .task(id: publisherChaptersKey) {
+            await publisherSection.load(appModel: appModel, episode: episode)
         }
     }
 
@@ -279,19 +284,32 @@ struct EpisodeDetailView: View {
                 }
 
                 // Chapter source priority: embedded in the audio file, then
-                // the feed's declaration, then generated. Creator metadata
-                // wins (D3) at render time too: an analysis generated while
-                // chapters_url was still unpopulated (the pre-upgrade cache
-                // window) stops rendering as soon as a feed refresh reveals
-                // the creator declaration.
+                // the feed's chapters document, then generated. Creator
+                // chapters win when they exist (D3): a feed declaration hides
+                // the generated cards and the Generate offer unless its
+                // document was read and held nothing usable. Until the
+                // publisher load lands the bare declaration stands in, so
+                // Generate never flickers in ahead of a slow fetch. The rule
+                // applies at render time too: an analysis generated before
+                // the declaration reached the cache stops rendering once a
+                // feed refresh reveals it.
                 if !displayedEmbeddedChapters.isEmpty {
                     EpisodeChaptersCard(chapters: displayedEmbeddedChapters, source: .embedded) { chapter in
                         seekToTimestamp(chapter.startTime, episode: episode)
                     }
                 }
 
+                let publisherChapters = publisherSection.chapters(for: episode.episodeID)
+                if displayedEmbeddedChapters.isEmpty, !publisherChapters.isEmpty {
+                    EpisodeChaptersCard(chapters: publisherChapters, source: .publisher) { chapter in
+                        seekToTimestamp(chapter.startTime, episode: episode)
+                    }
+                }
+
+                let feedSuppressesGeneration = publisherSection.suppressesGeneration(for: episode.episodeID)
+                    ?? (chaptersSection.creatorChaptersURL != nil)
                 let showsGeneratedCards = chaptersSection.hasCurrentAnalysis(forKey: chaptersKey, episodeID: episode.episodeID)
-                    && chaptersSection.creatorChaptersURL == nil
+                    && !feedSuppressesGeneration
                 if showsGeneratedCards, let analysisDocument = chaptersSection.analysisDocument {
                     if displayedEmbeddedChapters.isEmpty, !analysisDocument.chapters.isEmpty {
                         EpisodeChaptersCard(
@@ -330,7 +348,11 @@ struct EpisodeDetailView: View {
                 // presentation maps a completed analysis to .ready, which
                 // must not re-offer Generate under the rendered cards.
                 if !showsGeneratedCards,
-                   let controlsPresentation = chaptersSummaryControlsPresentation(for: episode, key: chaptersKey) {
+                   let controlsPresentation = chaptersSummaryControlsPresentation(
+                       for: episode,
+                       key: chaptersKey,
+                       feedSuppressesGeneration: feedSuppressesGeneration
+                   ) {
                     EpisodeChaptersSummaryControlsCard(presentation: controlsPresentation) {
                         noticeGate.run(appModel: appModel) { generateChaptersAndSummary(episode) }
                     }
@@ -625,12 +647,13 @@ struct EpisodeDetailView: View {
     /// per-episode manual action, with no show-wide setting gating it.
     private func chaptersSummaryControlsPresentation(
         for episode: EpisodeListItemSnapshot,
-        key: String
+        key: String,
+        feedSuppressesGeneration: Bool
     ) -> EpisodeChaptersSummaryControlsCard.Presentation? {
         guard chaptersSection.isLoaded(forKey: key, episodeID: episode.episodeID) else {
             return nil
         }
-        if chaptersSection.creatorChaptersURL != nil {
+        if feedSuppressesGeneration {
             return .creatorChaptersAvailable
         }
         switch chaptersSection.jobState {

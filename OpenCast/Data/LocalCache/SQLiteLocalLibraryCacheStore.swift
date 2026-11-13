@@ -12,7 +12,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
     /// Version of the canonical (non-derived) tables, counted in
     /// local_cache_meta; bump alongside each new gated migration in
     /// `database()`. PRAGMA user_version belongs to the derived search index.
-    nonisolated static let canonicalSchemaVersion = 2
+    nonisolated static let canonicalSchemaVersion = 3
     private nonisolated static let maximumRetryAttemptCount = 6
 
     private nonisolated static func retryDelay(forAttemptCount attempts: Int) -> TimeInterval {
@@ -228,6 +228,56 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             )
         }
         return detail
+    }
+
+    // Both `async` so a call on the concrete store resolves here; a
+    // synchronous member loses overload ranking to the protocol's defaults.
+    func publisherChapters(episodeID: String) async throws -> PublisherChaptersCacheEntry? {
+        let operation = "publisher chapters load"
+        let db = try database()
+        var entry: PublisherChaptersCacheEntry?
+        try query(
+            """
+            SELECT publisher_chapters_json, publisher_chapters_source_url, publisher_chapters_fetched_at
+            FROM episode_cache
+            WHERE episode_id = ?
+            """,
+            operation: operation,
+            db: db,
+            bindings: { statement in
+                try bind(episodeID, at: 1, statement: statement, db: db, operation: operation)
+            }
+        ) { statement in
+            guard let json = columnText(statement, 0),
+                  let sourceURL = columnText(statement, 1),
+                  let fetchedAt = columnDate(statement, 2),
+                  let chapters = try? JSONDecoder().decode([EpisodeChapter].self, from: Data(json.utf8))
+            else {
+                return
+            }
+            entry = PublisherChaptersCacheEntry(sourceURL: sourceURL, chapters: chapters, fetchedAt: fetchedAt)
+        }
+        return entry
+    }
+
+    func storePublisherChapters(_ entry: PublisherChaptersCacheEntry, episodeID: String) async throws {
+        let operation = "publisher chapters store"
+        let json = String(decoding: try JSONEncoder().encode(entry.chapters), as: UTF8.self)
+        let db = try database()
+        try run(
+            """
+            UPDATE episode_cache
+            SET publisher_chapters_json = ?, publisher_chapters_source_url = ?, publisher_chapters_fetched_at = ?
+            WHERE episode_id = ?
+            """,
+            operation: operation,
+            db: db
+        ) { statement in
+            try bind(json, at: 1, statement: statement, db: db, operation: operation)
+            try bind(entry.sourceURL, at: 2, statement: statement, db: db, operation: operation)
+            try bind(entry.fetchedAt, at: 3, statement: statement, db: db, operation: operation)
+            try bind(episodeID, at: 4, statement: statement, db: db, operation: operation)
+        }
     }
 
     func showNotesHTMLByEpisodeID(activePodcastIDs: Set<String>) throws -> [String: String] {
@@ -518,6 +568,9 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 try bind(ArtworkPreview.canonicalArtworkURLKey(for: podcastArtworkURL), at: 2, statement: statement, db: db, operation: operation)
             }
 
+            // The publisher_chapters_* columns stay out of this upsert: a
+            // refresh keeps the cached document even when chapters_url
+            // changes, and its reader treats a source URL mismatch as a miss.
             let episodeUpsert = try prepare(
                 """
                 INSERT INTO episode_cache (episode_id, podcast_id, podcast_title, title, summary,
@@ -1346,6 +1399,9 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             // the columns; the stamp is gated on the columns actually being
             // present so a transiently failed ALTER (I/O error, disk full)
             // retries on the next open instead of being versioned over.
+            // Every later step gates on `==` the version just below it, so an
+            // unstamped step holds back the steps above it instead of being
+            // stamped past by them.
             if try canonicalSchemaVersion(db: handle) < 1 {
                 try? exec("ALTER TABLE podcast_cache ADD COLUMN etag TEXT", operation: "schema migration", db: handle)
                 try? exec("ALTER TABLE podcast_cache ADD COLUMN last_modified TEXT", operation: "schema migration", db: handle)
@@ -1355,7 +1411,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                     try setCanonicalSchemaVersion(1, db: handle)
                 }
             }
-            if try canonicalSchemaVersion(db: handle) < 2 {
+            if try canonicalSchemaVersion(db: handle) == 1 {
                 try? exec(
                     "ALTER TABLE feed_load_state ADD COLUMN consecutive_partial_attempts INTEGER NOT NULL DEFAULT 0",
                     operation: "schema migration",
@@ -1369,6 +1425,15 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 if try columnNames(of: "feed_load_state", db: handle)
                     .isSuperset(of: ["consecutive_partial_attempts", "automatic_retry_after"]) {
                     try setCanonicalSchemaVersion(2, db: handle)
+                }
+            }
+            if try canonicalSchemaVersion(db: handle) == 2 {
+                try? exec("ALTER TABLE episode_cache ADD COLUMN publisher_chapters_json TEXT", operation: "schema migration", db: handle)
+                try? exec("ALTER TABLE episode_cache ADD COLUMN publisher_chapters_source_url TEXT", operation: "schema migration", db: handle)
+                try? exec("ALTER TABLE episode_cache ADD COLUMN publisher_chapters_fetched_at REAL", operation: "schema migration", db: handle)
+                if try columnNames(of: "episode_cache", db: handle)
+                    .isSuperset(of: ["publisher_chapters_json", "publisher_chapters_source_url", "publisher_chapters_fetched_at"]) {
+                    try setCanonicalSchemaVersion(3, db: handle)
                 }
             }
 
@@ -1501,7 +1566,10 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
       artwork_preview_rgb_data BLOB,
       guid TEXT,
       cached_at REAL NOT NULL,
-      chapters_url TEXT
+      chapters_url TEXT,
+      publisher_chapters_json TEXT,
+      publisher_chapters_source_url TEXT,
+      publisher_chapters_fetched_at REAL
     );
 
     CREATE TABLE IF NOT EXISTS refresh_log (

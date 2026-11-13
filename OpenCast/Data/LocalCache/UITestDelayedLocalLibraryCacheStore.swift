@@ -19,6 +19,14 @@ nonisolated struct UITestDelayedLocalLibraryCacheStore: LocalLibraryCacheStore {
         try await base.episodeDetail(episodeID: episodeID)
     }
 
+    func publisherChapters(episodeID: String) async throws -> PublisherChaptersCacheEntry? {
+        try await base.publisherChapters(episodeID: episodeID)
+    }
+
+    func storePublisherChapters(_ entry: PublisherChaptersCacheEntry, episodeID: String) async throws {
+        try await base.storePublisherChapters(entry, episodeID: episodeID)
+    }
+
     func showNotesHTMLByEpisodeID(activePodcastIDs: Set<String>) async throws -> [String: String] {
         try await base.showNotesHTMLByEpisodeID(activePodcastIDs: activePodcastIDs)
     }
