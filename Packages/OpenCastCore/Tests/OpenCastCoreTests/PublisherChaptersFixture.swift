@@ -2,13 +2,11 @@ import Foundation
 import Testing
 
 /// A `podcast:chapters` document a publisher actually served, saved byte for byte
-/// under `Fixtures/` so the decoder is pinned against real output, not only the spec.
+/// under `Corpus/chapters/` so the decoder is pinned against real output, not only the spec.
+/// Where each one came from is recorded in `Corpus/PROVENANCE.md`.
 struct PublisherChaptersFixture: CustomTestStringConvertible {
     let resource: String
-    let feedURL: String
     let episodeTitle: String
-    /// The URL the feed item declares, which is what the app fetches.
-    let documentURL: String
     let fetchedAt: String
     let hostingPlatform: String
     let notes: String
@@ -16,7 +14,9 @@ struct PublisherChaptersFixture: CustomTestStringConvertible {
     var testDescription: String { resource }
 
     func data() throws -> Data {
-        let url = try #require(Bundle.module.url(forResource: resource, withExtension: "json"))
+        let url = try #require(
+            Bundle.module.url(forResource: resource, withExtension: "json", subdirectory: "Corpus/chapters")
+        )
         return try Data(contentsOf: url)
     }
 }

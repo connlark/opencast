@@ -3,10 +3,8 @@ import Testing
 
 enum PublisherChaptersFixtures {
     static let podcasting20Ep277 = PublisherChaptersFixture(
-        resource: "publisher-chapters-podcasting20-ep277",
-        feedURL: "https://feeds.podcastindex.org/pc20.xml",
+        resource: "podcasting20-ep277",
         episodeTitle: #"Episode 277: "x402 Bitch!""#,
-        documentURL: "https://reflex.livewire.io/chapters/podcast/917393e3-1b1e-5cef-ace4-edaa54e1f810/item/PC20-277/chapters/https://mp3s.nashownotes.com/PC20-277-Chapters.json",
         fetchedAt: "2026-11-13T03:18:28Z",
         hostingPlatform: "Sovereign Feeds, document served through the LiveWire reflex proxy",
         notes: """
@@ -17,25 +15,21 @@ enum PublisherChaptersFixtures {
     )
 
     static let noAgendaEp1916 = PublisherChaptersFixture(
-        resource: "publisher-chapters-noagenda-ep1916",
-        feedURL: "https://feeds.noagendaassets.com/noagenda.xml",
+        resource: "noagenda-ep1916",
         episodeTitle: #"1916 "The Final Episode""#,
-        documentURL: "https://reflex.livewire.io/chapters/podcast/856cd618-7f34-57ea-9b84-3600f1f65e7f/item/http://1916.noagendanotes.com/chapters/https://mp3s.nashownotes.com/NA-1916-Chapters.json",
         fetchedAt: "2026-11-13T03:18:26Z",
         hostingPlatform: "Sovereign Feeds, document served through the LiveWire reflex proxy",
         notes: """
         The longest list found (61 entries over 5.8 hours): img on every entry, fractional starts, and \
         nine toc:false boost entries with endTime, the first of which shares start 0 with the real first \
-        chapter and precedes it. Feed fetched from http://feed.nashownotes.com/rss.xml, which redirects \
-        to the feedURL. Served as application/json with cache-control private, no-cache.
+        chapter and precedes it. Feed fetched through a redirect from the show's older feed URL \
+        (PROVENANCE.md). Served as application/json with cache-control private, no-cache.
         """
     )
 
     static let changelogEp689 = PublisherChaptersFixture(
-        resource: "publisher-chapters-changelog-ep689",
-        feedURL: "https://changelog.com/podcast/feed",
+        resource: "changelog-ep689",
         episodeTitle: "We now have Kerr’s Law (Interview)",
-        documentURL: "https://changelog.com/podcast/689/chapters",
         fetchedAt: "2026-11-13T03:18:25Z",
         hostingPlatform: "changelog.com (self-hosted)",
         notes: """
@@ -45,10 +39,8 @@ enum PublisherChaptersFixtures {
     )
 
     static let buildYourSaaSEp163 = PublisherChaptersFixture(
-        resource: "publisher-chapters-buildyoursaas-ep163",
-        feedURL: "https://feeds.transistor.fm/build-your-saas",
+        resource: "buildyoursaas-ep163",
         episodeTitle: "What is Transistor's secret weapon?",
-        documentURL: "https://share.transistor.fm/s/9c22a01c/chapters.json",
         fetchedAt: "2026-11-13T03:19:23Z",
         hostingPlatform: "Transistor",
         notes: """
@@ -58,24 +50,20 @@ enum PublisherChaptersFixtures {
     )
 
     static let buzzcastEp253 = PublisherChaptersFixture(
-        resource: "publisher-chapters-buzzcast-ep253",
-        feedURL: "https://rss.buzzsprout.com/231452.rss",
+        resource: "buzzcast-ep253",
         episodeTitle: "Can AI Find Your Podcast? A Real-World AEO Test",
-        documentURL: "https://www.buzzsprout.com/231452/20079447/chapters.json",
         fetchedAt: "2026-11-13T03:18:25Z",
         hostingPlatform: "Buzzsprout",
         notes: """
         Version 1.1.0, startTime and title only, whole-second starts written as floats (0.0). Feed \
-        fetched from https://feeds.buzzsprout.com/231452.rss, which redirects to the feedURL. Served \
-        as application/json.
+        fetched through a redirect from the show's older feed URL (PROVENANCE.md). Served as \
+        application/json.
         """
     )
 
     static let podcastInsiderEp484 = PublisherChaptersFixture(
-        resource: "publisher-chapters-podcastinsider-ep484",
-        feedURL: "https://feeds.blubrry.com/feeds/podcastinsider.xml",
+        resource: "podcastinsider-ep484",
         episodeTitle: "How Long Should a Podcast Episode Be? And Should You Edit? – PCI 484",
-        documentURL: "https://transcripts.blubrry.com/podcastinsider/chapters/1789423671.json",
         fetchedAt: "2026-11-13T03:19:23Z",
         hostingPlatform: "Blubrry",
         notes: """
@@ -85,10 +73,8 @@ enum PublisherChaptersFixtures {
     )
 
     static let audacityToPodcastEp452 = PublisherChaptersFixture(
-        resource: "publisher-chapters-audacitytopodcast-ep452",
-        feedURL: "https://feeds.podcastmirror.com/theaudacitytopodcast",
+        resource: "audacitytopodcast-ep452",
         episodeTitle: "452. Why You Should Use PodChapters to Chapter and Transcribe Your Podcast",
-        documentURL: "https://storage.podchapters.com/j973bkwgxk3jpd4j3mw02g6b717p8s52/tap452/metadata.json",
         fetchedAt: "2026-11-13T03:20:10Z",
         hostingPlatform: "PodChapters document host, WordPress + PowerPress feed",
         notes: """
@@ -99,10 +85,8 @@ enum PublisherChaptersFixtures {
     )
 
     static let hrCoffeeTimeEp188 = PublisherChaptersFixture(
-        resource: "publisher-chapters-hrcoffeetime-ep188",
-        feedURL: "https://feeds.captivate.fm/hr-coffee-time/",
+        resource: "hrcoffeetime-ep188",
         episodeTitle: "188 | “That’s Not Special, That’s Just Me”: How to Spot the Strengths You Can’t See (with Michele Deeks & Martin Galpin)",
-        documentURL: "https://transcripts.captivate.fm/chapter-0ef84ee0-7a25-4bf1-8df4-633104edff6d.json",
         fetchedAt: "2026-11-13T03:20:10Z",
         hostingPlatform: "Captivate",
         notes: """

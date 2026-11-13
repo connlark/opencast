@@ -34,7 +34,8 @@ let package = Package(
             name: "OpenCastCoreTests",
             dependencies: ["OpenCastCore"],
             resources: [
-                .process("Fixtures")
+                .process("Fixtures"),
+                .copy("Corpus")
             ],
             swiftSettings: swift63Settings
         )
