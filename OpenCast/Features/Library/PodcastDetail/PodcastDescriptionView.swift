@@ -1,3 +1,4 @@
+import OpenCastCore
 import SwiftUI
 
 struct PodcastDescriptionView: View {

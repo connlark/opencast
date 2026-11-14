@@ -1,30 +1,30 @@
 import Foundation
 
-enum HTMLPlainText {
-    nonisolated private static let whitespace = try! NSRegularExpression(pattern: #"\s+"#)
-    nonisolated private static let comments = try! NSRegularExpression(pattern: #"(?is)<!--.*?-->"#)
-    nonisolated private static let hiddenElements = try! NSRegularExpression(pattern: #"(?is)<(script|style|noscript|svg|iframe|object|embed)\b[^>]*>.*?</\1>"#)
-    nonisolated private static let figures = try! NSRegularExpression(pattern: #"(?is)<figure\b[^>]*>.*?</figure>"#)
-    nonisolated private static let mediaElements = try! NSRegularExpression(pattern: #"(?is)<(audio|video)\b[^>]*>.*?</\1>"#)
-    nonisolated private static let lineBreaks = try! NSRegularExpression(pattern: #"(?i)<\s*br\s*/?\s*>"#)
-    nonisolated private static let horizontalRules = try! NSRegularExpression(pattern: #"(?i)<\s*hr\b[^>]*>"#)
-    nonisolated private static let listItems = try! NSRegularExpression(pattern: #"(?i)<\s*li\b[^>]*>"#)
-    nonisolated private static let blockClosings = try! NSRegularExpression(pattern: #"(?i)</\s*(p|div|section|article|header|footer|blockquote|h[1-6]|li|tr|table|ul|ol)\s*>"#)
-    nonisolated private static let tags = try! NSRegularExpression(pattern: #"<[^>]+>"#)
-    nonisolated private static let joinedTimelineEntries = try! NSRegularExpression(pattern: #"(?<=[\p{L}\p{N}\)])(?=\d{1,2}:\d{2}\s*\p{Pd})"#)
-    nonisolated private static let joinedTimestampWords = try! NSRegularExpression(pattern: #"\b(\d{1,2}:\d{2})(?=[\p{L}])"#)
-    nonisolated private static let timelineDashes = try! NSRegularExpression(pattern: #"\b(\d{1,2}:\d{2})\s*(\p{Pd})\s*"#)
-    nonisolated private static let horizontalWhitespace = try! NSRegularExpression(pattern: #"[ \t\f]+"#)
-    nonisolated private static let newlinePadding = try! NSRegularExpression(pattern: #" *\n *"#)
-    nonisolated private static let repeatedNewlines = try! NSRegularExpression(pattern: #"\n{3,}"#)
+public enum HTMLPlainText {
+    private static let whitespace = try! NSRegularExpression(pattern: #"\s+"#)
+    private static let comments = try! NSRegularExpression(pattern: #"(?is)<!--.*?-->"#)
+    private static let hiddenElements = try! NSRegularExpression(pattern: #"(?is)<(script|style|noscript|svg|iframe|object|embed)\b[^>]*>.*?</\1>"#)
+    private static let figures = try! NSRegularExpression(pattern: #"(?is)<figure\b[^>]*>.*?</figure>"#)
+    private static let mediaElements = try! NSRegularExpression(pattern: #"(?is)<(audio|video)\b[^>]*>.*?</\1>"#)
+    private static let lineBreaks = try! NSRegularExpression(pattern: #"(?i)<\s*br\s*/?\s*>"#)
+    private static let horizontalRules = try! NSRegularExpression(pattern: #"(?i)<\s*hr\b[^>]*>"#)
+    private static let listItems = try! NSRegularExpression(pattern: #"(?i)<\s*li\b[^>]*>"#)
+    private static let blockClosings = try! NSRegularExpression(pattern: #"(?i)</\s*(p|div|section|article|header|footer|blockquote|h[1-6]|li|tr|table|ul|ol)\s*>"#)
+    private static let tags = try! NSRegularExpression(pattern: #"<[^>]+>"#)
+    private static let joinedTimelineEntries = try! NSRegularExpression(pattern: #"(?<=[\p{L}\p{Nl}\p{No}\)])(?=\d{1,2}:\d{2}\s*\p{Pd})"#)
+    private static let joinedTimestampWords = try! NSRegularExpression(pattern: #"\b(\d{1,2}:\d{2})(?=[\p{L}])"#)
+    private static let timelineDashes = try! NSRegularExpression(pattern: #"\b(\d{1,2}:\d{2})\s*(\p{Pd})\s*"#)
+    private static let horizontalWhitespace = try! NSRegularExpression(pattern: #"[ \t\f]+"#)
+    private static let newlinePadding = try! NSRegularExpression(pattern: #" *\n *"#)
+    private static let repeatedNewlines = try! NSRegularExpression(pattern: #"\n{3,}"#)
 
-    nonisolated static func collapsedText(from html: String) -> String {
+    public static func collapsedText(from html: String) -> String {
         structuredText(from: html)
             .replacingMatches(of: Self.whitespace, with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    nonisolated static func structuredText(from html: String) -> String {
+    public static func structuredText(from html: String) -> String {
         var text = html
         if text.contains("<") {
             text = text.replacingMatches(of: Self.comments, with: " ")
@@ -42,7 +42,7 @@ enum HTMLPlainText {
         return normalizeLayout(in: text)
     }
 
-    nonisolated static func decodeEntities(in value: String) -> String {
+    public static func decodeEntities(in value: String) -> String {
         guard value.contains("&") else { return value }
         var decoded = value
         for _ in 0..<3 {
@@ -55,7 +55,7 @@ enum HTMLPlainText {
         return decoded
     }
 
-    nonisolated private static func decodeEntitiesOnce(in value: String) -> String {
+    private static func decodeEntitiesOnce(in value: String) -> String {
         let namedEntities = [
             "amp": "&",
             "quot": "\"",
@@ -82,9 +82,9 @@ enum HTMLPlainText {
         return decodeNumericEntities(in: decoded)
     }
 
-    nonisolated private static let numericEntityPattern = try! NSRegularExpression(pattern: #"&#(x[0-9A-Fa-f]+|\d+);"#)
+    private static let numericEntityPattern = try! NSRegularExpression(pattern: #"&#(x[0-9A-Fa-f]+|\d+);"#)
 
-    nonisolated private static func decodeNumericEntities(in value: String) -> String {
+    private static func decodeNumericEntities(in value: String) -> String {
         guard value.contains("&#") else { return value }
         let regex = numericEntityPattern
 
@@ -115,7 +115,7 @@ enum HTMLPlainText {
         return decoded
     }
 
-    nonisolated private static func improveTimelineSpacing(in value: String) -> String {
+    private static func improveTimelineSpacing(in value: String) -> String {
         guard value.contains(":") else { return value }
         return value
             .replacingMatches(of: Self.joinedTimelineEntries, with: " ")
@@ -123,7 +123,7 @@ enum HTMLPlainText {
             .replacingMatches(of: Self.timelineDashes, with: "$1 $2 ")
     }
 
-    nonisolated private static func normalizeLayout(in value: String) -> String {
+    private static func normalizeLayout(in value: String) -> String {
         // This normalization is part of the same measured large-note path.
         value
             .replacingOccurrences(of: "\r\n", with: "\n")
@@ -138,7 +138,7 @@ enum HTMLPlainText {
 }
 
 private extension String {
-    nonisolated func replacingMatches(of expression: NSRegularExpression, with template: String) -> String {
+    func replacingMatches(of expression: NSRegularExpression, with template: String) -> String {
         expression.stringByReplacingMatches(in: self, range: NSRange(startIndex..., in: self), withTemplate: template)
     }
 }

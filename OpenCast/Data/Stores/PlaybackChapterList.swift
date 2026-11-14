@@ -7,6 +7,8 @@ nonisolated struct PlaybackChapterList: Equatable, Sendable {
         /// The feed's `podcast:chapters` document.
         case publisher
         case generated(transcriptSourceSHA256: String)
+        /// A timestamp list in the episode's show notes.
+        case showNotes
     }
 
     static let restartThreshold: TimeInterval = 3

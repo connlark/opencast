@@ -1,4 +1,5 @@
 import Foundation
+import OpenCastCore
 
 struct EpisodeTextContent: Equatable, Sendable {
     let summary: String?

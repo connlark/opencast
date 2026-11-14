@@ -2,14 +2,16 @@ import OpenCastCore
 import SwiftUI
 
 /// Chapter list on episode detail: title + start time, tap seeks. Renders
-/// chapters embedded in the audio file, the feed's chapters document, or a
-/// current generated analysis. Publisher and generated rows carry a tag
-/// naming their source; embedded rows, part of the audio itself, carry none.
+/// chapters embedded in the audio file, the feed's chapters document, a
+/// current generated analysis, or a timestamp list in the show notes.
+/// Publisher, generated and show-notes rows carry a tag naming their
+/// source; embedded rows, part of the audio itself, carry none.
 struct EpisodeChaptersCard: View {
     enum Source {
         case embedded
         case publisher
         case generated
+        case showNotes
     }
 
     let chapters: [EpisodeChapter]
@@ -29,6 +31,8 @@ struct EpisodeChaptersCard: View {
                     PublisherContentTag()
                 case .generated:
                     GeneratedContentTag()
+                case .showNotes:
+                    ShowNotesContentTag()
                 }
             }
 
@@ -99,6 +103,18 @@ struct EpisodeChaptersCard: View {
             EpisodeChapter(id: 2, title: "Closing Thoughts", startTime: 3_700),
         ],
         source: .publisher
+    ) { _ in }
+    .padding()
+}
+
+#Preview("From the show notes") {
+    EpisodeChaptersCard(
+        chapters: [
+            EpisodeChapter(id: 0, title: "Introduction", startTime: 0),
+            EpisodeChapter(id: 1, title: "Why the build passed at midnight", startTime: 95),
+            EpisodeChapter(id: 2, title: "Listener questions", startTime: 2_710),
+        ],
+        source: .showNotes
     ) { _ in }
     .padding()
 }

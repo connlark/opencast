@@ -1,4 +1,5 @@
 import Foundation
+import OpenCastCore
 import SQLite3
 
 nonisolated struct SQLiteEpisodeSearchDocument: Sendable {

@@ -1,4 +1,5 @@
 import Foundation
+import OpenCastCore
 
 extension String {
     nonisolated var plainTextFromHTML: String {

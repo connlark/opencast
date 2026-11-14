@@ -72,7 +72,7 @@ struct EpisodeDiagnosticsModelTests {
         // No run record yet: the block says so rather than staying loading.
         #expect(rowValue(model.state(for: .analysisRuns), "Status") == "No analysis runs for this episode.")
         #expect(model.reportText().contains(
-            "== Chapters & Summary ==\nPublisher Chapters: None cached.\nStatus: No chapters/summary record.\n\n== Analysis Runs =="
+            "== Chapters & Summary ==\nPublisher Chapters: None cached.\nShow-Notes Chapters: None found.\nStatus: No chapters/summary record.\n\n== Analysis Runs =="
         ))
 
         let spansState = model.state(for: .adSpans)
@@ -138,9 +138,51 @@ struct EpisodeDiagnosticsModelTests {
         await model.load(appModel: fixture.appModel)
 
         let chaptersState = model.state(for: .chaptersSummary)
-        #expect(chaptersState.section?.rows.map(\.label) == ["Publisher Chapters", "Status"])
+        #expect(chaptersState.section?.rows.map(\.label) == ["Publisher Chapters", "Show-Notes Chapters", "Status"])
         #expect(rowValue(chaptersState, "Publisher Chapters")
             == "2 chapters from \(chaptersURL), fetched 2027-01-15T08:00:00Z")
+        #expect(rowValue(chaptersState, "Show-Notes Chapters") == "None found.")
+    }
+
+    @Test("The chapters block counts a timestamp list in the cached show notes, bounded by the feed's duration")
+    func chaptersBlockCountsShowNotesChapters() async throws {
+        let fixture = try makeFixture()
+        let podcastID = PodcastID(rawValue: Self.feedURL)
+        try await fixture.appModel.library.localCache.upsertCache(
+            from: FeedSnapshot(
+                podcast: Podcast(id: podcastID, feedURL: URL(string: Self.feedURL)!, title: "A Show"),
+                episodes: [Episode(
+                    id: EpisodeID(rawValue: Self.episodeID),
+                    podcastID: podcastID,
+                    podcastTitle: "A Show",
+                    title: "Episode",
+                    showNotesHTML: """
+                    <p>Timestamps:</p><p>(00:00:00) Welcome<br>(00:04:12) The prototype<br>\
+                    (00:17:45) The founding team<br>(00:41:30) Lessons</p>
+                    """,
+                    duration: 1_800,
+                    audioURL: URL(string: Self.audioURL)
+                )]
+            ),
+            refreshedAt: .now
+        )
+        let model = EpisodeDiagnosticsModel(
+            episodeID: Self.episodeID,
+            dependencies: makeDependencies(
+                fileInspector: SpyFileInspector(),
+                prober: SpyNetworkProber(),
+                counters: fixture.counters
+            )
+        )
+
+        await model.load(appModel: fixture.appModel)
+
+        let chaptersState = model.state(for: .chaptersSummary)
+        #expect(chaptersState.section?.rows.map(\.label) == ["Publisher Chapters", "Show-Notes Chapters", "Status"])
+        #expect(rowValue(chaptersState, "Show-Notes Chapters") == "3 chapters")
+        #expect(model.reportText().contains(
+            "== Chapters & Summary ==\nPublisher Chapters: None cached.\nShow-Notes Chapters: 3 chapters\nStatus: No chapters/summary record."
+        ))
     }
 
     @Test("A download with no recorded hash skips the full-file hash pass")

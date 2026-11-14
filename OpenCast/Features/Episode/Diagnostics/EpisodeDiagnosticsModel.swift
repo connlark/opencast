@@ -73,9 +73,19 @@ final class EpisodeDiagnosticsModel {
         )
         setSection(.playback, .loaded(playbackSection(snapshot: playbackSnapshot)))
         let publisherEntry = await appModel.publisherChapters.cachedEntry(episodeID: episodeID)
+        let detail = await appModel.library.episodeDetail(for: episodeID)
+        let showNotesChapters = await EpisodeShowNotesContent.resolvingChapters(
+            summaryHTML: detail?.listItem.summary ?? episode?.summary,
+            showNotesHTML: detail?.showNotesHTML,
+            duration: episode?.duration ?? detail?.listItem.duration
+        )
         setSection(
             .chaptersSummary,
-            .loaded(chaptersSummarySection(appModel: appModel, publisherEntry: publisherEntry))
+            .loaded(chaptersSummarySection(
+                appModel: appModel,
+                publisherEntry: publisherEntry,
+                showNotesChapterCount: showNotesChapters.count
+            ))
         )
         setSection(.analysisRuns, .loaded(analysisRunsSection(appModel: appModel)))
 

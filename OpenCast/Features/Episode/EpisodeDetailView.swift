@@ -24,6 +24,9 @@ struct EpisodeDetailView: View {
     @State private var adSection = EpisodeAdAnalysisSectionModel()
     @State private var chaptersSection = EpisodeChaptersSummarySectionModel()
     @State private var embeddedChapters: [EpisodeChapter] = []
+    /// The `embeddedChaptersLoadKey` whose read has landed: an empty
+    /// `embeddedChapters` alone cannot tell "none" from "not read yet".
+    @State private var embeddedChaptersLoadedKey: String?
     @State private var publisherSection = EpisodePublisherChaptersSectionModel()
     @State private var privateNotes: [EpisodeNoteRecord] = []
     @State private var isConfirmingClearProgress = false
@@ -138,8 +141,10 @@ struct EpisodeDetailView: View {
             await chaptersSection.load(appModel: appModel, episode: episode, key: transcriptAnalysisContentIdentifier)
         }
         .task(id: embeddedChaptersLoadKey) {
+            let key = embeddedChaptersLoadKey
             guard let fileURL = downloadedFileURL else {
                 embeddedChapters = []
+                embeddedChaptersLoadedKey = key
                 return
             }
             let chapters = (try? await AVAssetChapterReader.chapters(in: AVURLAsset(url: fileURL))) ?? []
@@ -149,9 +154,10 @@ struct EpisodeDetailView: View {
                 return
             }
             embeddedChapters = chapters
+            embeddedChaptersLoadedKey = key
         }
         .task(id: publisherChaptersKey) {
-            await publisherSection.load(appModel: appModel, episode: episode)
+            await publisherSection.load(appModel: appModel, episode: episode, key: publisherChaptersKey)
         }
     }
 
@@ -284,15 +290,20 @@ struct EpisodeDetailView: View {
                 }
 
                 // Chapter source priority: embedded in the audio file, then
-                // the feed's chapters document, then generated. Creator
-                // chapters win when they exist (D3): a feed declaration hides
-                // the generated cards and the Generate offer unless its
-                // document was read and held nothing usable. Until the
-                // publisher load lands the bare declaration stands in, so
-                // Generate never flickers in ahead of a slow fetch. The rule
-                // applies at render time too: an analysis generated before
-                // the declaration reached the cache stops rendering once a
-                // feed refresh reveals it.
+                // the feed's chapters document, then generated, then a
+                // timestamp list in the show notes. Creator chapters win
+                // when they exist (D3): a feed declaration hides the
+                // generated cards and the Generate offer unless its document
+                // was read and held nothing usable. Until the publisher load
+                // lands the bare declaration stands in, so Generate never
+                // flickers in ahead of a slow fetch. The rule applies at
+                // render time too: an analysis generated before the
+                // declaration reached the cache stops rendering once a feed
+                // refresh reveals it. Show-notes chapters never affect
+                // generation; they render only once every source above them
+                // has settled without chapters (`ShowNotesChaptersCardRule`),
+                // and a declared document that could not be read does not
+                // hide them.
                 if !displayedEmbeddedChapters.isEmpty {
                     EpisodeChaptersCard(chapters: displayedEmbeddedChapters, source: .embedded) { chapter in
                         seekToTimestamp(chapter.startTime, episode: episode)
@@ -310,10 +321,30 @@ struct EpisodeDetailView: View {
                     ?? (chaptersSection.creatorChaptersURL != nil)
                 let showsGeneratedCards = chaptersSection.hasCurrentAnalysis(forKey: chaptersKey, episodeID: episode.episodeID)
                     && !feedSuppressesGeneration
+                let generatedChapters = showsGeneratedCards && displayedEmbeddedChapters.isEmpty
+                    ? chaptersSection.analysisDocument?.chapters ?? []
+                    : []
+                let showNotesChapters = ShowNotesChaptersCardRule.chapters(
+                    from: showNotes,
+                    episodeID: episode.episodeID,
+                    displaysEmbeddedChapters: !displayedEmbeddedChapters.isEmpty,
+                    awaitsEmbeddedRead: downloadedFileURL != nil && embeddedChaptersLoadedKey != embeddedChaptersLoadKey,
+                    publisherHasFinished: publisherSection.isFinished(forKey: publisherSection.loadKey(episode: episode)),
+                    publisherHasChapters: !publisherChapters.isEmpty,
+                    rendersGeneratedChapters: !generatedChapters.isEmpty,
+                    awaitsGeneratedChapters: appModel.transcriptAnalyses.record(for: episode.episodeID)?.state == .completed
+                        && chaptersSection.loadedKey != chaptersKey
+                )
+                if !showNotesChapters.isEmpty {
+                    EpisodeChaptersCard(chapters: showNotesChapters, source: .showNotes) { chapter in
+                        seekToTimestamp(chapter.startTime, episode: episode)
+                    }
+                }
+
                 if showsGeneratedCards, let analysisDocument = chaptersSection.analysisDocument {
-                    if displayedEmbeddedChapters.isEmpty, !analysisDocument.chapters.isEmpty {
+                    if !generatedChapters.isEmpty {
                         EpisodeChaptersCard(
-                            chapters: analysisDocument.chapters.map(EpisodeChapter.init),
+                            chapters: generatedChapters.map(EpisodeChapter.init),
                             source: .generated
                         ) { chapter in
                             guard let generated = analysisDocument.chapters.first(where: { $0.id == chapter.id }) else {
@@ -612,8 +643,10 @@ struct EpisodeDetailView: View {
         }
 
         let resolved = await EpisodeShowNotesContent.resolving(
+            episodeID: episode.episodeID,
             summaryHTML: detail?.listItem.summary ?? episode.summary,
-            showNotesHTML: detail?.showNotesHTML
+            showNotesHTML: detail?.showNotesHTML,
+            duration: episode.duration
         )
         guard !Task.isCancelled else {
             return

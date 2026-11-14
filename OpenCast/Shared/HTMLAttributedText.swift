@@ -1,4 +1,5 @@
 import Foundation
+import OpenCastCore
 
 /// Renders podcast show-notes HTML as an `AttributedString` using only
 /// presentation intents and links, so Dynamic Type and both color schemes
@@ -107,13 +108,6 @@ enum HTMLAttributedText {
     /// scanning it would stall content resolution for seconds.
     nonisolated private static let linkDetectionCharacterLimit = 200_000
 
-    /// `M:SS` or `H:MM:SS` that is not glued to neighbouring digits or
-    /// colons, not a clock time (`8:39 pm`), not a fraction, and not the
-    /// time part of an ISO date.
-    nonisolated private static let timestampRegex = try! NSRegularExpression(
-        pattern: #"(?<![\d:T])(?:(\d{1,2}):)?([0-5]?\d):([0-5]\d)(?![\d:]|\.\d|\s*(?i:[ap]\.?m)\b)"#
-    )
-
     /// Timestamps run before phone numbers: neither overwrites an existing
     /// link, so the more precise detector claims its ranges first and
     /// `<a href>` links always win over both.
@@ -135,26 +129,16 @@ enum HTMLAttributedText {
         plain: String,
         searchRange: NSRange
     ) {
-        for match in timestampRegex.matches(in: plain, range: searchRange) {
+        for match in ShowNotesTimestamp.regex.matches(in: plain, range: searchRange) {
             guard let range = Range(match.range, in: result),
                   result[range].runs[\.link].allSatisfy({ $0.0 == nil }),
-                  let seconds = timestampSeconds(match, in: plain),
+                  let seconds = ShowNotesTimestamp.seconds(of: match, in: plain),
                   let url = ShowNotesTimestampLink.url(seconds: seconds)
             else {
                 continue
             }
             result[range].link = url
         }
-    }
-
-    nonisolated private static func timestampSeconds(_ match: NSTextCheckingResult, in plain: String) -> Int? {
-        func component(_ index: Int) -> Int? {
-            Range(match.range(at: index), in: plain).flatMap { Int(plain[$0]) }
-        }
-        guard let minutes = component(2), let seconds = component(3) else {
-            return nil
-        }
-        return (component(1) ?? 0) * 3600 + minutes * 60 + seconds
     }
 
     nonisolated private static func linkPhoneNumbers(

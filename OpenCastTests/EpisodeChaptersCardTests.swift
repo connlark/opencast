@@ -22,6 +22,11 @@ struct EpisodeChaptersCardTests {
         #expect(EpisodeChaptersCard.startTimeText(999_999_999) != atBound)
     }
 
+    @Test("Show-notes chapters are tagged with the decided wording")
+    func showNotesTagWording() {
+        #expect(ShowNotesContentTag.title == "From the show notes")
+    }
+
     @Test("Negative and NaN start times read as the episode start")
     func negativeAndNaNStartTimesReadAsZero() {
         let zero = EpisodeChaptersCard.startTimeText(0)

@@ -100,6 +100,133 @@ struct PlaybackChaptersCoordinatorTests {
         #expect(client.requests.map(\.url?.absoluteString) == [Self.documentURL])
     }
 
+    @Test("Notes with a timestamp list serve the playing episode's chapters when nothing ranks above them")
+    func showNotesListServesChapters() async throws {
+        let client = StubOpenCastHTTPClient()
+        let model = try await OpenCastSystemActionFixture.make(httpClient: client).model
+        let episode = Self.showNotesEpisode(documentURL: nil, showNotesHTML: Self.showNotesList)
+        try await Self.cache(episode, in: model)
+
+        try model.playback.load(episode)
+        await Self.settle(model)
+
+        #expect(model.currentEpisodeChapters.source == .showNotes)
+        #expect(model.currentEpisodeChapters.chapters.map(\.startTime) == [0, 5, 10])
+        #expect(model.currentEpisodeChapters.chapters.map(\.title) == ["Opening", "The interview", "Listener mail"])
+        #expect(client.requestCount == 0)
+    }
+
+    @Test("A current generated analysis outranks the show notes")
+    func generatedChaptersOutrankShowNotes() async throws {
+        let client = StubOpenCastHTTPClient()
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let episode = Self.showNotesEpisode(documentURL: nil, showNotesHTML: Self.showNotesList)
+        let model = try await Self.makeModelWithGeneratedChapters(client: client, context: context, episode: episode)
+
+        try model.playback.load(episode)
+        await Self.settle(model)
+
+        #expect(model.currentEpisodeChapters.source == .generated(transcriptSourceSHA256: Self.transcriptSourceSHA256))
+        #expect(model.currentEpisodeChapters.chapters.map(\.title) == ["Welcome", "The Sponsor Read"])
+    }
+
+    @Test("A declared document that cannot be read leaves the slot to the show notes")
+    func unreadableDocumentFallsThroughToShowNotes() async throws {
+        let client = StubOpenCastHTTPClient(responses: [.body(Data(), statusCode: 404)])
+        let model = try await OpenCastSystemActionFixture.make(httpClient: client).model
+        let episode = Self.showNotesEpisode(documentURL: Self.documentURL, showNotesHTML: Self.showNotesList)
+        try await Self.cache(episode, in: model)
+
+        try model.playback.load(episode)
+        await Self.settle(model)
+
+        #expect(model.currentEpisodeChapters.source == .showNotes)
+        #expect(model.currentEpisodeChapters.chapters.map(\.startTime) == [0, 5, 10])
+        #expect(client.requestCount == 1)
+    }
+
+    @Test("A declared document that cannot be read keeps a generated analysis out, not the show notes")
+    func unreadableDocumentKeepsGeneratedOutButNotShowNotes() async throws {
+        let client = StubOpenCastHTTPClient(responses: [.body(Data(), statusCode: 404)])
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let episode = Self.showNotesEpisode(documentURL: Self.documentURL, showNotesHTML: Self.showNotesList)
+        let model = try await Self.makeModelWithGeneratedChapters(client: client, context: context, episode: episode)
+
+        try model.playback.load(episode)
+        await Self.settle(model)
+
+        #expect(model.currentEpisodeChapters.source == .showNotes)
+        #expect(model.currentEpisodeChapters.chapters.map(\.title) == ["Opening", "The interview", "Listener mail"])
+        #expect(client.requestCount == 1)
+    }
+
+    @Test("A declared document with chapters outranks the show notes")
+    func publisherChaptersOutrankShowNotes() async throws {
+        let client = StubOpenCastHTTPClient(responses: [.body(Self.publisherDocument)])
+        let model = try await OpenCastSystemActionFixture.make(httpClient: client).model
+        let episode = Self.showNotesEpisode(documentURL: Self.documentURL, showNotesHTML: Self.showNotesList)
+        try await Self.cache(episode, in: model)
+
+        try model.playback.load(episode)
+        await Self.settle(model)
+
+        #expect(model.currentEpisodeChapters.source == .publisher)
+        #expect(model.currentEpisodeChapters.chapters.map(\.title) == ["Opening", "Interview"])
+    }
+
+    @Test("Two timestamp lines in the notes are not a chapter list")
+    func twoTimestampLinesServeNothing() async throws {
+        let model = try await OpenCastSystemActionFixture.make(httpClient: StubOpenCastHTTPClient()).model
+        let episode = Self.showNotesEpisode(
+            documentURL: nil,
+            showNotesHTML: "<p>In this episode:</p><p>0:00 Opening<br>0:05 The interview</p>"
+        )
+        try await Self.cache(episode, in: model)
+
+        try model.playback.load(episode)
+        await Self.settle(model)
+
+        #expect(model.currentEpisodeChapters.isEmpty)
+    }
+
+    @Test("The cached feed duration bounds the list, whatever the audio's real length")
+    func feedDurationBoundsShowNotesList() async throws {
+        let model = try await OpenCastSystemActionFixture.make(httpClient: StubOpenCastHTTPClient()).model
+        // The row says 15 s and the untagged audio runs about 1 s: 0:05 and
+        // 0:10 stay although they lie past the audio, 0:40 goes.
+        let episode = Self.showNotesEpisode(
+            documentURL: nil,
+            showNotesHTML: "<p>0:00 Opening<br>0:05 The interview<br>0:10 Listener mail<br>0:40 Outtakes</p>",
+            duration: 15
+        )
+        try await Self.cache(episode, in: model)
+
+        try model.playback.load(episode)
+        await Self.settle(model)
+
+        #expect(model.currentEpisodeChapters.source == .showNotes)
+        #expect(model.currentEpisodeChapters.chapters.map(\.startTime) == [0, 5, 10])
+    }
+
+    @Test("With no cached row, the playing episode's own notes and duration give the list")
+    func uncachedEpisodeUsesItsOwnNotes() async throws {
+        let model = try await OpenCastSystemActionFixture.make(httpClient: StubOpenCastHTTPClient()).model
+        let episode = Self.showNotesEpisode(
+            documentURL: nil,
+            showNotesHTML: "<p>0:00 Opening<br>0:05 The interview<br>0:10 Listener mail<br>0:40 Outtakes</p>",
+            duration: 15
+        )
+        #expect(await model.library.episodeDetail(for: Self.episodeID) == nil)
+
+        try model.playback.load(episode)
+        await Self.settle(model)
+
+        #expect(model.currentEpisodeChapters.source == .showNotes)
+        #expect(model.currentEpisodeChapters.chapters.map(\.startTime) == [0, 5, 10])
+    }
+
     private static let chapteredFeedURL = "https://example.com/publisher-chaptered.xml"
     private static let episodeID = "publisher-chaptered"
     private static let documentURL = "https://example.com/chapters/publisher-chaptered.json"
@@ -108,6 +235,50 @@ struct PlaybackChaptersCoordinatorTests {
     private static let publisherDocument = Data(
         #"{"version":"1.2.0","chapters":[{"startTime":0,"title":"Opening"},{"startTime":1.5,"title":"Interview"}]}"#.utf8
     )
+    private static let showNotesList = """
+    <p>In this episode:</p><p>0:00 Opening<br>0:05 The interview<br>0:10 Listener mail</p><p>Thanks for listening.</p>
+    """
+
+    /// The declared episode's identity with show notes, over the untagged
+    /// audio. The list is bounded by the feed `duration`, never by the
+    /// audio's own length, so starts past the one-second file still count.
+    private static func showNotesEpisode(
+        documentURL: String?,
+        showNotesHTML: String,
+        duration: TimeInterval = 60
+    ) -> Episode {
+        Episode(
+            id: EpisodeID(rawValue: episodeID),
+            podcastID: PodcastID(rawValue: chapteredFeedURL),
+            podcastTitle: "A Show",
+            title: "Show Notes Chaptered",
+            showNotesHTML: showNotesHTML,
+            duration: duration,
+            audioURL: fixture("UntaggedSilence.mp3"),
+            chaptersURL: documentURL.flatMap(URL.init(string:))
+        )
+    }
+
+    /// Waits out every chapter refresh the load started and any document
+    /// fetch, then runs one more refresh, awaited, so the list read next is
+    /// one no later refresh replaces.
+    private static func settle(_ model: OpenCastAppModel) async {
+        model.refreshPlaybackSkipZonesForCurrentEpisode()
+        await model.waitForChapterRefresh()
+        await model.publisherChapters.waitForFetch(episodeID: episodeID)
+        model.refreshPlaybackSkipZonesForCurrentEpisode()
+        await model.waitForChapterRefresh()
+    }
+
+    private static func cache(_ episode: Episode, in model: OpenCastAppModel) async throws {
+        try await model.library.localCache.upsertCache(
+            from: FeedSnapshot(
+                podcast: Podcast(id: episode.podcastID, feedURL: URL(string: chapteredFeedURL)!, title: "A Show"),
+                episodes: [episode]
+            ),
+            refreshedAt: .now
+        )
+    }
 
     /// Plays the declared episode, which also has a current generated
     /// analysis, and waits out its document fetch and every chapter refresh
@@ -128,12 +299,14 @@ struct PlaybackChaptersCoordinatorTests {
         return model
     }
 
-    /// The declared episode with a current generated analysis written
-    /// through the real stores: a completed transcript and its record, then
-    /// an analysis run whose producer answers two chapters.
+    /// The declared episode (or `episode`, cached in its place) with a
+    /// current generated analysis written through the real stores: a
+    /// completed transcript and its record, then an analysis run whose
+    /// producer answers two chapters.
     private static func makeModelWithGeneratedChapters(
         client: StubOpenCastHTTPClient,
-        context: ModelContext
+        context: ModelContext,
+        episode cachedEpisode: Episode? = nil
     ) async throws -> OpenCastAppModel {
         let directory = URL.temporaryDirectory
             .appending(path: "PlaybackChaptersCoordinatorTests-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -151,7 +324,13 @@ struct PlaybackChaptersCoordinatorTests {
             analysisRuns: AnalysisRunRecordStore(directory: directory.appending(path: "AnalysisRuns")),
             allowsAutomaticFeedRefresh: false
         )
-        let episode = try await cacheDeclaredEpisode(in: model)
+        let episode: Episode
+        if let cachedEpisode {
+            try await cache(cachedEpisode, in: model)
+            episode = cachedEpisode
+        } else {
+            episode = try await cacheDeclaredEpisode(in: model)
+        }
 
         let transcript = completedTranscript(for: episode)
         let fingerprint = transcriptFileStore.fingerprint(

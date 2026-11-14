@@ -45,8 +45,10 @@ struct NowPlayingShowNotesPaneView: View {
             return
         }
         let resolved = await EpisodeShowNotesContent.resolving(
+            episodeID: episode.id.rawValue,
             summaryHTML: detail?.listItem.summary ?? episode.summary,
-            showNotesHTML: detail?.showNotesHTML ?? episode.showNotesHTML
+            showNotesHTML: detail?.showNotesHTML ?? episode.showNotesHTML,
+            duration: episode.duration
         )
         guard !Task.isCancelled else {
             return

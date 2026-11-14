@@ -10,6 +10,7 @@ final class EpisodePublisherChaptersSectionModel {
     private var loadedEpisodeID: String?
     private var loadedChapters: [EpisodeChapter] = []
     private var loadedSuppressesGeneration = false
+    private var finishedKey: String?
 
     /// The `.task(id:)` key. A feed refresh that changes the episode row,
     /// its `chapters_url` included, moves `cachedAt`.
@@ -33,10 +34,23 @@ final class EpisodePublisherChaptersSectionModel {
         loadedEpisodeID == episodeID ? loadedSuppressesGeneration : nil
     }
 
-    func load(appModel: OpenCastAppModel, episode: EpisodeListItemSnapshot?) async {
+    /// Whether the load started under `key` has settled: no document is
+    /// declared, or the declared one has resolved, whatever it held. Keyed
+    /// like the load rather than by episode, because a feed refresh that
+    /// changes the row moves the key: the new key stays unfinished until its
+    /// own load settles, even before that load has started. Unlike
+    /// `suppressesGeneration(for:)`, which answers while a declared document
+    /// is still being read.
+    func isFinished(forKey key: String) -> Bool {
+        finishedKey == key
+    }
+
+    /// `key` is the `loadKey(episode:)` this load runs under.
+    func load(appModel: OpenCastAppModel, episode: EpisodeListItemSnapshot?, key: String) async {
         loadedEpisodeID = nil
         loadedChapters = []
         loadedSuppressesGeneration = false
+        finishedKey = nil
 
         guard let episode else {
             return
@@ -47,6 +61,7 @@ final class EpisodePublisherChaptersSectionModel {
         }
         guard let documentURL = detail?.chaptersURL else {
             loadedEpisodeID = episode.episodeID
+            finishedKey = key
             return
         }
         loadedEpisodeID = episode.episodeID
@@ -69,5 +84,6 @@ final class EpisodePublisherChaptersSectionModel {
             loadedSuppressesGeneration = false
         }
         loadedEpisodeID = episode.episodeID
+        finishedKey = key
     }
 }

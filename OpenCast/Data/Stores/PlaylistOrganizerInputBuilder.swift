@@ -1,4 +1,5 @@
 import Foundation
+import OpenCastCore
 
 /// Turns one show's episodes into the numbered lines a Make a Playlist turn
 /// sends, within a token budget measured with the on-device tokenizer. The

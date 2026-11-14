@@ -19,17 +19,21 @@ struct EpisodePublisherChaptersSectionModelTests {
         let fixture = try await OpenCastSystemActionFixture.make(httpClient: client)
         let episode = try await Self.cacheEpisode(declaringDocument: true, in: fixture.model)
         let section = EpisodePublisherChaptersSectionModel()
+        let key = section.loadKey(episode: episode)
         #expect(section.suppressesGeneration(for: Self.episodeID) == nil)
+        #expect(!section.isFinished(forKey: key))
 
-        await section.load(appModel: fixture.model, episode: episode)
+        await section.load(appModel: fixture.model, episode: episode, key: key)
 
         #expect(section.chapters(for: Self.episodeID) == [
             EpisodeChapter(id: 0, title: "Opening", startTime: 0),
             EpisodeChapter(id: 1, title: "Interview", startTime: 95),
         ])
         #expect(section.suppressesGeneration(for: Self.episodeID) == true)
+        #expect(section.isFinished(forKey: key))
         #expect(section.chapters(for: "episode-1").isEmpty)
         #expect(section.suppressesGeneration(for: "episode-1") == nil)
+        #expect(!section.isFinished(forKey: Self.otherEpisodeKey(of: section, cachedAt: episode.cachedAt)))
         #expect(client.requests.map(\.url?.absoluteString) == [Self.documentURL])
     }
 
@@ -39,11 +43,13 @@ struct EpisodePublisherChaptersSectionModelTests {
         let fixture = try await OpenCastSystemActionFixture.make(httpClient: client)
         let episode = try await Self.cacheEpisode(declaringDocument: false, in: fixture.model)
         let section = EpisodePublisherChaptersSectionModel()
+        let key = section.loadKey(episode: episode)
 
-        await section.load(appModel: fixture.model, episode: episode)
+        await section.load(appModel: fixture.model, episode: episode, key: key)
 
         #expect(section.chapters(for: Self.episodeID).isEmpty)
         #expect(section.suppressesGeneration(for: Self.episodeID) == false)
+        #expect(section.isFinished(forKey: key))
         #expect(client.requestCount == 0)
     }
 
@@ -53,11 +59,13 @@ struct EpisodePublisherChaptersSectionModelTests {
         let fixture = try await OpenCastSystemActionFixture.make(httpClient: client)
         let episode = try await Self.cacheEpisode(declaringDocument: true, in: fixture.model)
         let section = EpisodePublisherChaptersSectionModel()
+        let key = section.loadKey(episode: episode)
 
-        await section.load(appModel: fixture.model, episode: episode)
+        await section.load(appModel: fixture.model, episode: episode, key: key)
 
         #expect(section.chapters(for: Self.episodeID).isEmpty)
         #expect(section.suppressesGeneration(for: Self.episodeID) == false)
+        #expect(section.isFinished(forKey: key))
         #expect(client.requestCount == 1)
     }
 
@@ -67,11 +75,13 @@ struct EpisodePublisherChaptersSectionModelTests {
         let fixture = try await OpenCastSystemActionFixture.make(httpClient: client)
         let episode = try await Self.cacheEpisode(declaringDocument: true, in: fixture.model)
         let section = EpisodePublisherChaptersSectionModel()
+        let key = section.loadKey(episode: episode)
 
-        await section.load(appModel: fixture.model, episode: episode)
+        await section.load(appModel: fixture.model, episode: episode, key: key)
 
         #expect(section.chapters(for: Self.episodeID).isEmpty)
         #expect(section.suppressesGeneration(for: Self.episodeID) == true)
+        #expect(section.isFinished(forKey: key))
     }
 
     @Test("While a declared document resolves, generation stays suppressed with no chapters")
@@ -82,17 +92,20 @@ struct EpisodePublisherChaptersSectionModelTests {
         let appModel = fixture.model
         let episode = try await Self.cacheEpisode(declaringDocument: true, in: appModel)
         let section = EpisodePublisherChaptersSectionModel()
+        let key = section.loadKey(episode: episode)
 
-        let load = Task { await section.load(appModel: appModel, episode: episode) }
+        let load = Task { await section.load(appModel: appModel, episode: episode, key: key) }
         #expect(await waitUntil { client.requestCount == 1 })
 
         #expect(section.suppressesGeneration(for: Self.episodeID) == true)
         #expect(section.chapters(for: Self.episodeID).isEmpty)
+        #expect(!section.isFinished(forKey: key))
 
         await client.release()
         await load.value
 
         #expect(section.suppressesGeneration(for: Self.episodeID) == true)
+        #expect(section.isFinished(forKey: key))
         #expect(section.chapters(for: Self.episodeID) == [
             EpisodeChapter(id: 0, title: "Opening", startTime: 0),
             EpisodeChapter(id: 1, title: "Interview", startTime: 95),
@@ -107,8 +120,9 @@ struct EpisodePublisherChaptersSectionModelTests {
         let appModel = fixture.model
         let episode = try await Self.cacheEpisode(declaringDocument: true, in: appModel)
         let section = EpisodePublisherChaptersSectionModel()
+        let key = section.loadKey(episode: episode)
 
-        let load = Task { await section.load(appModel: appModel, episode: episode) }
+        let load = Task { await section.load(appModel: appModel, episode: episode, key: key) }
         #expect(await waitUntil { client.requestCount == 1 })
         load.cancel()
         await client.release()
@@ -117,7 +131,41 @@ struct EpisodePublisherChaptersSectionModelTests {
 
         #expect(section.chapters(for: Self.episodeID).isEmpty)
         #expect(section.suppressesGeneration(for: Self.episodeID) == true)
+        #expect(!section.isFinished(forKey: key))
         #expect(await appModel.publisherChapters.cachedEntry(episodeID: Self.episodeID)?.chapters.count == 2)
+    }
+
+    @Test("A refresh that moves the key leaves the new key unfinished until its own load settles")
+    func finishedBelongsToTheLoadKey() async throws {
+        let client = StubOpenCastHTTPClient(responses: [.body(Self.document)])
+        let fixture = try await OpenCastSystemActionFixture.make(httpClient: client)
+        let section = EpisodePublisherChaptersSectionModel()
+        let undeclared = try await Self.cacheEpisode(
+            declaringDocument: false,
+            in: fixture.model,
+            cachedAt: Date(timeIntervalSinceReferenceDate: 800_000_000)
+        )
+        let firstKey = section.loadKey(episode: undeclared)
+        await section.load(appModel: fixture.model, episode: undeclared, key: firstKey)
+        #expect(section.isFinished(forKey: firstKey))
+
+        // A feed refresh declares a document, which moves the row's stamp.
+        let declared = try await Self.cacheEpisode(
+            declaringDocument: true,
+            in: fixture.model,
+            cachedAt: Date(timeIntervalSinceReferenceDate: 800_000_060)
+        )
+        let secondKey = section.loadKey(episode: declared)
+        #expect(secondKey != firstKey)
+        #expect(!section.isFinished(forKey: secondKey))
+        #expect(section.isFinished(forKey: firstKey))
+
+        await section.load(appModel: fixture.model, episode: declared, key: secondKey)
+
+        #expect(section.isFinished(forKey: secondKey))
+        #expect(!section.isFinished(forKey: firstKey))
+        #expect(section.chapters(for: Self.episodeID).count == 2)
+        #expect(client.requestCount == 1)
     }
 
     @Test("The load key follows the episode row's cache stamp")
@@ -138,9 +186,24 @@ struct EpisodePublisherChaptersSectionModelTests {
         #expect(section.loadKey(episode: episode) == "\(Self.episodeID)|800000000.5")
     }
 
+    /// The key a load for another episode would run under, with the same
+    /// cache stamp, so it differs from this episode's only by the id.
+    private static func otherEpisodeKey(of section: EpisodePublisherChaptersSectionModel, cachedAt: Date) -> String {
+        section.loadKey(episode: EpisodeListItemSnapshot(
+            episode: Episode(
+                id: EpisodeID(rawValue: "episode-1"),
+                podcastID: PodcastID(rawValue: chapteredFeedURL),
+                podcastTitle: "A Show",
+                title: "Another Episode"
+            ),
+            cachedAt: cachedAt
+        ))
+    }
+
     private static func cacheEpisode(
         declaringDocument: Bool,
-        in model: OpenCastAppModel
+        in model: OpenCastAppModel,
+        cachedAt: Date = .now
     ) async throws -> EpisodeListItemSnapshot {
         let podcastID = PodcastID(rawValue: chapteredFeedURL)
         let episode = Episode(
@@ -158,6 +221,6 @@ struct EpisodePublisherChaptersSectionModelTests {
             ),
             refreshedAt: .now
         )
-        return EpisodeListItemSnapshot(episode: episode)
+        return EpisodeListItemSnapshot(episode: episode, cachedAt: cachedAt)
     }
 }

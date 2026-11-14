@@ -12,8 +12,9 @@ import XCTest
 /// - 02: a completed transcript triggers no auto-analysis (generation is
 ///   manual-only, with the per-show opt-in retired); the Generate entry
 ///   renders below the show notes, the first tap routes through the
-///   one-time disclosure dialog, the explicit run reaches cards through the
-///   visible running state, and a chapter tap seeks playback.
+///   one-time key notice when it is due and then the one-time disclosure
+///   dialog, the explicit run reaches cards through the visible running
+///   state, and a chapter tap seeks playback.
 /// - 03: a `podcast:chapters` feed renders the publisher's chapters,
 ///   suppresses generation and explains (creator chapters win) — served by
 ///   the grafted exercise feed, whose "Bridge Three" declares a two-chapter
@@ -83,13 +84,16 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
     // MARK: - Gates
 
     /// One-time device prep: set OpenCast's "Paste from Other Apps" to
-    /// Deny. The Add Podcast sheet's clipboard probe is a synchronous
-    /// `UIPasteboard.general.string` read; with a universal-clipboard item
-    /// around, iOS raises its paste prompt, the app's main thread parks
-    /// inside the read (every app-side AX snapshot then times out), and the
-    /// prompt's alert is hosted by a remote process XCUITest cannot see or
-    /// tap (kAXErrorServerNotFound) — recorded during this gate's bring-up.
-    /// Denying the permission makes the read return nil instantly, forever.
+    /// Deny. A synchronous `UIPasteboard.general.string` read with a
+    /// universal-clipboard item around raises iOS's paste prompt, the app's
+    /// main thread parks inside the read (every app-side AX snapshot then
+    /// times out), and the prompt's alert is hosted by a remote process
+    /// XCUITest cannot see or tap (kAXErrorServerNotFound) — recorded
+    /// during this gate's bring-up. Denying the permission makes the read
+    /// return nil instantly, forever. iOS lists the row only once the app
+    /// has raised that prompt, and the Add sheet now reads the pasteboard
+    /// only from a tap on its own Paste button, so an install that never
+    /// did has nothing to deny and the leg skips.
     @MainActor
     func testDeviceE2E00DenyPastePermissionOnce() throws {
         try skipUnlessDeviceE2E()
@@ -114,11 +118,33 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
             ).firstMatch
         assertExists(appHit, named: "opencast search result", timeout: 10)
         appHit.tap()
+        assertExists(settings.navigationBars["opencast"], named: "opencast's Settings page", timeout: 15)
 
         let pasteRow = settings.descendants(matching: .any).matching(
             NSPredicate(format: "label CONTAINS %@", "Paste from Other Apps")
         ).firstMatch
-        assertExists(pasteRow, named: "Paste from Other Apps row", timeout: 15)
+        // A longer page can hold the row below the fold, where the list has
+        // not realized it yet: look a couple of strokes down before
+        // concluding it is absent.
+        var pasteRowFound = pasteRow.waitForExistence(timeout: 15)
+        var scanStrokes = 0
+        while !pasteRowFound, scanStrokes < 2 {
+            settings.swipeUp()
+            scanStrokes += 1
+            pasteRowFound = pasteRow.waitForExistence(timeout: 2)
+        }
+        guard pasteRowFound else {
+            for _ in 0..<scanStrokes {
+                settings.swipeDown()
+            }
+            attachTimestampedSmokeScreenshot(named: "00-no-paste-row")
+            settings.terminate()
+            throw XCTSkip(
+                "opencast's Settings page has no \"Paste from Other Apps\" row: iOS lists it only after the app "
+                    + "has raised the system paste prompt, and the Add sheet reads the pasteboard only from a tap "
+                    + "on its own Paste button."
+            )
+        }
         if !pasteRow.isHittable {
             settings.swipeUp()
         }
@@ -136,9 +162,10 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
 
     /// Manual-only proof: a completed transcript triggers NO analysis on its
     /// own; the Generate entry waits below the show notes, the first tap
-    /// routes through the one-time disclosure dialog, and the explicit run
-    /// reaches cards through the visible running state — then a chapter tap
-    /// seeks playback to the chapter start.
+    /// routes through the one-time key notice when it is due and then the
+    /// one-time disclosure dialog, and the explicit run reaches cards
+    /// through the visible running state — then a chapter tap seeks
+    /// playback to the chapter start.
     @MainActor
     func testDeviceE2E02ManualGenerateDisclosureRenderAndSeek() throws {
         try skipUnlessDeviceE2E()
@@ -158,12 +185,19 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
 
         // Auto-run is retired: completion must leave the episode un-analyzed
         // with the Generate entry offered. The full sweep materializes the
-        // whole detail before the absence checks.
+        // whole detail before the absence checks. A "Chapters" card may
+        // already be there, read from the episode's show notes, so the
+        // checks look for the generated cards' own marks: the "Generated"
+        // tag and the "Summary" card.
         Thread.sleep(forTimeInterval: 45)
         sweepDetail(in: app) { false }
         XCTAssertFalse(
-            staticText(exactly: "Chapters", in: app).exists,
-            "transcript completion must not produce a chapters card without a tap"
+            staticText(exactly: "Generated", in: app).exists,
+            "transcript completion must not produce generated cards without a tap"
+        )
+        XCTAssertFalse(
+            staticText(exactly: "Summary", in: app).exists,
+            "transcript completion must not produce a generated summary card without a tap"
         )
         XCTAssertFalse(
             staticText(containing: Self.runningCopy, in: app).exists,
@@ -175,38 +209,40 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
         sweepDetail(in: app) { generate.exists }
         assertExists(generate, named: "Generate button below the show notes", timeout: 20)
         attachTimestampedSmokeScreenshot(named: "02-generate-offered")
+        dragIntoReach(generate, named: "Generate button", in: app)
         // Coordinate tap: the glass button eats element.tap() (recorded
         // finding; the first run's tap synthesized and nothing started).
         generate.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
-        // First-ever tap on this install routes through the one-time
-        // disclosure dialog; a rerun against the existing store has already
-        // acknowledged it, so the dialog is asserted only when it appears.
-        let disclosureTitle = staticText(containing: "Generate Chapters & Summary?", in: app)
-        if disclosureTitle.waitForExistence(timeout: 8) {
-            assertExists(
-                staticText(containing: "Your audio is never sent.", in: app),
-                named: "disclosure dialog body",
-                timeout: 5
-            )
-            XCTAssertFalse(
-                staticText(containing: "shared with other listeners", in: app).exists,
-                "sharing sentence must be absent while the sharing flag is dark"
-            )
-            XCTAssertFalse(
-                staticText(containing: "transcription minutes", in: app).exists,
-                "minutes sentence must be absent: generation no longer charges transcription time"
-            )
-            attachTimestampedSmokeScreenshot(named: "02-disclosure-dialog")
-            let confirm = app.buttons["Generate"].firstMatch
-            assertExists(confirm, named: "disclosure Generate confirmation", timeout: 5)
-            confirm.tap()
-        }
-
-        assertExists(
-            staticText(containing: Self.runningCopy, in: app),
-            named: "running state after explicit Generate",
-            timeout: 60
+        // First-ever tap on this install routes through the one-time key
+        // notice (no key saved) and the one-time disclosure dialog; a rerun
+        // against the existing store has seen both, so each is asserted only
+        // when it appears.
+        followGenerateTap(
+            in: app,
+            runningName: "running state after explicit Generate",
+            onKeyNotice: {
+                attachTimestampedSmokeScreenshot(named: "02-key-notice")
+            },
+            onDisclosure: {
+                assertExists(
+                    staticText(containing: "Your audio is never sent.", in: app),
+                    named: "disclosure dialog body",
+                    timeout: 5
+                )
+                XCTAssertFalse(
+                    staticText(containing: "shared with other listeners", in: app).exists,
+                    "sharing sentence must be absent while the sharing flag is dark"
+                )
+                XCTAssertFalse(
+                    staticText(containing: "transcription minutes", in: app).exists,
+                    "minutes sentence must be absent: generation no longer charges transcription time"
+                )
+                attachTimestampedSmokeScreenshot(named: "02-disclosure-dialog")
+                let confirm = app.buttons["Generate"].firstMatch
+                assertExists(confirm, named: "disclosure Generate confirmation", timeout: 5)
+                confirm.tap()
+            }
         )
         attachTimestampedSmokeScreenshot(named: "02-generating")
         XCTAssertTrue(
@@ -308,11 +344,7 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
         assertExists(generate, named: "Generate button below the show notes", timeout: 20)
         scrollIntoMiddleBand(generate, in: app)
         generate.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        // The key notice (no key saved): run the held tap with OK.
-        let ok = app.buttons["AI Key Notice OK"]
-        if ok.waitForExistence(timeout: 5) {
-            ok.tap()
-        }
+        acknowledgeKeyNoticeIfPresented(in: app)
         if staticText(containing: "Generate Chapters & Summary?", in: app).waitForExistence(timeout: 8) {
             let confirm = app.buttons["Generate"].firstMatch
             assertExists(confirm, named: "disclosure Generate confirmation", timeout: 5)
@@ -564,14 +596,24 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
             XCTFail("subscription row should exist after subscribing to \(feedURL)")
             return
         }
-        if !row.isHittable {
-            app.swipeUp()
+        // The show page's own toolbar control: the page is open once it is.
+        let showPage = app.buttons["Podcast Actions"]
+        for _ in 0..<3 where !showPage.exists && row.exists {
+            dragIntoReach(row, named: "library row", in: app)
+            row.tap()
+            _ = showPage.waitForExistence(timeout: 8)
         }
-        row.tap()
         XCTAssertTrue(
-            episodeRows(in: app).firstMatch.waitForExistence(timeout: 20),
+            showPage.waitForExistence(timeout: 20),
             "show page should open from the library row"
         )
+        // A tall show header can fill a small screen, and the lazy list
+        // realizes no episode row until one scrolls into view.
+        let firstEpisode = episodeRows(in: app).firstMatch
+        for _ in 0..<6 where !firstEpisode.waitForExistence(timeout: 2) {
+            dragList(in: app, from: 0.6, to: 0.35)
+        }
+        XCTAssertTrue(firstEpisode.exists, "show page should list its episodes")
     }
 
     @MainActor
@@ -644,9 +686,7 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
             guard let row = libraryRow(matching: predicate, in: app) else {
                 return
             }
-            if !row.isHittable {
-                app.swipeUp()
-            }
+            dragIntoReach(row, named: "library row to remove", in: app)
             row.swipeLeft()
             let removeAction = app.buttons["Remove"].firstMatch
             guard removeAction.waitForExistence(timeout: 6) else {
@@ -676,16 +716,19 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
     private func openEpisodeDetail(at index: Int, in app: XCUIApplication) -> String {
         let rows = episodeRows(in: app)
         if !rows.firstMatch.waitForExistence(timeout: 10) {
-            app.swipeUp()
+            dragList(in: app, from: 0.6, to: 0.35)
         }
         assertExists(rows.firstMatch, named: "episode rows on the show page", timeout: 20)
         var row = rows.element(boundBy: index)
-        for _ in 0..<6 where !(row.exists && row.isHittable) {
-            app.swipeUp()
+        for _ in 0..<6 where !row.exists {
+            dragList(in: app, from: 0.6, to: 0.35)
             row = rows.element(boundBy: index)
         }
-        let label = row.label
-        openDetail(from: row, in: app)
+        // An index re-resolves to whichever row the list has realized first,
+        // so the row is pinned by its identifier before the list moves again.
+        let pinned = rows.matching(NSPredicate(format: "identifier == %@", row.identifier)).firstMatch
+        let label = pinned.label
+        openDetail(from: pinned, in: app)
         return label
     }
 
@@ -705,6 +748,127 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
                 return
             }
         }
+    }
+
+    /// Drags a list in short strokes until `element` sits wholly in the clear
+    /// band between the bars, and fails here when it cannot. On an iPhone SE
+    /// the mini player covers the window's bottom fifth, and a tap under the
+    /// collapsed navigation bar scrolls the list to its top instead of
+    /// reaching the row (recorded on SANDBOX SE). A tap that lands on the mini
+    /// player opens Now Playing on its own item, which can pass a position
+    /// check without the intended tap having happened, so giving up silently
+    /// is never safe.
+    @MainActor
+    private func dragIntoReach(_ element: XCUIElement, named name: String, in app: XCUIApplication) {
+        for _ in 0..<10 where element.exists {
+            let band = clearBand(in: app)
+            let frame = element.frame
+            if frame.maxY > band.maxY {
+                dragList(in: app, from: 0.6, to: 0.35)
+            } else if frame.minY < band.minY {
+                dragList(in: app, from: 0.35, to: 0.6)
+            } else {
+                return
+            }
+        }
+        XCTAssertTrue(element.exists, "\(name) should exist to be brought into reach")
+        let band = clearBand(in: app)
+        let frame = element.frame
+        XCTAssertTrue(
+            frame.minY >= band.minY && frame.maxY <= band.maxY,
+            "\(name) could not be brought clear of the navigation bar and the mini player: frame \(frame), clear band \(band)"
+        )
+    }
+
+    /// The band the bars leave uncovered, measured from the bars themselves:
+    /// a list's last row rests one row gap above the mini player, below any
+    /// fixed fraction of the window. The floor at the top keeps clear of the
+    /// floating toolbar buttons where no navigation bar is reported.
+    @MainActor
+    private func clearBand(in app: XCUIApplication) -> CGRect {
+        let window = app.windows.firstMatch.frame
+        let navigationBar = app.navigationBars.firstMatch
+        let top = max(
+            navigationBar.exists ? navigationBar.frame.maxY : window.minY,
+            window.minY + window.height * 0.1
+        )
+        let bottomCovers = [
+            app.otherElements["mini-player-expanded"],
+            app.otherElements["mini-player-inline"],
+            app.buttons["Open Now Playing"],
+            app.tabBars.firstMatch
+        ].filter(\.exists).map(\.frame.minY)
+        let bottom = bottomCovers.min() ?? window.maxY
+        return CGRect(x: window.minX, y: top, width: window.width, height: max(0, bottom - top))
+    }
+
+    /// A press-and-drag that holds at its end, so the list stops where the
+    /// finger does: a swipe's fling carries a lazy list past the rows it
+    /// was meant to reach.
+    @MainActor
+    private func dragList(in app: XCUIApplication, from startY: Double, to endY: Double) {
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: startY))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: endY))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.3)
+    }
+
+    /// The one-time AI key notice is due while it is unseen, no key is saved
+    /// and the trial service is reachable; it holds the first Generate tap
+    /// until OK runs it. Otherwise the tap goes straight on, so OK is tapped
+    /// only when the notice appears.
+    @MainActor
+    private func acknowledgeKeyNoticeIfPresented(in app: XCUIApplication) {
+        let ok = app.buttons["AI Key Notice OK"]
+        guard ok.waitForExistence(timeout: 5) else {
+            return
+        }
+        ok.tap()
+    }
+
+    /// After a Generate tap, acts on whichever comes first of the key
+    /// notice's OK, the disclosure dialog and the running copy, until the
+    /// running copy has been seen. Waiting out each optional dialog in turn
+    /// (5 s, then 8 s) let a run of a few seconds start and finish unseen
+    /// on a rerun, where a saved key and an acknowledged disclosure show
+    /// neither. `onKeyNotice` runs before OK is tapped; `onDisclosure` owns
+    /// the dialog, confirmation included. Fails as "<runningName> should
+    /// exist" when the running copy does not appear within 60 s of the last
+    /// thing acted on.
+    @MainActor
+    private func followGenerateTap(
+        in app: XCUIApplication,
+        runningName: String,
+        onKeyNotice: () -> Void,
+        onDisclosure: () -> Void
+    ) {
+        let ok = app.buttons["AI Key Notice OK"]
+        let disclosureTitle = staticText(containing: "Generate Chapters & Summary?", in: app)
+        let running = staticText(containing: Self.runningCopy, in: app)
+        // Each dialog shows at most once per tap; acting on one again while
+        // its dismissal animates would repeat its taps and assertions.
+        var handledKeyNotice = false
+        var handledDisclosure = false
+        var deadline = Date().addingTimeInterval(60)
+        while Date() < deadline {
+            if running.exists {
+                return
+            }
+            if !handledKeyNotice, ok.exists {
+                handledKeyNotice = true
+                onKeyNotice()
+                ok.tap()
+                _ = ok.waitForNonExistence(timeout: 5)
+                deadline = Date().addingTimeInterval(60)
+            } else if !handledDisclosure, disclosureTitle.exists {
+                handledDisclosure = true
+                onDisclosure()
+                _ = disclosureTitle.waitForNonExistence(timeout: 5)
+                deadline = Date().addingTimeInterval(60)
+            } else {
+                usleep(200_000)
+            }
+        }
+        assertExists(running, named: runningName, timeout: 0)
     }
 
     /// Opens the newest Inbox episode of `show` (the launch screen) in
@@ -743,6 +907,7 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
     @MainActor
     private func openDetail(from row: XCUIElement, in app: XCUIApplication) {
         for _ in 0..<3 {
+            dragIntoReach(row, named: "episode row", in: app)
             row.press(forDuration: 1.2)
             let detailsButton = app.buttons["View Episode Details"]
             if detailsButton.waitForExistence(timeout: 4) {
@@ -883,7 +1048,9 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
 
     /// Both generated cards visible: the exact "Chapters" and "Summary" card
     /// headers (the controls card's "Chapters & Summary" label is a distinct
-    /// exact-match miss).
+    /// exact-match miss). The "Chapters" half can be met early by a card read
+    /// from the show notes; "Summary" appears only once a run has finished,
+    /// and generated chapters, when the run produced any, replace that card.
     @MainActor
     private func waitForGeneratedCards(in app: XCUIApplication, timeout: TimeInterval) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
@@ -921,9 +1088,9 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
             XCTFail("chapters card should carry at least one chapter row")
             return (chapters.firstMatch, 0)
         }
-        for _ in 0..<4 where !last.isHittable {
-            app.swipeUp()
-        }
+        // isHittable stays true for a row under the mini player, where the
+        // tap would open Now Playing on whatever item it holds.
+        dragIntoReach(last, named: "last chapter row", in: app)
         let label = last.label
         guard let range = label.range(of: ", starts at ", options: .backwards) else {
             XCTFail("chapter label should carry a start time: \(label)")
