@@ -20,6 +20,7 @@ struct OpenCastModelTests {
         )
 
         context.insert(subscription)
+        context.insert(EpisodeProgressRecord(episodeID: "model-fixture-episode", podcastID: Self.modelFixtureFeedURL))
         try context.save()
 
         let fetched = try context.fetch(FetchDescriptor<SubscriptionRecord>())
@@ -30,6 +31,10 @@ struct OpenCastModelTests {
         #expect(fetched.first?.skipOutroSeconds == 0)
         #expect(fetched.first?.playbackRate == 0)
         #expect(fetched.first?.autoAddToUpNext == 0)
+        // A progress row is not archived until something archives it.
+        let progress = try context.fetch(FetchDescriptor<EpisodeProgressRecord>())
+        #expect(progress.map(\.episodeID) == ["model-fixture-episode"])
+        #expect(progress.first?.archivedAt == nil)
     }
 
     @Test("Synced records use logical keys instead of unique attributes")

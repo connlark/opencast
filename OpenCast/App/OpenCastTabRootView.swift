@@ -105,6 +105,7 @@ struct OpenCastTabRootView: View {
                 ) {
                     LibraryView(
                         onAdd: onAdd,
+                        onOpenPlaylists: { openFromRoot(on: .library)(.playlists) },
                         onOpenUpNext: openUpNext,
                         onOpenPlaylist: { openFromRoot(on: .library)(.playlistDetail(id: $0)) },
                         onOpenNotes: { openFromRoot(on: .library)(.notes) }
@@ -175,7 +176,10 @@ struct OpenCastTabRootView: View {
 
             sectionTab(.downloads) {
                 NavigationStack(path: $navigationPaths[.downloads]) {
-                    DownloadsView(onOpenEpisode: openEpisode(on: .downloads))
+                    DownloadsView(
+                        onOpenEpisode: openEpisode(on: .downloads),
+                        onOpenDownloadSettings: { navigationPaths[.downloads].append(.downloadSettings) }
+                    )
                     .withOpenCastDestinations(
                         onOpenEpisode: openEpisode(on: .downloads)
                     )

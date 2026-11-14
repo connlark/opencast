@@ -74,8 +74,15 @@ enum CarPlayBrowseModelBuilder {
         }
 
         // Visible list + continuation never consume more than 2x the item
-        // cap; don't build rows for an unbounded inbox (perf 29).
-        let latestRows = library.inboxEpisodes.prefix(limits.maximumItemCount * 2).map { episode in
+        // cap; don't build rows for an unbounded inbox (perf 29). Archived
+        // episodes leave before the cap, so they never take a slot.
+        let archivedEpisodeIDs = library.archivedEpisodeIDs
+        let latestEpisodes = Array(
+            library.inboxEpisodes.lazy
+                .filter { !archivedEpisodeIDs.contains($0.episodeID) }
+                .prefix(limits.maximumItemCount * 2)
+        )
+        let latestRows = latestEpisodes.map { episode in
             CarPlayListRow.episode(
                 episodeRow(
                     for: episode,

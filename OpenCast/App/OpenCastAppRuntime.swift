@@ -378,7 +378,9 @@ final class OpenCastAppRuntime {
         if let failureCode = launchConfiguration.uiTestFeedTransportFailure {
             feedService = OpenCastUITestFeedTransportFailureService(code: failureCode)
         } else if launchConfiguration.usesUITestSeedFeedRefreshService {
-            feedService = OpenCastUITestSeedFeedRefreshService()
+            feedService = OpenCastUITestSeedFeedRefreshService(
+                salvagesFeed: launchConfiguration.salvagesUITestSeedFeedRefresh
+            )
         } else {
             return nil
         }

@@ -171,11 +171,15 @@ final class UpNextAutoAddCoordinator {
         )
     }
 
-    /// Oldest first. Queue membership is left to the walk.
+    /// Oldest first. Queue membership is left to the walk. An archived
+    /// release was triaged out of the Inbox, so it is skipped like a played
+    /// one.
     private func candidates(in released: [EpisodeListItemSnapshot]) -> [EpisodeListItemSnapshot] {
-        released.reversed().filter { episode in
+        let archivedEpisodeIDs = library.archivedEpisodeIDs
+        return released.reversed().filter { episode in
             episode.audioURL != nil
                 && !isCurrentEpisode(episode.episodeID)
+                && !archivedEpisodeIDs.contains(episode.episodeID)
                 && !library.progressSummary(for: episode).isCompleted
         }
     }

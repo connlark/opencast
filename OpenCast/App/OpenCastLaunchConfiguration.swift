@@ -45,6 +45,9 @@ struct OpenCastLaunchConfiguration {
     /// UI-test seam: replaces how long launch work waits for that answer.
     var uiTestCloudKitAccountStatusPatienceMilliseconds: Int?
     var usesUITestSeedFeedRefreshService: Bool
+    /// UI-test seam: that refresh salvages a partial feed
+    /// (`OPENCAST_UI_TEST_REFRESH_SEED_FEED=partial`).
+    var salvagesUITestSeedFeedRefresh: Bool
     /// UI-test seam: every feed fetch fails with this transport error.
     var uiTestFeedTransportFailure: URLError.Code?
     /// UI-test seams for AI Services: the providers whose fixture key the
@@ -236,8 +239,9 @@ struct OpenCastLaunchConfiguration {
                 environment["OPENCAST_UI_TEST_CLOUDKIT_ACCOUNT_STATUS_PATIENCE_MILLISECONDS"]
             )
             : nil
-        let usesUITestSeedFeedRefreshService = isUITesting
-            && environment["OPENCAST_UI_TEST_REFRESH_SEED_FEED"] == "1"
+        let seedFeedRefreshMode = isUITesting ? environment["OPENCAST_UI_TEST_REFRESH_SEED_FEED"] : nil
+        let salvagesUITestSeedFeedRefresh = seedFeedRefreshMode == "partial"
+        let usesUITestSeedFeedRefreshService = seedFeedRefreshMode == "1" || salvagesUITestSeedFeedRefresh
         let uiTestFeedTransportFailure = isUITesting
             ? OpenCastUITestFeedTransportFailureService.resolve(environment: environment)
             : nil
@@ -294,6 +298,7 @@ struct OpenCastLaunchConfiguration {
             uiTestCloudKitAccountStatusDelayMilliseconds: uiTestCloudKitAccountStatusDelayMilliseconds,
             uiTestCloudKitAccountStatusPatienceMilliseconds: uiTestCloudKitAccountStatusPatienceMilliseconds,
             usesUITestSeedFeedRefreshService: usesUITestSeedFeedRefreshService,
+            salvagesUITestSeedFeedRefresh: salvagesUITestSeedFeedRefresh,
             uiTestFeedTransportFailure: uiTestFeedTransportFailure,
             seededAnalysisKeyProviders: seededAnalysisKeyProviders,
             seedsAnalysisKeysLocalOnly: isUITesting && shouldSeedAnalysisKeysLocalOnly,

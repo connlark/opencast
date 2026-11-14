@@ -8,6 +8,8 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
     let episode: EpisodeListItemSnapshot
     let showsGoToShow: Bool
     let onViewDetails: (EpisodeListItemSnapshot) -> Void
+    /// Archive / Unarchive, for the rows the Inbox membership applies to.
+    var showsArchiveAction = false
 
     @State private var modePromptEpisode: EpisodeListItemSnapshot?
     @State private var noticeGate = AnalysisKeyNoticeGate()
@@ -49,6 +51,12 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
                 systemImage: isPlayed ? "arrow.uturn.backward.circle" : "checkmark.circle",
                 action: togglePlayed
             )
+            if showsArchiveAction {
+                EpisodeArchiveButton(
+                    episode: episode,
+                    isArchived: appModel.library.isArchived(episodeID: episode.episodeID)
+                )
+            }
             downloadButton
             detectAdsButton
         } preview: {

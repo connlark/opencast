@@ -2,12 +2,13 @@ import SwiftUI
 
 /// The show page's per-visit settings: what it lists and what it searches.
 ///
-/// A show opened from the Group by Podcast Inbox carries the Inbox's filter
-/// and Hide Up Next in its route for that visit only
+/// A show opened from the Group by Podcast Inbox carries the Inbox's filter,
+/// Hide Up Next and archive scope (archived episodes hidden, or only they
+/// listed) in its route for that visit only
 /// (`AppRoute.podcastDetail(feedURL:episodeListOverride:)`); picking a
-/// filter on the page ends them and Show Hidden Episodes turns Hide Up Next
-/// off. The page's episode search (shown or not, its query and mode) decides
-/// what the page lists too.
+/// filter on the page ends them and Show Hidden Episodes lists what Hide Up
+/// Next and the archive scope hid. The page's episode search (shown or not, its
+/// query and mode) decides what the page lists too.
 struct PodcastDetailVisit: Equatable {
     /// The page's episode search while it is shown.
     struct Search: Equatable {

@@ -6,14 +6,16 @@ import Foundation
 // either moves. Counts are derived on read rather than cached: the scan
 // stops at the first episode older than the window, reading progress
 // through `progressSummary` observes this context's in-place edits
-// (deferred flushes included), and `progressRefetchRevision` covers edits
-// a refetch imports from another context.
+// (deferred flushes included), `progressRefetchRevision` covers edits a
+// refetch imports from another context, and `archivedEpisodeIDs` moves
+// with every archive, wherever it came from.
 extension LibraryStore {
-    /// Incomplete episodes released since the show was followed and within
-    /// `LibraryNewEpisodeRules.recencyWindow`, as of
-    /// `newEpisodeReferenceDate`. Missing progress counts as incomplete.
+    /// Incomplete episodes, not archived out of the Inbox, released since
+    /// the show was followed and within `LibraryNewEpisodeRules.recencyWindow`,
+    /// as of `newEpisodeReferenceDate`. Missing progress counts as incomplete.
     func newEpisodeCount(for subscription: SubscriptionRecord) -> Int {
         let episodes = episodes
+        let archivedEpisodeIDs = archivedEpisodeIDs
         _ = progressRefetchRevision
         guard let releaseDates = LibraryNewEpisodeRules.eligibleReleaseDates(
             subscribedAt: newEpisodeCutoffByFeedURL[subscription.feedURL] ?? subscription.subscribedAt,
@@ -35,7 +37,8 @@ extension LibraryStore {
             guard publishedAt.timeIntervalSinceReferenceDate >= releaseDates.lowerBound.timeIntervalSinceReferenceDate else {
                 break
             }
-            if !progressSummary(for: episode).isCompleted {
+            if !archivedEpisodeIDs.contains(episode.episodeID),
+               !progressSummary(for: episode).isCompleted {
                 count += 1
             }
         }

@@ -20,16 +20,20 @@ enum PodcastPrimaryAction: Equatable {
         }
     }
 
+    /// Resume picks the in-progress episode heard most recently. An archived
+    /// one is passed over: archiving moves `updatedAt` without a listen.
     static func resolve(
         episodes: [EpisodeListItemSnapshot],
         library: LibraryStore
     ) -> PodcastPrimaryAction? {
+        let archivedEpisodeIDs = library.archivedEpisodeIDs
         var resumeEpisode: EpisodeListItemSnapshot?
         var resumeUpdatedAt: Date?
 
         for episode in episodes {
             let progress = library.progressSummary(for: episode)
             guard progress.hasVisibleProgress,
+                  !archivedEpisodeIDs.contains(episode.episodeID),
                   let record = library.progressRecord(for: episode.episodeID)
             else {
                 continue

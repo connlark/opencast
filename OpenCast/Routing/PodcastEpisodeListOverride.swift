@@ -4,4 +4,7 @@
 nonisolated struct PodcastEpisodeListOverride: Hashable, Sendable {
     var filter: PodcastEpisodeFilter
     var hidesQueuedEpisodes: Bool
+    /// The view the group came from: the Inbox hides archived episodes, the
+    /// archive lists only them. A show opened any other way lists both.
+    var archiveScope = PodcastEpisodeArchiveScope.all
 }

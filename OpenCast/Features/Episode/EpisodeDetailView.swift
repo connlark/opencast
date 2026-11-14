@@ -84,7 +84,8 @@ struct EpisodeDetailView: View {
                     EpisodeMoreMenu(
                         episode: episode,
                         isPlayed: progressSummary.isCompleted,
-                        hasProgressRecord: progressRecord != nil,
+                        isArchived: isArchived,
+                        offersClearProgress: offersClearProgress(progressRecord),
                         onClearProgress: confirmClearProgress,
                         onShowEpisodeDiagnostics: showEpisodeDiagnostics,
                         onActionError: { showEpisodeActionError($0) }
@@ -102,7 +103,7 @@ struct EpisodeDetailView: View {
             Button("Clear Progress", role: .destructive, action: clearProgress)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Listening position for this episode will be removed. Downloads are unchanged.")
+            Text(clearProgressMessage)
         }
         .alert(episodeActionErrorTitle, isPresented: $isShowingEpisodeActionError) {
             Button("OK", role: .cancel) {}
@@ -566,6 +567,25 @@ struct EpisodeDetailView: View {
         }
 
         appModel.library.updateArtworkPreview(preview, for: episode)
+    }
+
+    private var isArchived: Bool {
+        appModel.library.isArchived(episodeID: episodeID)
+    }
+
+    /// Clearing deletes the row, so an archived episode loses its archive
+    /// too; an archive-only row (no listening, not played) has nothing else
+    /// to clear, and Unarchive is its way back.
+    private func offersClearProgress(_ record: EpisodeProgressRecord?) -> Bool {
+        guard let record else {
+            return false
+        }
+        return !isArchived || record.isPlayed || record.position > 0
+    }
+
+    private var clearProgressMessage: String {
+        let message = "Listening position for this episode will be removed. Downloads are unchanged."
+        return isArchived ? "\(message) The episode also returns to the Inbox." : message
     }
 
     private func confirmClearProgress() {

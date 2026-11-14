@@ -318,6 +318,107 @@ struct LibraryNewEpisodeCountTests {
         #expect(library.newEpisodeCount(for: subscription) == 1)
     }
 
+    /// An in-place archive moves no revision and changes nothing the
+    /// progress summary reads, so the archived set is the only thing that
+    /// can invalidate the count.
+    @Test("Archiving takes an episode out of the count and unarchiving puts it back")
+    func archivingMovesTheCount() async throws {
+        let show = ShowFixture(name: "archiving", subscribedAt: at(days: -90), episodes: [
+            EpisodeFixture(
+                id: "archiving-started",
+                publishedAt: at(days: -1),
+                progress: ProgressFixture(position: 100, duration: 600)
+            ),
+            EpisodeFixture(id: "archiving-unheard", publishedAt: at(days: -2))
+        ])
+        let fixture = try await makeFixture(shows: [show])
+        let library = fixture.library
+        let subscription = try fixture.subscription(for: show)
+        let started = try #require(library.episode(with: "archiving-started"))
+        let unheard = try #require(library.episode(with: "archiving-unheard"))
+        #expect(library.newEpisodeCount(for: subscription) == 2)
+
+        await confirmation("an in-place archive invalidates the count reader") { invalidated in
+            withObservationTracking {
+                _ = library.newEpisodeCount(for: subscription)
+            } onChange: {
+                invalidated()
+            }
+            library.archive(started, modelContext: fixture.context)
+        }
+        #expect(library.newEpisodeCount(for: subscription) == 1)
+
+        #expect(library.archive(unheard, modelContext: fixture.context))
+        #expect(library.newEpisodeCount(for: subscription) == 0)
+
+        await confirmation("an unarchive invalidates the count reader") { invalidated in
+            withObservationTracking {
+                _ = library.newEpisodeCount(for: subscription)
+            } onChange: {
+                invalidated()
+            }
+            library.unarchive(started, modelContext: fixture.context)
+        }
+        #expect(library.newEpisodeCount(for: subscription) == 1)
+    }
+
+    /// Another context archives an existing row and then unarchives it. The
+    /// store's refetch finds the live object it already indexes, so the rows
+    /// can compare unchanged; the archived set, the Inbox and the count
+    /// follow the row anyway.
+    @Test("Imported archives and unarchives reach the archived set, the Inbox and the count")
+    func importedArchivesReachInboxMembership() async throws {
+        let show = ShowFixture(name: "imported", subscribedAt: at(days: -90), episodes: [
+            EpisodeFixture(
+                id: "imported-archived",
+                publishedAt: at(days: -1),
+                progress: ProgressFixture(position: 100, duration: 600)
+            ),
+            EpisodeFixture(id: "imported-kept", publishedAt: at(days: -2))
+        ])
+        let fixture = try await makeFixture(shows: [show])
+        let library = fixture.library
+        let subscription = try fixture.subscription(for: show)
+        #expect(library.newEpisodeCount(for: subscription) == 2)
+        #expect(inboxEpisodeIDs(library) == ["imported-archived", "imported-kept"])
+
+        let importContext = ModelContext(fixture.container)
+        let importedRecord = try #require(
+            importContext.fetch(FetchDescriptor<EpisodeProgressRecord>())
+                .first(where: { $0.episodeID == "imported-archived" })
+        )
+        importedRecord.archivedAt = Self.start.addingTimeInterval(60)
+        importedRecord.updatedAt = Self.start.addingTimeInterval(60)
+        try importContext.save()
+        await confirmation("an imported archive invalidates an Inbox reader") { invalidated in
+            withObservationTracking {
+                _ = inboxEpisodeIDs(library)
+            } onChange: {
+                invalidated()
+            }
+            _ = try? library.reloadSyncedUserData(modelContext: fixture.context)
+        }
+        #expect(library.archivedEpisodeIDs == ["imported-archived"])
+        #expect(library.progressRecord(for: "imported-archived")?.archivedAt != nil)
+        #expect(inboxEpisodeIDs(library) == ["imported-kept"])
+        #expect(library.newEpisodeCount(for: subscription) == 1)
+
+        importedRecord.archivedAt = nil
+        importedRecord.updatedAt = Self.start.addingTimeInterval(120)
+        try importContext.save()
+        await confirmation("an imported unarchive invalidates an Inbox reader") { invalidated in
+            withObservationTracking {
+                _ = inboxEpisodeIDs(library)
+            } onChange: {
+                invalidated()
+            }
+            _ = try? library.reloadSyncedUserData(modelContext: fixture.context)
+        }
+        #expect(library.archivedEpisodeIDs.isEmpty)
+        #expect(inboxEpisodeIDs(library) == ["imported-archived", "imported-kept"])
+        #expect(library.newEpisodeCount(for: subscription) == 2)
+    }
+
     @Test("An imported follow date invalidates the count, and duplicates use the newest")
     func importedFollowDatesAndDuplicates() async throws {
         let show = ShowFixture(name: "follow", subscribedAt: at(days: -90), episodes: [
@@ -500,6 +601,22 @@ struct LibraryNewEpisodeCountTests {
 
     private func at(days: Double) -> Date {
         Self.start.addingTimeInterval(days * Self.day)
+    }
+
+    /// The default Inbox: All Episodes, Up Next and archived episodes not
+    /// shown, so the archived set is the only progress input it reads.
+    private func inboxEpisodeIDs(_ library: LibraryStore) -> [String] {
+        InboxEpisodeListModel.make(
+            episodes: library.inboxEpisodes,
+            filter: .all,
+            hidesQueuedEpisodes: false,
+            showsArchivedEpisodes: false,
+            library: library,
+            downloadRecords: [],
+            queuedEpisodeIDs: [],
+            playingEpisodeID: nil,
+            archivedEpisodeIDs: library.archivedEpisodeIDs
+        ).episodes.map(\.episodeID)
     }
 
     /// Loads the shows into a fresh in-memory library whose clock reads

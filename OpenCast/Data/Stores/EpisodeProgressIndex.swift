@@ -73,6 +73,30 @@ struct EpisodeProgressIndex {
         return latestRecordByEpisodeID
     }
 
+    /// The episodes whose latest record, by the rule of
+    /// `latestRecordsByEpisodeID`, carries an archive.
+    static func archivedEpisodeIDs(in records: [EpisodeProgressRecord]) -> Set<String> {
+        archivedEpisodeIDs(amongLatest: latestRecordsByEpisodeID(records))
+    }
+
+    /// The archived episodes of a `latestRecordsByEpisodeID` result.
+    static func archivedEpisodeIDs(
+        amongLatest latestRecordByEpisodeID: [String: EpisodeProgressRecord]
+    ) -> Set<String> {
+        var archivedEpisodeIDs: Set<String> = []
+        for (episodeID, record) in latestRecordByEpisodeID where record.archivedAt != nil {
+            archivedEpisodeIDs.insert(episodeID)
+        }
+        return archivedEpisodeIDs
+    }
+
+    /// Whether every episode's indexed record is the one `latest` names, and
+    /// no other episode is indexed.
+    func indexesLatest(_ latest: [String: EpisodeProgressRecord]) -> Bool {
+        latest.count == latestByEpisodeID.count
+            && latest.allSatisfy { episodeID, record in latestByEpisodeID[episodeID] === record }
+    }
+
     static func records(
         _ lhs: [EpisodeProgressRecord],
         match rhs: [EpisodeProgressRecord]
@@ -98,8 +122,7 @@ struct EpisodeProgressIndex {
 
     private mutating func rebuildLatestByEpisodeID() -> Bool {
         let rebuilt = Self.latestRecordsByEpisodeID(records)
-        let membershipChanged = rebuilt.count != latestByEpisodeID.count
-            || rebuilt.contains { episodeID, record in latestByEpisodeID[episodeID] !== record }
+        let membershipChanged = !indexesLatest(rebuilt)
         latestByEpisodeID = rebuilt
         return membershipChanged
     }
@@ -162,9 +185,35 @@ struct EpisodeProgressIndex {
         if lhs.position != rhs.position {
             return lhs.position < rhs.position
         }
-        if lhs.duration != rhs.duration {
-            return (lhs.duration ?? 0) < (rhs.duration ?? 0)
+        // A missing duration counts as zero, as repair reads it. Compared as
+        // optionals, nil and 0 differ while neither orders first, which
+        // would leave the pick to fetch order.
+        let lhsDuration = lhs.duration ?? 0
+        let rhsDuration = rhs.duration ?? 0
+        if lhsDuration != rhsDuration {
+            return lhsDuration < rhsDuration
         }
-        return !lhs.isPlayed && rhs.isPlayed
+        if lhs.isPlayed != rhs.isPlayed {
+            return !lhs.isPlayed
+        }
+        return winsFinalTie(lhs, over: rhs)
+    }
+
+    /// The last tie-break between two copies of an episode that agree on
+    /// every listening field, shared with duplicate repair so every peer
+    /// keeps the same archive whatever order it fetched the copies in: an
+    /// archived copy beats an unarchived one, then the later archive, then
+    /// the smaller `dedupeUUID`.
+    static func winsFinalTie(_ lhs: EpisodeProgressRecord, over rhs: EpisodeProgressRecord) -> Bool {
+        switch (lhs.archivedAt, rhs.archivedAt) {
+        case let (lhsArchivedAt?, rhsArchivedAt?) where lhsArchivedAt != rhsArchivedAt:
+            lhsArchivedAt > rhsArchivedAt
+        case (.some, nil):
+            true
+        case (nil, .some):
+            false
+        default:
+            lhs.dedupeUUID < rhs.dedupeUUID
+        }
     }
 }

@@ -58,6 +58,37 @@ struct PodcastPrimaryActionTests {
         #expect(action == .playLatest(next))
     }
 
+    /// Archiving moves `updatedAt`, which would otherwise make the archived
+    /// episode the most recently heard one.
+    @Test("Resume passes over an archived in-progress episode")
+    func resumeSkipsArchivedEpisodes() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let library = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        let newest = makeEpisode(id: "newest", publishedAt: 30)
+        let heard = makeEpisode(id: "heard", publishedAt: 20)
+        let archived = makeEpisode(id: "archived", publishedAt: 10)
+        for episode in [heard, archived] {
+            #expect(library.updateProgress(
+                episodeID: episode.episodeID,
+                podcastID: episode.podcastID,
+                position: 20,
+                duration: 100,
+                modelContext: context
+            ))
+        }
+        library.progressRecord(for: heard.episodeID)?.updatedAt = Date(timeIntervalSince1970: 200)
+        library.progressRecord(for: archived.episodeID)?.updatedAt = Date(timeIntervalSince1970: 100)
+
+        #expect(library.archive(archived, modelContext: context))
+
+        #expect(PodcastPrimaryAction.resolve(episodes: [newest, heard, archived], library: library) == .resume(heard))
+
+        #expect(library.archive(heard, modelContext: context))
+
+        #expect(PodcastPrimaryAction.resolve(episodes: [newest, heard, archived], library: library) == .playLatest(newest))
+    }
+
     @Test("An all-played podcast still offers its newest episode")
     func allPlayedFallback() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

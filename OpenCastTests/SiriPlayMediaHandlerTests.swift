@@ -89,6 +89,21 @@ struct SiriPlayMediaHandlerTests {
         #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == "newest")
     }
 
+    @Test("A generic request falls back past an episode archived out of the Inbox")
+    func genericFallbackSkipsArchivedEpisodes() async throws {
+        let fixture = try await makeFixture()
+        await fixture.appModel.ensureCoreStoresLoaded(modelContext: fixture.modelContext)
+        let newest = try #require(fixture.appModel.episodeSnapshot(for: "newest"))
+        #expect(fixture.appModel.archiveEpisode(newest, modelContext: fixture.modelContext))
+
+        let response = await fixture.handler.handle(
+            intent: SiriPlayMediaIntentFactory.make(resumePlayback: true)
+        )
+
+        #expect(response.code == .success)
+        #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == "older")
+    }
+
     @Test("A generic request resumes the remembered episode before using Inbox")
     func rememberedEpisodeResume() async throws {
         let fixture = try await makeFixture()

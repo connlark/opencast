@@ -6,6 +6,8 @@ struct PodcastEpisodeSwipeActionsModifier: ViewModifier {
     @Environment(\.modelContext) private var modelContext
 
     let episode: EpisodeListItemSnapshot
+    /// Archive / Unarchive, for the rows the Inbox membership applies to.
+    var showsArchiveAction = false
 
     func body(content: Content) -> some View {
         // State reads live inside the swipe-action builders, which SwiftUI
@@ -21,21 +23,30 @@ struct PodcastEpisodeSwipeActionsModifier: ViewModifier {
                 )
                 .tint(isPlayed ? .blue : .green)
             }
+            // A swipe action draws a disabled button exactly like an enabled
+            // one, so an action that cannot run is left out, never disabled:
+            // the row's context menu keeps the greyed item.
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                let isCurrentlyPlaying = appModel.playback.currentEpisode?.id.rawValue == episode.episodeID
-                Button(
-                    "Play Next",
-                    systemImage: "text.line.first.and.arrowtriangle.forward",
-                    action: enqueueNext
-                )
-                .tint(.orange)
-                .disabled(isCurrentlyPlaying)
+                if appModel.playback.currentEpisode?.id.rawValue != episode.episodeID {
+                    Button(
+                        "Play Next",
+                        systemImage: "text.line.first.and.arrowtriangle.forward",
+                        action: enqueueNext
+                    )
+                    .tint(.orange)
+                }
 
-                let downloadState = appModel.downloadMenuState(for: episode)
-                if downloadState.showsDownloadAction {
+                if showsArchiveAction {
+                    EpisodeArchiveButton(
+                        episode: episode,
+                        isArchived: appModel.library.isArchived(episodeID: episode.episodeID)
+                    )
+                    .tint(.gray)
+                }
+
+                if appModel.downloadMenuState(for: episode).isDownloadActionEnabled {
                     Button("Download", systemImage: "arrow.down.circle", action: download)
                         .tint(.blue)
-                        .disabled(!downloadState.isDownloadActionEnabled)
                 }
             }
     }

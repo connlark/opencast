@@ -3048,6 +3048,74 @@ final class OpenCastAppModel {
         return didSave
     }
 
+    /// Archives the episode out of the Inbox and takes it out of Up Next.
+    /// Archiving is Inbox membership, not a listen: the current episode is
+    /// archived like any other and keeps playing, and nothing here unloads
+    /// playback, touches the restore preference or sweeps downloads. Returns
+    /// false when nothing was archived.
+    @discardableResult
+    func archiveEpisode(
+        _ episode: EpisodeListItemSnapshot,
+        modelContext: ModelContext
+    ) -> Bool {
+        guard library.archive(episode, modelContext: modelContext) else {
+            return false
+        }
+        _ = upNextQueue.remove(episodeID: episode.episodeID, modelContext: modelContext)
+        return true
+    }
+
+    @discardableResult
+    func unarchiveEpisode(
+        _ episode: EpisodeListItemSnapshot,
+        modelContext: ModelContext
+    ) -> Bool {
+        library.unarchive(episode, modelContext: modelContext)
+    }
+
+    /// What Archive All would archive of these rows: those not already
+    /// archived, the current episode included.
+    func archivableEpisodes(_ episodes: [EpisodeListItemSnapshot]) -> [EpisodeListItemSnapshot] {
+        let archivedEpisodeIDs = library.archivedEpisodeIDs
+        return episodes.filter { !archivedEpisodeIDs.contains($0.episodeID) }
+    }
+
+    /// What Unarchive All would return to the Inbox of these rows: the
+    /// archived ones.
+    func unarchivableEpisodes(_ episodes: [EpisodeListItemSnapshot]) -> [EpisodeListItemSnapshot] {
+        let archivedEpisodeIDs = library.archivedEpisodeIDs
+        return episodes.filter { archivedEpisodeIDs.contains($0.episodeID) }
+    }
+
+    /// Archive All: archives `archivableEpisodes(episodes)` in one save and
+    /// takes them out of Up Next. Returns false when nothing was archived.
+    @discardableResult
+    func archiveEpisodes(
+        _ episodes: [EpisodeListItemSnapshot],
+        modelContext: ModelContext
+    ) -> Bool {
+        let archivable = archivableEpisodes(episodes)
+        guard !archivable.isEmpty,
+              library.archive(archivable, modelContext: modelContext)
+        else {
+            return false
+        }
+        _ = upNextQueue.remove(episodeIDs: Set(archivable.map(\.episodeID)), modelContext: modelContext)
+        return true
+    }
+
+    /// Unarchive All: returns `unarchivableEpisodes(episodes)` to the Inbox
+    /// in one save. Up Next is left alone, as a single Unarchive leaves it.
+    /// Returns false when nothing was unarchived.
+    @discardableResult
+    func unarchiveEpisodes(
+        _ episodes: [EpisodeListItemSnapshot],
+        modelContext: ModelContext
+    ) -> Bool {
+        let unarchivable = unarchivableEpisodes(episodes)
+        return !unarchivable.isEmpty && library.unarchive(unarchivable, modelContext: modelContext)
+    }
+
     /// Reapplies the playback settings to the loaded episode, its show's own
     /// speed included.
     func refreshCurrentPlaybackSettings(modelContext: ModelContext) {

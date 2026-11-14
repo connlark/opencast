@@ -1404,6 +1404,91 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededInboxSwipeArchivesEpisodeOutOfInbox() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        openInbox(in: app)
+        let inboxEpisode = seededEpisodeRow(in: app)
+        tapTrailingSwipeAction("Archive", on: inboxEpisode, named: "seeded inbox episode", in: app)
+        assertDoesNotExist(inboxEpisode, named: "archived episode in the Inbox", timeout: 5)
+        // The seed's one episode is archived, so the Inbox says why it is empty.
+        assertExists(
+            app.staticTexts["Every episode in your Inbox is archived."],
+            named: "Inbox filtered-empty copy after archiving its only episode"
+        )
+        attachSmokeScreenshot(named: "inbox_archived_empty")
+
+        // The show still lists the episode, and every surface offers the way back.
+        openLibrary(in: app)
+        let libraryPodcast = seededSubscriptionRow(in: app)
+        assertExists(libraryPodcast, named: "seeded library podcast")
+        libraryPodcast.tap()
+        let podcastEpisode = seededEpisodeRow(in: app)
+        assertHittable(podcastEpisode, named: "archived episode on the show page")
+        podcastEpisode.press(forDuration: 1.2)
+        assertExists(app.buttons["Unarchive"], named: "show page row Unarchive context action")
+        assertDoesNotExist(app.buttons["Archive"], named: "show page row Archive context action", timeout: 1)
+        let detailsAction = app.buttons["View Episode Details"]
+        assertHittable(detailsAction, named: "show page row details context action")
+        detailsAction.tap()
+
+        // Archiving wrote a row with no listening: Unarchive, not Clear
+        // Progress, takes the episode back. The menu archives it again.
+        let episodeActions = app.buttons["Episode Actions"]
+        assertHittable(episodeActions, named: "Episode Actions menu")
+        episodeActions.tap()
+        let menuUnarchive = app.buttons["Unarchive"]
+        assertHittable(menuUnarchive, named: "Episode Actions Unarchive")
+        assertDoesNotExist(app.buttons["Clear Progress"], named: "Clear Progress for an archive-only row", timeout: 1)
+        menuUnarchive.tap()
+        assertHittable(episodeActions, named: "Episode Actions menu after Unarchive")
+        episodeActions.tap()
+        let menuArchive = app.buttons["Archive"]
+        assertHittable(menuArchive, named: "Episode Actions Archive after Unarchive")
+        menuArchive.tap()
+        tapBackButton(in: app)
+
+        tapTrailingSwipeAction("Unarchive", on: podcastEpisode, named: "archived episode on the show page", in: app)
+        openInbox(in: app)
+        assertExists(seededEpisodeRow(in: app), named: "unarchived episode back in the Inbox")
+    }
+
+    /// A swipe action draws a disabled button like an enabled one, so the
+    /// episode in the player gets a working Archive and no Play Next.
+    @MainActor
+    func testSeededInboxSwipeArchivesThePlayingEpisode() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        openInbox(in: app)
+        let inboxEpisode = seededEpisodeRow(in: app)
+        assertHittable(inboxEpisode, named: "seeded inbox episode")
+        inboxEpisode.tap()
+        assertNowPlayingOverlay(in: app)
+        dismissNowPlayingOverlay(in: app)
+        let miniPlayer = app.buttons["Open Now Playing"]
+        let nowPlayingValue = "Deterministic UI Episode, UI Test Show"
+        XCTAssertEqual(miniPlayer.value as? String, nowPlayingValue)
+
+        tapTrailingSwipeAction(
+            "Archive",
+            on: inboxEpisode,
+            named: "playing inbox episode",
+            in: app,
+            absentActions: ["Play Next"],
+            screenshotName: "inbox_playing_episode_swipe"
+        )
+        assertDoesNotExist(inboxEpisode, named: "archived playing episode in the Inbox", timeout: 5)
+        assertExists(
+            app.staticTexts["Every episode in your Inbox is archived."],
+            named: "Inbox filtered-empty copy after archiving the playing episode"
+        )
+        assertExists(miniPlayer, named: "mini-player after archiving its episode")
+        XCTAssertEqual(miniPlayer.value as? String, nowPlayingValue)
+    }
+
+    @MainActor
     func testSeededPodcastEpisodeContextMenuPeekOpensEpisodeDetail() throws {
         let app = makeSeededApp()
         app.launch()
@@ -2067,15 +2152,17 @@ final class OpenCastUITests: XCTestCase {
         let showAllButton = app.buttons["Show All Episodes"]
         assertHittable(showAllButton, named: "Show All Episodes button")
         showAllButton.tap()
+        // Show All Episodes resets the filter and leaves the Inbox the Inbox.
         assertExists(
             inboxFilterMenu(showing: "All Episodes", in: app),
             named: "Inbox filter menu after Show All Episodes"
         )
         assertDoesNotExist(
             inboxSubtitle("Downloaded", in: app),
-            named: "Inbox subtitle after Show All Episodes",
+            named: "Downloaded subtitle after Show All Episodes",
             timeout: 5
         )
+        assertDoesNotExist(inboxSubtitle("Archived", in: app), named: "Archived subtitle after Show All Episodes")
         assertExists(inProgressRow, named: "in-progress row after Show All Episodes")
         assertExists(completedRow, named: "completed row after Show All Episodes")
         assertDoesNotExist(filteredEmpty, named: "filtered-empty view after Show All Episodes")
@@ -2205,6 +2292,400 @@ final class OpenCastUITests: XCTestCase {
         assertDoesNotExist(grid, named: "grouped Inbox grid after ungrouping", timeout: 5)
         assertDoesNotExist(inboxLayoutMenu(in: app), named: "Inbox layout menu after ungrouping")
         assertExists(episodeRow, named: "Inbox episode row after ungrouping")
+    }
+
+    /// Show Archived is the archive view: only archived episodes, the way a
+    /// mailbox's archive is its own folder.
+    @MainActor
+    func testSeededInboxShowArchivedListsOnlyArchivedRowsAndUnarchiveReturnsThem() throws {
+        let app = makeSeededApp(seedsUpNextQueue: true)
+        app.launch()
+
+        openInbox(in: app)
+        let archivedRow = seededEpisodeRow(in: app)
+        let queuedRow = app.buttons.matching(identifier: Self.seededQueuedEpisodeRowIdentifiers[0]).firstMatch
+        tapTrailingSwipeAction("Archive", on: archivedRow, named: "seeded inbox episode", in: app)
+        assertDoesNotExist(archivedRow, named: "archived row in the Inbox", timeout: 5)
+        assertExists(queuedRow, named: "unarchived row in the Inbox")
+        assertExists(inboxFilterMenu(showing: "All Episodes", in: app), named: "Inbox filter menu after archiving")
+
+        toggleInboxMenuItem("Show Archived", in: app)
+        assertExists(archivedRow, named: "archived row in the archive view")
+        assertDoesNotExist(queuedRow, named: "unarchived row in the archive view", timeout: 5)
+        assertExists(inboxFilterMenu(showing: "Archived", in: app), named: "Inbox filter menu in the archive view")
+        assertExists(inboxSubtitle("Archived", in: app), named: "Inbox subtitle in the archive view")
+        attachSmokeScreenshot(named: "inbox_archive_view_one_row")
+
+        // Unarchiving a row takes it out of the archive view.
+        tapTrailingSwipeAction("Unarchive", on: archivedRow, named: "archive view row", in: app)
+        assertDoesNotExist(archivedRow, named: "unarchived row in the archive view", timeout: 5)
+        let archiveEmpty = app.descendants(matching: .any).matching(identifier: "Inbox Archive Empty").firstMatch
+        assertExists(archiveEmpty, named: "empty archive view")
+        assertExists(app.staticTexts["No Archived Episodes"], named: "empty archive title")
+        assertExists(
+            app.staticTexts["Episodes you archive from the Inbox are kept here."],
+            named: "empty archive copy"
+        )
+        attachSmokeScreenshot(named: "inbox_archive_view_empty")
+
+        let showInbox = app.buttons["Show Inbox"]
+        assertHittable(showInbox, named: "Show Inbox button")
+        showInbox.tap()
+        assertExists(inboxFilterMenu(showing: "All Episodes", in: app), named: "Inbox filter menu after Show Inbox")
+        assertDoesNotExist(inboxSubtitle("Archived", in: app), named: "Inbox subtitle after Show Inbox", timeout: 5)
+        assertExists(archivedRow, named: "unarchived row back in the Inbox")
+        assertExists(queuedRow, named: "queued row in the Inbox after Show Inbox")
+    }
+
+    @MainActor
+    func testSeededInboxGroupByPodcastArchivesAllThenUnarchivesAllFromTheArchive() throws {
+        let app = makeSeededApp(seedsUpNextQueue: true)
+        app.launch()
+
+        openInbox(in: app)
+        let mainShow = inboxPodcastGroup(Self.seededFeedURL, in: app)
+        toggleInboxMenuItem("Group by Podcast", in: app)
+        assertValue(of: mainShow, becomes: "4 episodes", named: "UI Test Show group before archiving")
+
+        // Archiving on the show a group opens takes the row off that list too.
+        mainShow.tap()
+        assertExists(
+            app.descendants(matching: .any)["Podcast Hero Header"],
+            named: "podcast detail opened from an Inbox group"
+        )
+        // The hero header's identifier replaces its children's, so the
+        // caption is found by label.
+        let archivedHidden = app.buttons["Archived episodes are hidden, Show"]
+        assertDoesNotExist(archivedHidden, named: "archived caption before archiving", timeout: 1)
+        let showEpisode = seededEpisodeRow(in: app)
+        tapTrailingSwipeAction("Archive", on: showEpisode, named: "group show episode", in: app)
+        assertDoesNotExist(showEpisode, named: "archived row on the group's show", timeout: 5)
+        assertExists(archivedHidden, named: "archived caption after archiving")
+
+        tapBackButton(in: app)
+        assertValue(of: mainShow, becomes: "3 episodes", named: "UI Test Show group after archiving")
+        mainShow.tap()
+        assertHittable(archivedHidden, named: "archived caption on the second visit")
+        assertDoesNotExist(showEpisode, named: "archived row on the second visit", timeout: 1)
+        attachSmokeScreenshot(named: "inbox_group_podcast_detail_archived")
+        archivedHidden.tap()
+        assertExists(showEpisode, named: "archived row after Show")
+        assertDoesNotExist(archivedHidden, named: "archived caption after Show", timeout: 5)
+
+        tapBackButton(in: app)
+        assertExists(mainShow, named: "UI Test Show group after Back")
+        mainShow.press(forDuration: 1.2)
+        let archiveAll = app.buttons["Archive All"]
+        assertHittable(archiveAll, named: "group Archive All context action")
+        archiveAll.tap()
+        assertExists(app.staticTexts["Archive these episodes?"], named: "Archive All confirmation title")
+        assertExists(
+            app.staticTexts["3 episodes of UI Test Show will leave the Inbox. Listening progress is unchanged."],
+            named: "Archive All confirmation message"
+        )
+        attachSmokeScreenshot(named: "inbox_group_archive_all_confirmation")
+        let confirmArchiveAll = app.buttons["Archive All"].firstMatch
+        assertHittable(confirmArchiveAll, named: "Archive All confirmation action")
+        confirmArchiveAll.tap()
+
+        let filteredEmpty = app.descendants(matching: .any).matching(identifier: "Inbox Filtered Empty").firstMatch
+        assertExists(filteredEmpty, named: "Inbox filtered-empty view after Archive All")
+        assertExists(
+            app.staticTexts["Every episode in your Inbox is archived."],
+            named: "Inbox filtered-empty copy after Archive All"
+        )
+        assertDoesNotExist(mainShow, named: "UI Test Show group after Archive All", timeout: 5)
+        // Only the archive hides anything, so its view is the one way back.
+        let showArchived = app.buttons["Show Archived"]
+        assertHittable(showArchived, named: "Show Archived button")
+        assertDoesNotExist(app.buttons["Show All Episodes"], named: "Show All Episodes button", timeout: 1)
+        attachSmokeScreenshot(named: "inbox_archived_filtered_empty")
+
+        // The archive view groups the archived episodes.
+        showArchived.tap()
+        assertValue(of: mainShow, becomes: "4 episodes", named: "UI Test Show group in the archive view")
+        assertExists(inboxSubtitle("Archived", in: app), named: "Inbox subtitle in the archive view")
+
+        // The show it opens lists only archived episodes: one unarchived
+        // there leaves the list, and the caption says why.
+        mainShow.tap()
+        assertExists(
+            app.descendants(matching: .any)["Podcast Hero Header"],
+            named: "podcast detail opened from an archive view group"
+        )
+        let onlyArchived = app.buttons["Only archived episodes are shown, Show"]
+        assertDoesNotExist(onlyArchived, named: "archive caption while every episode is archived", timeout: 1)
+        tapTrailingSwipeAction("Unarchive", on: showEpisode, named: "archive view group show episode", in: app)
+        assertDoesNotExist(showEpisode, named: "unarchived row on the archive view's show", timeout: 5)
+        assertHittable(onlyArchived, named: "archive caption after unarchiving")
+        attachSmokeScreenshot(named: "inbox_archive_group_podcast_detail")
+        onlyArchived.tap()
+        assertExists(showEpisode, named: "unarchived row after Show")
+        assertDoesNotExist(onlyArchived, named: "archive caption after Show", timeout: 5)
+
+        tapBackButton(in: app)
+        assertValue(of: mainShow, becomes: "3 episodes", named: "UI Test Show group in the archive view after unarchiving")
+        mainShow.press(forDuration: 1.2)
+        let unarchiveAll = app.buttons["Unarchive All"]
+        assertHittable(unarchiveAll, named: "group Unarchive All context action")
+        assertDoesNotExist(app.buttons["Archive All"], named: "group Archive All in the archive view", timeout: 1)
+        unarchiveAll.tap()
+        assertExists(app.staticTexts["Unarchive these episodes?"], named: "Unarchive All confirmation title")
+        assertExists(
+            app.staticTexts["3 episodes of UI Test Show will return to the Inbox."],
+            named: "Unarchive All confirmation message"
+        )
+        attachSmokeScreenshot(named: "inbox_group_unarchive_all_confirmation")
+        let confirmUnarchiveAll = app.buttons["Unarchive All"].firstMatch
+        assertHittable(confirmUnarchiveAll, named: "Unarchive All confirmation action")
+        confirmUnarchiveAll.tap()
+
+        assertExists(app.staticTexts["No Archived Episodes"], named: "empty archive view after Unarchive All")
+        assertDoesNotExist(mainShow, named: "UI Test Show group in the archive view after Unarchive All", timeout: 5)
+        let showInbox = app.buttons["Show Inbox"]
+        assertHittable(showInbox, named: "Show Inbox button")
+        showInbox.tap()
+        assertValue(of: mainShow, becomes: "4 episodes", named: "UI Test Show group back in the Inbox")
+        assertDoesNotExist(inboxSubtitle("Archived", in: app), named: "Inbox subtitle after Show Inbox", timeout: 5)
+    }
+
+    /// The filtered-empty state offers Show All Episodes and Show Archived
+    /// together while a filter and the archive both hide rows. The card's
+    /// blank space does nothing, and each button does only its own job.
+    @MainActor
+    func testSeededInboxFilteredEmptyButtonsDoOnlyTheirOwnJob() throws {
+        let app = makeSeededApp(seedsEpisodeProgress: true)
+        app.launch()
+
+        openInbox(in: app)
+        let inProgressRow = seededEpisodeRow(in: app)
+        let completedRow = app.buttons.matching(identifier: Self.seededCompletedEpisodeRowIdentifier).firstMatch
+        let card = emptyStateCell(containingIdentifier: "Inbox Filtered Empty", in: app)
+        let showAll = app.buttons["Show All Episodes"]
+        let showArchived = app.buttons["Show Archived"]
+
+        // Played lists the seed's one played episode; archiving it leaves
+        // nothing under Played.
+        chooseInboxFilter("Played", in: app)
+        tapTrailingSwipeAction("Archive", on: completedRow, named: "played inbox row", in: app)
+        assertDoesNotExist(completedRow, named: "archived played row under Played", timeout: 5)
+        assertPlayedFilteredEmptyOffersBothButtons(card, showAll, showArchived, in: app)
+        attachSmokeScreenshot(named: "inbox_filtered_empty_two_buttons")
+
+        card.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.5)).tap()
+        XCTAssertFalse(
+            inboxFilterMenu(showing: "Archived", in: app).waitForExistence(timeout: 3),
+            "A tap on the card's blank space should not open the archive view"
+        )
+        assertPlayedFilteredEmptyOffersBothButtons(card, showAll, showArchived, in: app)
+
+        // Each button is tapped near the edge it shares with the other.
+        showAll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).tap()
+        assertExists(
+            inboxFilterMenu(showing: "All Episodes", in: app),
+            named: "Inbox filter menu after Show All Episodes"
+        )
+        assertDoesNotExist(inboxSubtitle("Archived", in: app), named: "archive view after Show All Episodes", timeout: 5)
+        assertExists(inProgressRow, named: "in-progress row in the Inbox view after Show All Episodes")
+        assertDoesNotExist(completedRow, named: "archived row in the Inbox view after Show All Episodes")
+
+        chooseInboxFilter("Played", in: app)
+        assertPlayedFilteredEmptyOffersBothButtons(card, showAll, showArchived, in: app)
+        showArchived.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
+        assertExists(
+            inboxFilterMenu(showing: "Archived, Played", in: app),
+            named: "Inbox filter menu after Show Archived"
+        )
+        assertExists(inboxSubtitle("Archived · Played", in: app), named: "archive view subtitle under Played")
+        assertExists(completedRow, named: "archived played row in the archive view")
+    }
+
+    /// A tap in the Inbox's filtered-empty card beside its one button does
+    /// nothing, and the button still works.
+    @MainActor
+    func testSeededInboxFilteredEmptyShowAllIgnoresTapsBesideIt() throws {
+        let app = makeSeededApp(seedsEpisodeProgress: true)
+        app.launch()
+
+        openInbox(in: app)
+        chooseInboxFilter("Downloaded", in: app)
+        let card = emptyStateCell(containingIdentifier: "Inbox Filtered Empty", in: app)
+        assertExists(card, named: "Inbox filtered-empty view under Downloaded")
+        assertDoesNotExist(app.buttons["Show Archived"], named: "Show Archived with nothing archived")
+        card.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.5)).tap()
+        XCTAssertFalse(
+            inboxFilterMenu(showing: "All Episodes", in: app).waitForExistence(timeout: 3),
+            "A tap beside Show All Episodes should not reset the Inbox filter"
+        )
+        assertExists(inboxFilterMenu(showing: "Downloaded", in: app), named: "Inbox filter menu after a tap beside the button")
+        let showAll = app.buttons["Show All Episodes"]
+        assertTapTarget(showAll, named: "Show All Episodes button")
+        showAll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
+        assertExists(inboxFilterMenu(showing: "All Episodes", in: app), named: "Inbox filter menu after Show All Episodes")
+    }
+
+    /// A tap in the empty archive view's card beside Show Inbox does
+    /// nothing, and the button still works.
+    @MainActor
+    func testSeededInboxArchiveEmptyShowInboxIgnoresTapsBesideIt() throws {
+        let app = makeSeededApp(seedsEpisodeProgress: true)
+        app.launch()
+
+        openInbox(in: app)
+        toggleInboxMenuItem("Show Archived", in: app)
+        let card = emptyStateCell(containingIdentifier: "Inbox Archive Empty", in: app)
+        assertExists(card, named: "empty archive view")
+        card.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.5)).tap()
+        XCTAssertFalse(
+            inboxFilterMenu(showing: "All Episodes", in: app).waitForExistence(timeout: 3),
+            "A tap beside Show Inbox should not leave the archive view"
+        )
+        assertExists(inboxFilterMenu(showing: "Archived", in: app), named: "archive view after a tap beside the button")
+        let showInbox = app.buttons["Show Inbox"]
+        assertTapTarget(showInbox, named: "Show Inbox button")
+        showInbox.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
+        assertExists(inboxFilterMenu(showing: "All Episodes", in: app), named: "Inbox view after Show Inbox")
+    }
+
+    /// A tap in the show page's filtered-empty card beside its one button
+    /// does nothing, and the button still works.
+    @MainActor
+    func testSeededPodcastFilteredEmptyShowAllIgnoresTapsBesideIt() throws {
+        let app = makeSeededApp(seedsEpisodeProgress: true)
+        app.launch()
+
+        openLibrary(in: app)
+        let libraryPodcast = seededSubscriptionRow(in: app)
+        assertExists(libraryPodcast, named: "seeded library podcast")
+        libraryPodcast.tap()
+        let filterAll = app.buttons["Filter Episodes, All Episodes"]
+        assertHittable(filterAll, named: "show filter under All Episodes")
+        filterAll.tap()
+        let downloadedOption = app.buttons.matching(NSPredicate(format: "label == %@", "Downloaded")).firstMatch
+        assertHittable(downloadedOption, named: "show Downloaded filter option")
+        downloadedOption.tap()
+        let card = app.cells.containing(NSPredicate(format: "label == %@", "No Downloaded Episodes")).firstMatch
+        assertExists(card, named: "show filtered-empty view under Downloaded")
+        // The card starts low on the page, under the mini player and tab bar.
+        let coverTop = [app.buttons["Open Now Playing"], app.tabBars.firstMatch]
+            .filter(\.exists)
+            .map(\.frame.minY)
+            .min() ?? app.frame.maxY
+        for _ in 0..<3 where card.frame.maxY > coverTop - 12 {
+            app.swipeUp()
+        }
+        XCTAssertLessThan(card.frame.maxY, coverTop, "The show's filtered-empty card should clear the mini player")
+        card.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.5)).tap()
+        XCTAssertFalse(
+            filterAll.waitForExistence(timeout: 3),
+            "A tap beside the show's Show All Episodes should not reset its filter"
+        )
+        assertExists(app.buttons["Filter Episodes, Downloaded"], named: "show filter after a tap beside the button")
+        let showAll = app.buttons["Show All Episodes"]
+        assertTapTarget(showAll, named: "show Show All Episodes button")
+        showAll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
+        assertExists(filterAll, named: "show filter after Show All Episodes")
+    }
+
+    /// The show's incomplete-feed notice puts Retry and Details in the
+    /// hero's List row. A tap beside them does nothing, Retry does not open
+    /// the details, and Details opens them.
+    @MainActor
+    func testSeededIncompleteFeedNoticeButtonsDoOnlyTheirOwnJob() throws {
+        let app = makeSeededApp()
+        app.launchEnvironment["OPENCAST_UI_TEST_REFRESH_SEED_FEED"] = "partial"
+        app.launch()
+
+        openLibrary(in: app)
+        let libraryPodcast = seededSubscriptionRow(in: app)
+        assertExists(libraryPodcast, named: "seeded library podcast")
+        libraryPodcast.tap()
+        let podcastActions = app.buttons["Podcast Actions"]
+        assertHittable(podcastActions, named: "podcast actions menu")
+        podcastActions.tap()
+        let refresh = app.buttons["Refresh"].firstMatch
+        assertHittable(refresh, named: "feed refresh action")
+        refresh.tap()
+
+        // The hero's identifier covers the notice's own, so the notice is
+        // found by its text and buttons.
+        let message = app.staticTexts["Some episodes couldn’t be loaded. Available episodes are ready to play."]
+        assertExists(message, named: "incomplete feed notice after a partial refresh", timeout: 20)
+        let retry = app.buttons["Retry"]
+        let details = app.buttons["Details"]
+        let alert = app.alerts["Feed Loading Details"]
+        assertHittable(details, named: "Details button")
+        XCTAssertTrue(waitUntil { retry.isEnabled }, "Retry should be enabled once the refresh ends")
+
+        message.tap()
+        XCTAssertFalse(alert.waitForExistence(timeout: 3), "A tap on the notice's text should not open the details")
+        let besideDetails = app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: message.frame.maxX - 8, dy: details.frame.midY))
+        besideDetails.tap()
+        XCTAssertFalse(alert.waitForExistence(timeout: 3), "A tap beside Details should not open the details")
+
+        retry.tap()
+        XCTAssertFalse(alert.waitForExistence(timeout: 3), "Retry should not open the details")
+        XCTAssertTrue(waitUntil(timeout: 20) { retry.isEnabled }, "Retry should be enabled once its refresh ends")
+        assertExists(message, named: "incomplete feed notice after Retry")
+
+        assertTapTarget(retry, named: "Retry button")
+        assertTapTarget(details, named: "Details button")
+        XCTAssertLessThanOrEqual(retry.frame.maxX, details.frame.minX, "Retry's and Details' targets should not overlap")
+        details.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)).tap()
+        assertExists(alert, named: "feed loading details alert")
+        assertExists(
+            alert.staticTexts["Part of the feed could not be parsed: Incomplete feed."],
+            named: "the salvaged feed's diagnostic"
+        )
+        alert.buttons["OK"].tap()
+        assertDoesNotExist(alert, named: "feed loading details alert after OK", timeout: 5)
+    }
+
+    /// The List cell that holds an empty state, for taps on its blank space.
+    @MainActor
+    private func emptyStateCell(containingIdentifier identifier: String, in app: XCUIApplication) -> XCUIElement {
+        app.cells.containing(.any, identifier: identifier).firstMatch
+    }
+
+    /// A borderless button in a List row carries a 44 pt target of its own.
+    @MainActor
+    private func assertTapTarget(
+        _ button: XCUIElement,
+        named name: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        assertHittable(button, named: name, file: file, line: line)
+        XCTAssertGreaterThanOrEqual(
+            button.frame.height,
+            44,
+            "\(name) should be a 44 pt target, got \(button.frame.height) pt",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
+    private func assertPlayedFilteredEmptyOffersBothButtons(
+        _ card: XCUIElement,
+        _ showAll: XCUIElement,
+        _ showArchived: XCUIElement,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        assertExists(card, named: "Inbox filtered-empty view under Played", file: file, line: line)
+        assertExists(inboxFilterMenu(showing: "Played", in: app), named: "Inbox filter menu under Played", file: file, line: line)
+        assertTapTarget(showAll, named: "Show All Episodes button", file: file, line: line)
+        assertTapTarget(showArchived, named: "Show Archived button", file: file, line: line)
+        XCTAssertLessThanOrEqual(
+            showAll.frame.maxY,
+            showArchived.frame.minY,
+            "The two buttons' targets should not overlap",
+            file: file,
+            line: line
+        )
     }
 
     @MainActor
@@ -4419,6 +4900,39 @@ final class OpenCastUITests: XCTestCase {
         assertHittable(groupByShow, named: "Group by Show toggle to turn off")
         groupByShow.tap()
         assertDoesNotExist(section, named: "show section after turning grouping off", timeout: 5)
+    }
+
+    /// The Downloads empty state is a List row: taps on its blank space and
+    /// its text stay on Downloads, and its Download Settings button opens the
+    /// settings.
+    @MainActor
+    func testSeededDownloadsEmptyStateOpensSettingsOnlyFromItsButton() throws {
+        let app = makeSeededApp()
+        app.launch()
+
+        openSection("Downloads", in: app)
+        assertScreen("Downloads", named: "Downloads navigation bar", in: app)
+        let card = app.cells.containing(NSPredicate(format: "label == %@", "No Downloads")).firstMatch
+        assertExists(card, named: "Downloads empty state")
+        let settingsButton = card.buttons["Download Settings"]
+        assertHittable(settingsButton, named: "empty state's Download Settings button")
+
+        card.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.5)).tap()
+        XCTAssertFalse(
+            waitForScreen("Download Settings", in: app, timeout: 3),
+            "A tap on the empty state's blank space should not open Download Settings"
+        )
+        app.staticTexts["No Downloads"].tap()
+        XCTAssertFalse(
+            waitForScreen("Download Settings", in: app, timeout: 3),
+            "A tap on the empty state's title should not open Download Settings"
+        )
+
+        settingsButton.tap()
+        assertScreen("Download Settings", named: "Download Settings from the empty state", in: app)
+        tapBackButton(in: app)
+        assertScreen("Downloads", named: "Downloads after Download Settings", in: app)
+        assertExists(card, named: "Downloads empty state after Download Settings")
     }
 
     @MainActor
@@ -7124,6 +7638,33 @@ final class OpenCastUITests: XCTestCase {
         walkSeededPlaylistsFromLibrary(in: app, screenshotSuffix: "")
     }
 
+    /// In the Library list the Playlists and Up Next rows share one list
+    /// row. A tap anywhere on Playlists, its lower edge beside Up Next
+    /// included, opens Playlists and never the Up Next sheet.
+    @MainActor
+    func testSeededLibraryListPlaylistsRowOpensPlaylistsNotUpNext() throws {
+        let app = makeSeededApp(seedsPlaylists: true)
+        app.launch()
+
+        openLibrary(in: app)
+        assertExists(libraryContainer("Library List", in: app), named: "Library list under Automatic")
+        let playlistsRow = libraryPlaylistsRow(in: app)
+        assertHittable(playlistsRow, named: "Library Playlists row")
+        let rowHeight = playlistsRow.frame.height
+        // Points above the row's bottom edge, which Up Next's row adjoins.
+        for pointsAboveBottom in [rowHeight / 2, 8, 3] {
+            let point = playlistsRow
+                .coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0))
+                .withOffset(CGVector(dx: 0, dy: rowHeight - pointsAboveBottom))
+            point.tap()
+            let tapName = "a tap \(Int(pointsAboveBottom)) points above the Playlists row's bottom"
+            assertScreen("Playlists", named: "Playlists after \(tapName)", in: app)
+            assertDoesNotExist(app.navigationBars["Up Next"], named: "Up Next sheet after \(tapName)")
+            tapBackButton(in: app)
+            assertScreen("Library", named: "Library after leaving Playlists", in: app)
+        }
+    }
+
     @MainActor
     func testSeededPlaylistCreateRenameReorderRemoveDelete() throws {
         let app = makeSeededApp(seedsPlaylists: true)
@@ -8924,6 +9465,49 @@ final class OpenCastUITests: XCTestCase {
         if !item.waitForNonExistence(timeout: 2) {
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).tap()
         }
+    }
+
+    /// Reveals an episode row's trailing swipe actions and taps the one
+    /// titled `title`, first checking that none of `absentActions` is
+    /// offered and attaching a screenshot of the revealed actions when named.
+    @MainActor
+    private func tapTrailingSwipeAction(
+        _ title: String,
+        on row: XCUIElement,
+        named name: String,
+        in app: XCUIApplication,
+        absentActions: [String] = [],
+        screenshotName: String? = nil,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        assertHittable(row, named: name, file: file, line: line)
+        // The Up Next accessory and the tab bar float over the list's
+        // bottom; a swipe that starts on the accessory opens the queue.
+        let accessory = app.descendants(matching: .any)["up-next-accessory-expanded"]
+        let tabBar = app.tabBars.firstMatch
+        for _ in 0..<3 {
+            let coverTops = [accessory, tabBar].filter(\.exists).map(\.frame.minY)
+            guard let coverTop = coverTops.min(), row.frame.maxY > coverTop - 12 else {
+                break
+            }
+            app.swipeUp()
+        }
+        row.swipeLeft()
+        let action = app.buttons[title]
+        assertHittable(action, named: "\(name) \(title) swipe action", file: file, line: line)
+        for absentAction in absentActions {
+            XCTAssertFalse(
+                app.buttons[absentAction].exists,
+                "\(name) should not offer \(absentAction) in its swipe actions",
+                file: file,
+                line: line
+            )
+        }
+        if let screenshotName {
+            attachSmokeScreenshot(named: screenshotName)
+        }
+        action.tap()
     }
 
     /// Picks a Library View Options entry, opening `submenu` first for the

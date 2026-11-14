@@ -27,7 +27,8 @@ struct EpisodeRowButton: View {
             EpisodeRowContextMenuModifier(
                 episode: episode,
                 showsGoToShow: showsGoToShow,
-                onViewDetails: viewEpisodeDetails
+                onViewDetails: viewEpisodeDetails,
+                showsArchiveAction: true
             )
         )
         .sensoryFeedback(.impact(flexibility: .soft), trigger: playFeedback)

@@ -15,6 +15,7 @@ struct LibraryView: View {
     @State private var notesCount: Int?
 
     let onAdd: () -> Void
+    let onOpenPlaylists: () -> Void
     let onOpenUpNext: () -> Void
     let onOpenPlaylist: (String) -> Void
     let onOpenNotes: () -> Void
@@ -188,6 +189,7 @@ struct LibraryView: View {
             playlistCount: appModel.playlists.playlists.count,
             upNextCount: appModel.upNextQueue.items.count,
             notesCount: notesCount,
+            onOpenPlaylists: onOpenPlaylists,
             onOpenUpNext: onOpenUpNext,
             onOpenNotes: onOpenNotes
         )

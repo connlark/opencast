@@ -6,6 +6,10 @@ nonisolated struct OpenCastUITestSeedFeedRefreshService: FeedService {
     private static let podcastTitle = "UI Test Show"
     private static let episodeID = "ui-test-episode-1"
 
+    /// Answers as a parser that salvaged only part of the feed, so the show
+    /// page offers its incomplete-feed notice.
+    var salvagesFeed = false
+
     func fetchFeed(at url: URL) async throws -> FeedSnapshot {
         guard url.absoluteString == Self.feedURLString,
               let feedURL = URL(string: Self.feedURLString)
@@ -37,7 +41,8 @@ nonisolated struct OpenCastUITestSeedFeedRefreshService: FeedService {
                     guid: Self.episodeID
                 )
             ],
-            fetchedAt: Date(timeIntervalSince1970: 1_777_777_000)
+            fetchedAt: Date(timeIntervalSince1970: 1_777_777_000),
+            isSalvaged: salvagesFeed
         )
     }
 }

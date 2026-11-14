@@ -1037,6 +1037,17 @@ final class LibraryStore {
         progressWriter.latestRecord(for: episodeID)
     }
 
+    /// The episodes archived out of the Inbox, by each one's latest progress
+    /// row. Readers of Inbox membership observe this set, which moves on
+    /// archives, unarchives and refetches alike.
+    var archivedEpisodeIDs: Set<String> {
+        progressWriter.archivedEpisodeIDs
+    }
+
+    func isArchived(episodeID: String) -> Bool {
+        archivedEpisodeIDs.contains(episodeID)
+    }
+
     func progressSummary(for episode: EpisodeListItemSnapshot) -> EpisodeProgressSummary {
         guard let progress = progressRecord(for: episode.episodeID) else {
             return EpisodeProgressSummary(
@@ -1227,6 +1238,58 @@ final class LibraryStore {
                 podcastID: episode.podcastID,
                 modelContext: modelContext
             )
+        } catch {
+            recordFailure(error)
+            return false
+        }
+    }
+
+    /// Returns false when the episode was already archived or the save
+    /// failed; a failure is recorded like any progress write's.
+    @discardableResult
+    func archive(_ episode: EpisodeListItemSnapshot, modelContext: ModelContext) -> Bool {
+        setArchived(true, episodes: [episode], modelContext: modelContext)
+    }
+
+    /// Archives the episodes in one save per show; returns false when every
+    /// one was already archived or a save failed.
+    @discardableResult
+    func archive(_ episodes: [EpisodeListItemSnapshot], modelContext: ModelContext) -> Bool {
+        setArchived(true, episodes: episodes, modelContext: modelContext)
+    }
+
+    /// Returns false when the episode was not archived or the save failed.
+    @discardableResult
+    func unarchive(_ episode: EpisodeListItemSnapshot, modelContext: ModelContext) -> Bool {
+        setArchived(false, episodes: [episode], modelContext: modelContext)
+    }
+
+    /// Unarchives the episodes in one save per show; returns false when none
+    /// was archived or a save failed.
+    @discardableResult
+    func unarchive(_ episodes: [EpisodeListItemSnapshot], modelContext: ModelContext) -> Bool {
+        setArchived(false, episodes: episodes, modelContext: modelContext)
+    }
+
+    private func setArchived(
+        _ isArchived: Bool,
+        episodes: [EpisodeListItemSnapshot],
+        modelContext: ModelContext
+    ) -> Bool {
+        let episodeIDsByPodcastID = Dictionary(grouping: episodes, by: \.podcastID)
+            .mapValues { Set($0.map(\.episodeID)) }
+        var didChange = false
+        do {
+            for podcastID in episodeIDsByPodcastID.keys.sorted() {
+                let changed = try progressWriter.setArchived(
+                    isArchived,
+                    episodeIDs: episodeIDsByPodcastID[podcastID] ?? [],
+                    podcastID: podcastID,
+                    modelContext: modelContext
+                )
+                didChange = changed || didChange
+            }
+            return didChange
         } catch {
             recordFailure(error)
             return false

@@ -24,6 +24,7 @@ struct InboxView: View {
         let inboxEpisodes = appModel.library.inboxEpisodes
         let filter = appModel.inboxEpisodeListSettings.filter
         let hidesQueuedEpisodes = appModel.inboxEpisodeListSettings.hidesQueuedEpisodes
+        let showsArchivedEpisodes = appModel.inboxEpisodeListSettings.showsArchivedEpisodes
         let groupsByPodcast = appModel.inboxEpisodeListSettings.groupsByPodcast
         // A group counts every matching episode of its show, so grouping
         // reads the whole filtered list instead of a page.
@@ -32,10 +33,12 @@ struct InboxView: View {
                 episodes: inboxEpisodes,
                 filter: filter,
                 hidesQueuedEpisodes: hidesQueuedEpisodes,
+                showsArchivedEpisodes: showsArchivedEpisodes,
                 library: appModel.library,
                 downloadRecords: appModel.downloads.records,
                 queuedEpisodeIDs: Set(appModel.upNextQueue.items.map(\.episodeID)),
                 playingEpisodeID: appModel.playback.currentEpisode?.id.rawValue,
+                archivedEpisodeIDs: appModel.library.archivedEpisodeIDs,
                 visibleEpisodeCount: groupsByPodcast ? nil : visibleEpisodeCount
             )
             : InboxEpisodeListModel(episodes: [], totalEpisodeCount: 0, hasMore: false)
@@ -55,6 +58,7 @@ struct InboxView: View {
             hasInboxEpisodes: !inboxEpisodes.isEmpty,
             filter: filter,
             hidesQueuedEpisodes: hidesQueuedEpisodes,
+            showsArchivedEpisodes: showsArchivedEpisodes,
             groups: groups,
             visibleEpisodes: visibleEpisodes,
             layout: layout
@@ -104,6 +108,7 @@ struct InboxView: View {
         hasInboxEpisodes: Bool,
         filter: PodcastEpisodeFilter,
         hidesQueuedEpisodes: Bool,
+        showsArchivedEpisodes: Bool,
         groups: [InboxPodcastGroup]?,
         visibleEpisodes: [EpisodeListItemSnapshot],
         layout: LibraryLayout
@@ -125,17 +130,29 @@ struct InboxView: View {
                 )
             }
         } else if model.isFilteredEmpty {
+            let hiddenEpisodes = InboxFilteredEmptyStateView.hiddenEpisodes(
+                inboxEpisodes: appModel.library.inboxEpisodes,
+                hidesQueuedEpisodes: hidesQueuedEpisodes,
+                showsArchivedEpisodes: showsArchivedEpisodes,
+                archivedEpisodeIDs: appModel.library.archivedEpisodeIDs
+            )
             inboxList {
-                InboxFilteredEmptyStateView(
-                    filter: filter,
-                    hidesQueuedEpisodes: hidesQueuedEpisodes,
-                    onShowAll: showAllEpisodes
-                )
+                if showsArchivedEpisodes {
+                    InboxArchiveEmptyStateView(filter: filter, hiddenEpisodes: hiddenEpisodes, onShowInbox: showInbox)
+                } else {
+                    InboxFilteredEmptyStateView(
+                        filter: filter,
+                        hiddenEpisodes: hiddenEpisodes,
+                        onShowAll: showAllEpisodes,
+                        onShowArchived: showArchive
+                    )
+                }
             }
         } else if let groups {
             let episodeListOverride = PodcastEpisodeListOverride(
                 filter: filter,
-                hidesQueuedEpisodes: hidesQueuedEpisodes
+                hidesQueuedEpisodes: hidesQueuedEpisodes,
+                archiveScope: showsArchivedEpisodes ? .onlyArchived : .hidingArchived
             )
             if layout == .grid {
                 InboxPodcastGroupGrid(groups: groups, episodeListOverride: episodeListOverride) {
@@ -162,7 +179,7 @@ struct InboxView: View {
                         episode: episode,
                         onOpenEpisode: onOpenEpisode
                     )
-                    .modifier(PodcastEpisodeSwipeActionsModifier(episode: episode))
+                    .modifier(PodcastEpisodeSwipeActionsModifier(episode: episode, showsArchiveAction: true))
                     .twoPaneRootSelection(.episodeDetail(id: episode.episodeID))
                 }
                 EpisodeCatalogContinuation(hasMore: model.hasMore, visibleCount: $visibleEpisodeCount)
@@ -196,7 +213,15 @@ struct InboxView: View {
     }
 
     private func showAllEpisodes() {
-        appModel.inboxEpisodeListSettings.resetToDefaults(modelContext: modelContext)
+        appModel.inboxEpisodeListSettings.resetFilterAndHideUpNext(modelContext: modelContext)
+    }
+
+    private func showArchive() {
+        appModel.inboxEpisodeListSettings.setShowsArchivedEpisodes(true, modelContext: modelContext)
+    }
+
+    private func showInbox() {
+        appModel.inboxEpisodeListSettings.setShowsArchivedEpisodes(false, modelContext: modelContext)
     }
 }
 

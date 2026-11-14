@@ -11,6 +11,7 @@ struct InboxEpisodeListSettingsStoreTests {
     private let hidesQueuedKey = "inbox.hidesQueuedEpisodes"
     private let groupsByPodcastKey = "inbox.groupsByPodcast"
     private let groupedLayoutKey = "inbox.groupedLayout"
+    private let showsArchivedKey = "inbox.showsArchivedEpisodes"
 
     @Test("Preference keys stay stable")
     func preferenceKeysStayStable() {
@@ -18,9 +19,10 @@ struct InboxEpisodeListSettingsStoreTests {
         #expect(InboxEpisodeListSettingsStore.hidesQueuedEpisodesPreferenceKey == hidesQueuedKey)
         #expect(InboxEpisodeListSettingsStore.groupsByPodcastPreferenceKey == groupsByPodcastKey)
         #expect(InboxEpisodeListSettingsStore.groupedLayoutPreferenceKey == groupedLayoutKey)
+        #expect(InboxEpisodeListSettingsStore.showsArchivedEpisodesPreferenceKey == showsArchivedKey)
     }
 
-    @Test("Settings default to All Episodes with Up Next shown")
+    @Test("Settings default to All Episodes with Up Next shown and archived episodes hidden")
     func defaultsWithoutStoredRows() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let store = InboxEpisodeListSettingsStore()
@@ -29,6 +31,7 @@ struct InboxEpisodeListSettingsStoreTests {
 
         #expect(store.filter == .all)
         #expect(!store.hidesQueuedEpisodes)
+        #expect(!store.showsArchivedEpisodes)
         #expect(!store.groupsByPodcast)
         #expect(store.groupedLayout == .automatic)
         #expect(store.lastErrorMessage == nil)
@@ -60,7 +63,7 @@ struct InboxEpisodeListSettingsStoreTests {
 
         // Show All Episodes resets the filters and leaves the view choice alone.
         #expect(store.setFilter(.unplayed, modelContext: context))
-        #expect(store.resetToDefaults(modelContext: context))
+        #expect(store.resetFilterAndHideUpNext(modelContext: context))
         #expect(store.filter == .all)
         #expect(store.groupsByPodcast)
         #expect(reloadedStore(from: container).groupsByPodcast)
@@ -95,7 +98,9 @@ struct InboxEpisodeListSettingsStoreTests {
         #expect(!reloadedStore(from: container).hidesQueuedEpisodes)
     }
 
-    @Test("Active filter titles name only the settings that differ from their defaults")
+    /// The archive view names the view first; the filter and Hide Up Next
+    /// follow, naming what the view hides.
+    @Test("Active filter titles name only the settings that differ from their defaults, the archive view first")
     func activeFilterTitlesNameNonDefaultSettings() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
@@ -111,6 +116,56 @@ struct InboxEpisodeListSettingsStoreTests {
 
         store.setFilter(.all, modelContext: context)
         #expect(store.activeFilterTitles == ["Up Next hidden"])
+
+        store.setShowsArchivedEpisodes(true, modelContext: context)
+        #expect(store.activeFilterTitles == ["Archived", "Up Next hidden"])
+
+        store.setFilter(.unplayed, modelContext: context)
+        #expect(store.activeFilterTitles == ["Archived", "Unplayed", "Up Next hidden"])
+
+        store.setHidesQueuedEpisodes(false, modelContext: context)
+        #expect(store.activeFilterTitles == ["Archived", "Unplayed"])
+
+        store.setFilter(.all, modelContext: context)
+        #expect(store.activeFilterTitles == ["Archived"])
+    }
+
+    @Test("Show Archived persists, reloads, and updates its row")
+    func showArchivedPersistsAndReloads() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = InboxEpisodeListSettingsStore()
+        store.load(modelContext: context)
+
+        #expect(store.setShowsArchivedEpisodes(true, modelContext: context))
+
+        #expect(store.showsArchivedEpisodes)
+        #expect(store.lastErrorMessage == nil)
+        #expect(try storedValues(forKey: showsArchivedKey, in: container) == ["true"])
+        #expect(reloadedStore(from: container).showsArchivedEpisodes)
+
+        #expect(store.setShowsArchivedEpisodes(false, modelContext: context))
+        #expect(!store.showsArchivedEpisodes)
+        #expect(try storedValues(forKey: showsArchivedKey, in: container) == ["false"])
+        #expect(!reloadedStore(from: container).showsArchivedEpisodes)
+    }
+
+    @Test("A failed Show Archived save keeps the published value and reports")
+    func failedShowArchivedSaveKeepsPublishedValue() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let probe = InboxEpisodeListSettingsSaveProbe()
+        let store = InboxEpisodeListSettingsStore(save: probe.save)
+        store.load(modelContext: context)
+        probe.failsSaves = true
+
+        #expect(!store.setShowsArchivedEpisodes(true, modelContext: context))
+
+        #expect(!store.showsArchivedEpisodes)
+        #expect(store.lastErrorMessage?.hasPrefix("Unable to update Show Archived:") == true)
+        #expect(probe.pendingChangesAtCall == [true])
+        #expect(try storedValues(forKey: showsArchivedKey, in: container).isEmpty)
+        #expect(store.activeFilterTitles.isEmpty)
     }
 
     @Test("Unknown stored values load as defaults without rewriting storage")
@@ -121,6 +176,7 @@ struct InboxEpisodeListSettingsStoreTests {
         context.insert(LocalPreferenceRecord(key: hidesQueuedKey, value: "maybe"))
         context.insert(LocalPreferenceRecord(key: groupsByPodcastKey, value: "sometimes"))
         context.insert(LocalPreferenceRecord(key: groupedLayoutKey, value: "carousel"))
+        context.insert(LocalPreferenceRecord(key: showsArchivedKey, value: "perhaps"))
         try context.save()
         let probe = InboxEpisodeListSettingsSaveProbe()
         let store = InboxEpisodeListSettingsStore(save: probe.save)
@@ -131,12 +187,14 @@ struct InboxEpisodeListSettingsStoreTests {
         #expect(!store.hidesQueuedEpisodes)
         #expect(!store.groupsByPodcast)
         #expect(store.groupedLayout == .automatic)
+        #expect(!store.showsArchivedEpisodes)
         #expect(store.lastErrorMessage == nil)
         #expect(probe.callCount == 0)
         #expect(try storedValues(forKey: filterKey, in: container) == ["queued"])
         #expect(try storedValues(forKey: hidesQueuedKey, in: container) == ["maybe"])
         #expect(try storedValues(forKey: groupsByPodcastKey, in: container) == ["sometimes"])
         #expect(try storedValues(forKey: groupedLayoutKey, in: container) == ["carousel"])
+        #expect(try storedValues(forKey: showsArchivedKey, in: container) == ["perhaps"])
     }
 
     @Test("Choosing the current value skips the save")
@@ -151,6 +209,7 @@ struct InboxEpisodeListSettingsStoreTests {
         #expect(store.setHidesQueuedEpisodes(false, modelContext: context))
         #expect(store.setGroupsByPodcast(false, modelContext: context))
         #expect(store.setGroupedLayout(.automatic, modelContext: context))
+        #expect(store.setShowsArchivedEpisodes(false, modelContext: context))
         #expect(probe.callCount == 0)
         #expect(try ModelContext(container).fetch(FetchDescriptor<LocalPreferenceRecord>()).isEmpty)
 
@@ -197,33 +256,81 @@ struct InboxEpisodeListSettingsStoreTests {
         #expect(reloaded.hidesQueuedEpisodes)
     }
 
-    @Test("Show All resets both settings in one save")
-    func resetToDefaultsIsAtomic() throws {
+    /// Show All Episodes never opens the archive: it resets the filter and
+    /// Hide Up Next and leaves the view where it is, in either view.
+    @Test("Show All resets the filter and Hide Up Next in one save and leaves the view alone")
+    func resetFilterAndHideUpNextIsAtomic() throws {
+        for showsArchived in [false, true] {
+            let container = try OpenCastModelContainerFactory.make(inMemory: true)
+            let context = ModelContext(container)
+            let probe = InboxEpisodeListSettingsSaveProbe()
+            let store = InboxEpisodeListSettingsStore(save: probe.save)
+            store.load(modelContext: context)
+            #expect(store.setShowsArchivedEpisodes(showsArchived, modelContext: context))
+            #expect(store.setFilter(.downloaded, modelContext: context))
+            #expect(store.setHidesQueuedEpisodes(true, modelContext: context))
+            let storedView = try storedValues(forKey: showsArchivedKey, in: container)
+            #expect(storedView == (showsArchived ? ["true"] : []))
+
+            let callsBeforeShowAll = probe.callCount
+            probe.failsSaves = true
+            #expect(!store.resetFilterAndHideUpNext(modelContext: context))
+            #expect(store.filter == .downloaded)
+            #expect(store.hidesQueuedEpisodes)
+            #expect(store.showsArchivedEpisodes == showsArchived)
+            #expect(probe.callCount == callsBeforeShowAll + 1)
+            #expect(store.lastErrorMessage?.hasPrefix("Unable to show all Inbox episodes") == true)
+            #expect(try storedValues(forKey: filterKey, in: container) == ["downloaded"])
+            #expect(try storedValues(forKey: hidesQueuedKey, in: container) == ["true"])
+            #expect(try storedValues(forKey: showsArchivedKey, in: container) == storedView)
+
+            probe.failsSaves = false
+            #expect(store.resetFilterAndHideUpNext(modelContext: context))
+            #expect(store.filter == .all)
+            #expect(!store.hidesQueuedEpisodes)
+            #expect(store.showsArchivedEpisodes == showsArchived)
+            #expect(store.lastErrorMessage == nil)
+            #expect(probe.callCount == callsBeforeShowAll + 2)
+            #expect(try storedValues(forKey: filterKey, in: container) == ["all"])
+            #expect(try storedValues(forKey: hidesQueuedKey, in: container) == ["false"])
+            #expect(try storedValues(forKey: showsArchivedKey, in: container) == storedView)
+            let reloaded = reloadedStore(from: container)
+            #expect(reloaded.filter == .all)
+            #expect(!reloaded.hidesQueuedEpisodes)
+            #expect(reloaded.showsArchivedEpisodes == showsArchived)
+            #expect(store.activeFilterTitles == (showsArchived ? ["Archived"] : []))
+        }
+    }
+
+    @Test("Show All skips the save while the filter and Hide Up Next are at their defaults, in either view")
+    func resetFilterAndHideUpNextGuardIgnoresTheView() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let probe = InboxEpisodeListSettingsSaveProbe()
         let store = InboxEpisodeListSettingsStore(save: probe.save)
         store.load(modelContext: context)
-        #expect(store.setFilter(.downloaded, modelContext: context))
-        #expect(store.setHidesQueuedEpisodes(true, modelContext: context))
 
-        let callsBeforeReset = probe.callCount
-        probe.failsSaves = true
-        #expect(!store.resetToDefaults(modelContext: context))
-        #expect(store.filter == .downloaded)
-        #expect(store.hidesQueuedEpisodes)
-        #expect(probe.callCount == callsBeforeReset + 1)
-        #expect(store.lastErrorMessage?.hasPrefix("Unable to reset Inbox settings") == true)
-        #expect(try storedValues(forKey: filterKey, in: container) == ["downloaded"])
-        #expect(try storedValues(forKey: hidesQueuedKey, in: container) == ["true"])
+        #expect(store.resetFilterAndHideUpNext(modelContext: context))
+        #expect(probe.callCount == 0)
+        #expect(!store.showsArchivedEpisodes)
 
-        probe.failsSaves = false
-        #expect(store.resetToDefaults(modelContext: context))
+        #expect(store.setShowsArchivedEpisodes(true, modelContext: context))
+        #expect(probe.callCount == 1)
+        #expect(store.resetFilterAndHideUpNext(modelContext: context))
+        #expect(probe.callCount == 1)
+        #expect(store.showsArchivedEpisodes)
+
+        #expect(store.setFilter(.played, modelContext: context))
+        #expect(store.resetFilterAndHideUpNext(modelContext: context))
+        #expect(probe.callCount == 3)
         #expect(store.filter == .all)
+        #expect(store.showsArchivedEpisodes)
+
+        #expect(store.setHidesQueuedEpisodes(true, modelContext: context))
+        #expect(store.resetFilterAndHideUpNext(modelContext: context))
+        #expect(probe.callCount == 5)
         #expect(!store.hidesQueuedEpisodes)
-        #expect(store.lastErrorMessage == nil)
-        #expect(try storedValues(forKey: filterKey, in: container) == ["all"])
-        #expect(try storedValues(forKey: hidesQueuedKey, in: container) == ["false"])
+        #expect(store.showsArchivedEpisodes)
     }
 
     @Test("Loading after a data reset restores the defaults")
@@ -234,6 +341,7 @@ struct InboxEpisodeListSettingsStoreTests {
         store.load(modelContext: context)
         #expect(store.setFilter(.downloaded, modelContext: context))
         #expect(store.setHidesQueuedEpisodes(true, modelContext: context))
+        #expect(store.setShowsArchivedEpisodes(true, modelContext: context))
 
         // DataNukeRunner deletes every LocalPreferenceRecord row; the app
         // model then reloads the same settings store.
@@ -245,6 +353,7 @@ struct InboxEpisodeListSettingsStoreTests {
 
         #expect(store.filter == .all)
         #expect(!store.hidesQueuedEpisodes)
+        #expect(!store.showsArchivedEpisodes)
         #expect(store.lastErrorMessage == nil)
     }
 

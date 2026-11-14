@@ -13,15 +13,23 @@ struct IncompleteFeedNotice: View {
                 .font(.subheadline)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
-                Button("Retry", systemImage: "arrow.clockwise") {
-                    retry()
+                Button(action: retry) {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                        .frame(minHeight: 44)
+                        .contentShape(.rect)
                 }
                 .disabled(isRefreshing)
-                .frame(minHeight: 44)
-                Button("Details", systemImage: "info.circle", action: showDetails)
-                    .frame(minHeight: 44)
+                Button(action: showDetails) {
+                    Label("Details", systemImage: "info.circle")
+                        .frame(minHeight: 44)
+                        .contentShape(.rect)
+                }
                 if isRefreshing { ProgressView().accessibilityLabel("Loading feed") }
             }
+            // The show page puts this notice in its hero's List row, where
+            // default-style buttons make the whole row one target that fires
+            // both. Borderless buttons take only their labels' 44 pt targets.
+            .buttonStyle(.borderless)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()

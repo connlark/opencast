@@ -151,6 +151,59 @@ struct CarPlayBrowseModelBuilderTests {
         #expect(continuation.snapshot.rowCount == 12)
     }
 
+    /// Archived rows leave before the row-build cap: filtered after it, the
+    /// ten archived rows would eat ten of the twenty-four built slots and
+    /// cut the continuation short.
+    @Test("Inbox leaves archived episodes out without spending a slot on them")
+    func inboxSkipsArchivedEpisodesBeforeTheCap() async throws {
+        let fixture = try await makeFixture(episodeCount: 30)
+        let archived = try (0..<10).map { index in
+            try #require(fixture.library.episode(with: episodeID(index)))
+        }
+        #expect(fixture.library.archive(archived, modelContext: fixture.context))
+
+        let snapshot = CarPlayBrowseModelBuilder.inbox(
+            library: fixture.library,
+            downloadRecords: [],
+            currentEpisode: nil,
+            nowPlaying: .idle,
+            isLoading: false,
+            limits: Self.floorLimits
+        )
+
+        #expect(snapshot.rowCount == 12)
+        #expect(episodeIDs(in: snapshot) == (10..<21).map(episodeID))
+        #expect(snapshot.sections[0].rows.last == .showMore)
+        let continuation = try #require(snapshot.continuation)
+        #expect(episodeIDs(in: continuation.snapshot) == (21..<30).map(episodeID))
+    }
+
+    /// Inbox membership is the Latest section. Continue is the loaded
+    /// episode, which stays visible like Up Next: archiving leaves playback
+    /// alone (D3), and an archived episode can still be played from its
+    /// show (D5).
+    @Test("An archived current episode stays in Continue and leaves Latest")
+    func archivedCurrentEpisodeStaysInContinue() async throws {
+        let fixture = try await makeFixture(episodeCount: 20)
+        let loaded = try #require(fixture.library.episode(with: episodeID(5)))
+        #expect(fixture.library.archive(loaded, modelContext: fixture.context))
+
+        let snapshot = CarPlayBrowseModelBuilder.inbox(
+            library: fixture.library,
+            downloadRecords: [],
+            currentEpisode: fixture.library.domainEpisode(for: loaded),
+            nowPlaying: CarPlayNowPlayingState(episodeID: loaded.episodeID, isPlaying: true),
+            isLoading: false,
+            limits: Self.floorLimits
+        )
+
+        #expect(snapshot.sections.map(\.header) == ["Continue", "Latest"])
+        #expect(snapshot.sections[0].rows.compactMap { episodeRow($0)?.episodeID } == [loaded.episodeID])
+        #expect(!snapshot.sections[1].rows.contains { episodeRow($0)?.episodeID == loaded.episodeID })
+        #expect(episodeIDs(in: snapshot) == [episodeID(5)] + (Array(0..<5) + Array(6..<11)).map(episodeID))
+        #expect(snapshot.sections[1].rows.last == .showMore)
+    }
+
     @Test("A list that cannot push a further page fills every slot with rows")
     func truncationWithoutMarker() async throws {
         let fixture = try await makeFixture(episodeCount: 30)

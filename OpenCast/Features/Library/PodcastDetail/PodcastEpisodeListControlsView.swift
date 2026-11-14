@@ -6,10 +6,10 @@ struct PodcastEpisodeListControlsView: View {
     @Binding var sortOrder: PodcastEpisodeSortOrder
     @Binding var filter: PodcastEpisodeFilter
     let podcastID: String
-    /// Set while a Group by Podcast visit hides Up Next. The filter chip
-    /// cannot show that, so a caption says why rows are missing and brings
-    /// them back.
-    var onShowHiddenEpisodes: (() -> Void)?
+    /// What a Group by Podcast visit hides. The filter chip cannot show
+    /// that, so a caption says why rows are missing and brings them back.
+    var hiddenEpisodes = PodcastHiddenEpisodes()
+    var onShowHiddenEpisodes: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -35,13 +35,10 @@ struct PodcastEpisodeListControlsView: View {
                 }
             }
 
-            if let onShowHiddenEpisodes {
+            if let caption = hiddenEpisodes.caption {
                 Button(action: onShowHiddenEpisodes) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Label(
-                            "Episodes playing or in Up Next are hidden",
-                            systemImage: "text.line.first.and.arrowtriangle.forward"
-                        )
+                        Label(caption, systemImage: hiddenEpisodes.systemImage)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                         Spacer(minLength: 0)

@@ -3,8 +3,10 @@ import Observation
 import SwiftData
 
 /// Device-local Inbox list preferences: the episode filter, whether
-/// episodes in Up Next are hidden, and the Group by Podcast view with its
-/// layout. Every load and save runs in its own short-lived context, as in
+/// episodes in Up Next are hidden, whether the Inbox or its archive is
+/// listed, and the Group by Podcast view with its layout. Every load and
+/// save runs in
+/// its own short-lived context, as in
 /// `LibraryDisplaySettingsStore`: a failed save is discarded with that
 /// context instead of lingering as a dirty row, and a preference save never
 /// flushes another context's pending synced edits. Published values change
@@ -15,9 +17,14 @@ final class InboxEpisodeListSettingsStore {
     static let hidesQueuedEpisodesPreferenceKey = "inbox.hidesQueuedEpisodes"
     static let groupsByPodcastPreferenceKey = "inbox.groupsByPodcast"
     static let groupedLayoutPreferenceKey = "inbox.groupedLayout"
+    static let showsArchivedEpisodesPreferenceKey = "inbox.showsArchivedEpisodes"
 
     private(set) var filter = PodcastEpisodeFilter.all
     private(set) var hidesQueuedEpisodes = false
+    /// Show Archived: on, the Inbox lists only its archived episodes (the
+    /// archive view); off, the default, only the episodes not archived. The
+    /// filter and Hide Up Next apply in both.
+    private(set) var showsArchivedEpisodes = false
     /// Shows the podcasts with matching episodes instead of the episodes.
     /// A view choice, not a filter: it hides nothing, so it stays out of
     /// `activeFilterTitles` and survives Show All Episodes.
@@ -28,9 +35,14 @@ final class InboxEpisodeListSettingsStore {
     @ObservationIgnored private let save: (ModelContext) throws -> Void
 
     /// The settings that differ from their defaults, in display order; empty
-    /// while the Inbox shows everything.
+    /// while the Inbox lists its default set (every episode not archived).
+    /// The archive view comes first: it names the view, the rest what the
+    /// view hides.
     var activeFilterTitles: [String] {
         var titles: [String] = []
+        if showsArchivedEpisodes {
+            titles.append("Archived")
+        }
         if filter != .all {
             titles.append(filter.title)
         }
@@ -56,10 +68,13 @@ final class InboxEpisodeListSettingsStore {
                 .flatMap(Bool.init) ?? false
             groupedLayout = try storedValue(forKey: Self.groupedLayoutPreferenceKey, context: context)
                 .flatMap(LibraryLayoutPreference.init(rawValue:)) ?? .automatic
+            showsArchivedEpisodes = try storedValue(forKey: Self.showsArchivedEpisodesPreferenceKey, context: context)
+                .flatMap(Bool.init) ?? false
             lastErrorMessage = nil
         } catch {
             filter = .all
             hidesQueuedEpisodes = false
+            showsArchivedEpisodes = false
             groupsByPodcast = false
             groupedLayout = .automatic
             lastErrorMessage = "Unable to load Inbox settings: \(error.localizedDescription)"
@@ -103,6 +118,24 @@ final class InboxEpisodeListSettingsStore {
     }
 
     @discardableResult
+    func setShowsArchivedEpisodes(_ showsArchivedEpisodes: Bool, modelContext: ModelContext) -> Bool {
+        guard self.showsArchivedEpisodes != showsArchivedEpisodes else {
+            return true
+        }
+        guard persist(
+            String(showsArchivedEpisodes),
+            forKey: Self.showsArchivedEpisodesPreferenceKey,
+            modelContext: modelContext,
+            failureDescription: "Unable to update Show Archived"
+        ) else {
+            return false
+        }
+
+        self.showsArchivedEpisodes = showsArchivedEpisodes
+        return true
+    }
+
+    @discardableResult
     func setGroupsByPodcast(_ groupsByPodcast: Bool, modelContext: ModelContext) -> Bool {
         guard self.groupsByPodcast != groupsByPodcast else {
             return true
@@ -140,10 +173,12 @@ final class InboxEpisodeListSettingsStore {
         return true
     }
 
-    /// Persists the state represented by the filtered-empty action in one
-    /// transaction, so a failed reset cannot leave one setting changed.
+    /// Show All Episodes, the filtered-empty action: All Episodes and Up
+    /// Next shown, persisted in one transaction so a failed save cannot
+    /// leave one setting changed. It leaves the view alone: the Inbox stays
+    /// the Inbox and the archive the archive.
     @discardableResult
-    func resetToDefaults(modelContext: ModelContext) -> Bool {
+    func resetFilterAndHideUpNext(modelContext: ModelContext) -> Bool {
         guard filter != .all || hidesQueuedEpisodes else {
             return true
         }
@@ -167,7 +202,7 @@ final class InboxEpisodeListSettingsStore {
             lastErrorMessage = nil
             return true
         } catch {
-            lastErrorMessage = "Unable to reset Inbox settings: \(error.localizedDescription)"
+            lastErrorMessage = "Unable to show all Inbox episodes: \(error.localizedDescription)"
             return false
         }
     }

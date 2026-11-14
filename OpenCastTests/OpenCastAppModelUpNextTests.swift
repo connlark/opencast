@@ -1,3 +1,4 @@
+@preconcurrency import AVFoundation
 import Foundation
 import OpenCastCore
 @testable import OpenCastPlayback
@@ -241,6 +242,230 @@ struct OpenCastAppModelUpNextTests {
         #expect(fixture.appModel.markEpisodePlayed(first, modelContext: fixture.context))
 
         #expect(!fixture.appModel.upNextQueue.contains(episodeID: "first"))
+    }
+
+    @Test("Archive dequeues the episode without marking it played or touching playback")
+    func archiveDequeuesWithoutAListen() async throws {
+        let fixture = try await makeFixture()
+        let library = fixture.appModel.library
+        let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
+        let second = try #require(fixture.appModel.episodeSnapshot(for: "second"))
+        try playWithoutAutoplay(second, fixture: fixture)
+        #expect(fixture.appModel.upNextQueue.enqueueLast(first, modelContext: fixture.context))
+
+        #expect(fixture.appModel.archiveEpisode(first, modelContext: fixture.context))
+
+        #expect(!fixture.appModel.upNextQueue.contains(episodeID: "first"))
+        #expect(library.isArchived(episodeID: "first"))
+        #expect(library.progressRecord(for: "first")?.isPlayed == false)
+        #expect(!library.progressSummary(for: first).isCompleted)
+        #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == "second")
+        #expect(fixture.appModel.lastUpNextError == nil)
+
+        // Queueing it again later does not unarchive it, and archiving it
+        // again changes nothing.
+        #expect(fixture.appModel.upNextQueue.enqueueLast(first, modelContext: fixture.context))
+        #expect(!fixture.appModel.archiveEpisode(first, modelContext: fixture.context))
+        #expect(fixture.appModel.upNextQueue.contains(episodeID: "first"))
+        #expect(library.isArchived(episodeID: "first"))
+    }
+
+    /// Archiving is Inbox membership, not a listen: the loaded episode
+    /// leaves the Inbox and stays loaded, where it was, with its restore
+    /// preference.
+    @Test("The current episode is archived and stays loaded, paused where it was, with its restore preference")
+    func currentEpisodeIsArchivedAndKeepsPlaying() async throws {
+        let fixture = try await makeFixture()
+        let library = fixture.appModel.library
+        let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
+        try playWithoutAutoplay(first, fixture: fixture)
+        fixture.appModel.playback.seek(to: 20)
+        let stateBefore = fixture.appModel.playback.state
+        let restoredEpisodeIDs = try lastPlaybackEpisodeIDs(in: fixture.context)
+        let presentationRequests = fixture.appModel.nowPlayingPresentationRequest
+        let saves = library.syncedStoreSelfSaveCount
+        #expect(fixture.appModel.archivableEpisodes([first]).map(\.episodeID) == ["first"])
+
+        #expect(fixture.appModel.archiveEpisode(first, modelContext: fixture.context))
+
+        #expect(library.isArchived(episodeID: "first"))
+        #expect(library.syncedStoreSelfSaveCount == saves + 1)
+        #expect(library.progressRecord(for: "first")?.isPlayed == false)
+        #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == "first")
+        #expect(fixture.appModel.playback.state == stateBefore)
+        #expect(fixture.appModel.playback.position == 20)
+        #expect(try lastPlaybackEpisodeIDs(in: fixture.context) == restoredEpisodeIDs)
+        #expect(!restoredEpisodeIDs.isEmpty)
+        #expect(fixture.appModel.nowPlayingPresentationRequest == presentationRequests)
+        #expect(fixture.appModel.lastPlaybackError == nil)
+    }
+
+    /// Neither Archive nor Archive All sends the player a command: a pause,
+    /// an unload or a seek would each move the intent revision. The episode
+    /// plays local audio, so it is `.playing`, not still loading, when it
+    /// is archived.
+    @Test("Archiving the playing episode keeps it playing, from the row and from Archive All", arguments: [false, true])
+    func archivingThePlayingEpisodeKeepsItPlaying(archivesAll: Bool) async throws {
+        let audioURL = try writeSilentAudio(duration: 60)
+        defer { try? FileManager.default.removeItem(at: audioURL) }
+        let fixture = try await makeFixture(audioURLs: ["first": audioURL])
+        let library = fixture.appModel.library
+        let playback = fixture.appModel.playback
+        defer { playback.unload() }
+        let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
+        let second = try #require(fixture.appModel.episodeSnapshot(for: "second"))
+        let subscription = try #require(library.subscriptions.first)
+        try playWithoutAutoplay(first, fixture: fixture)
+        playback.play()
+        let isPlaying = try await waitUntilPlaying(playback)
+        try #require(isPlaying, "The local audio should reach .playing before the archive")
+        let intentRevision = playback.playbackIntentRevision
+        let position = playback.position
+
+        if archivesAll {
+            let group = InboxPodcastGroup(subscription: subscription, episodes: [first, second])
+            let confirmation = try #require(InboxArchiveAllConfirmation(group: group, appModel: fixture.appModel))
+            #expect(confirmation.episodes.map(\.episodeID) == ["first", "second"])
+            #expect(confirmation.archive(appModel: fixture.appModel, modelContext: fixture.context))
+        } else {
+            #expect(fixture.appModel.archiveEpisode(first, modelContext: fixture.context))
+        }
+
+        #expect(library.isArchived(episodeID: "first"))
+        #expect(library.isArchived(episodeID: "second") == archivesAll)
+        #expect(playback.currentEpisode?.id.rawValue == "first")
+        #expect(playback.state == .playing)
+        #expect(playback.playbackIntentRevision == intentRevision)
+        #expect(playback.position >= position)
+        #expect(fixture.appModel.lastPlaybackError == nil)
+        // A pause sent from a task the archive started would land here.
+        await Task.yield()
+        #expect(playback.state == .playing)
+        #expect(playback.playbackIntentRevision == intentRevision)
+    }
+
+    @Test("Archive All archives the current episode with the rest, skips archived rows, and dequeues only what it archived, in one save")
+    func archiveAllArchivesCurrentAndSkipsArchived() async throws {
+        let fixture = try await makeFixture()
+        let library = fixture.appModel.library
+        let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
+        let second = try #require(fixture.appModel.episodeSnapshot(for: "second"))
+        let third = try #require(fixture.appModel.episodeSnapshot(for: "third"))
+        let rows = [first, second, third]
+        try playWithoutAutoplay(first, fixture: fixture)
+        // Archived earlier and queued by hand since.
+        #expect(library.archive(second, modelContext: fixture.context))
+        #expect(fixture.appModel.upNextQueue.enqueueLast(second, modelContext: fixture.context))
+        #expect(fixture.appModel.upNextQueue.enqueueLast(third, modelContext: fixture.context))
+        #expect(fixture.appModel.archivableEpisodes(rows).map(\.episodeID) == ["first", "third"])
+        let saves = library.syncedStoreSelfSaveCount
+
+        #expect(fixture.appModel.archiveEpisodes(rows, modelContext: fixture.context))
+
+        #expect(library.syncedStoreSelfSaveCount == saves + 1)
+        #expect(library.archivedEpisodeIDs == ["first", "second", "third"])
+        #expect(fixture.appModel.upNextQueue.items.map(\.episodeID) == ["second"])
+        #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == "first")
+        #expect(fixture.appModel.archivableEpisodes(rows).isEmpty)
+        #expect(!fixture.appModel.archiveEpisodes(rows, modelContext: fixture.context))
+        #expect(library.syncedStoreSelfSaveCount == saves + 1)
+    }
+
+    /// The dialog counts what it captured when it opened, the current
+    /// episode included, and confirming archives that capture. Between the
+    /// two, a counted row archived elsewhere is dropped and a row unarchived
+    /// elsewhere is not added.
+    @Test("Archive All archives what its dialog counted, the current episode included, less what was archived since")
+    func archiveAllArchivesWhatItsDialogCounted() async throws {
+        let fixture = try await makeFixture()
+        let library = fixture.appModel.library
+        let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
+        let second = try #require(fixture.appModel.episodeSnapshot(for: "second"))
+        let third = try #require(fixture.appModel.episodeSnapshot(for: "third"))
+        let subscription = try #require(library.subscriptions.first)
+        let group = InboxPodcastGroup(subscription: subscription, episodes: [first, second, third])
+        try playWithoutAutoplay(first, fixture: fixture)
+        #expect(library.archive(third, modelContext: fixture.context))
+
+        let confirmation = try #require(InboxArchiveAllConfirmation(group: group, appModel: fixture.appModel))
+        #expect(confirmation.episodes.map(\.episodeID) == ["first", "second"])
+        #expect(confirmation.message == "2 episodes of Queue Show will leave the Inbox. Listening progress is unchanged.")
+
+        #expect(library.unarchive(third, modelContext: fixture.context))
+        #expect(library.archive(second, modelContext: fixture.context))
+        let saves = library.syncedStoreSelfSaveCount
+        #expect(confirmation.archive(appModel: fixture.appModel, modelContext: fixture.context))
+
+        #expect(library.syncedStoreSelfSaveCount == saves + 1)
+        #expect(library.archivedEpisodeIDs == ["first", "second"])
+        #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == "first")
+
+        let remaining = try #require(InboxArchiveAllConfirmation(group: group, appModel: fixture.appModel))
+        #expect(remaining.episodes.map(\.episodeID) == ["third"])
+        #expect(remaining.message == "1 episode of Queue Show will leave the Inbox. Listening progress is unchanged.")
+        #expect(remaining.archive(appModel: fixture.appModel, modelContext: fixture.context))
+        #expect(library.archivedEpisodeIDs == ["first", "second", "third"])
+        #expect(InboxArchiveAllConfirmation(group: group, appModel: fixture.appModel) == nil)
+    }
+
+    /// The archive view's group menu: the dialog counts the archived rows
+    /// it captured, the current episode included, and confirming returns
+    /// that capture to the Inbox in one save. A counted row unarchived
+    /// elsewhere is dropped, a row archived meanwhile is not added, and Up
+    /// Next is left alone.
+    @Test("Unarchive All returns what its dialog counted to the Inbox in one save and leaves Up Next alone")
+    func unarchiveAllUnarchivesWhatItsDialogCounted() async throws {
+        let fixture = try await makeFixture()
+        let library = fixture.appModel.library
+        let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
+        let second = try #require(fixture.appModel.episodeSnapshot(for: "second"))
+        let third = try #require(fixture.appModel.episodeSnapshot(for: "third"))
+        let rows = [first, second, third]
+        let subscription = try #require(library.subscriptions.first)
+        let group = InboxPodcastGroup(subscription: subscription, episodes: rows)
+        try playWithoutAutoplay(first, fixture: fixture)
+        #expect(InboxUnarchiveAllConfirmation(group: group, appModel: fixture.appModel) == nil)
+        #expect(!fixture.appModel.unarchiveEpisodes(rows, modelContext: fixture.context))
+        #expect(fixture.appModel.archiveEpisodes([first, second], modelContext: fixture.context))
+        // Queued by hand after the archive.
+        #expect(fixture.appModel.upNextQueue.enqueueLast(second, modelContext: fixture.context))
+        #expect(fixture.appModel.unarchivableEpisodes(rows).map(\.episodeID) == ["first", "second"])
+
+        let confirmation = try #require(InboxUnarchiveAllConfirmation(group: group, appModel: fixture.appModel))
+        #expect(confirmation.episodes.map(\.episodeID) == ["first", "second"])
+        #expect(confirmation.message == "2 episodes of Queue Show will return to the Inbox.")
+
+        #expect(library.unarchive(first, modelContext: fixture.context))
+        #expect(library.archive(third, modelContext: fixture.context))
+        let saves = library.syncedStoreSelfSaveCount
+        #expect(confirmation.unarchive(appModel: fixture.appModel, modelContext: fixture.context))
+
+        #expect(library.syncedStoreSelfSaveCount == saves + 1)
+        #expect(library.archivedEpisodeIDs == ["third"])
+        #expect(fixture.appModel.upNextQueue.items.map(\.episodeID) == ["second"])
+        #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == "first")
+
+        let remaining = try #require(InboxUnarchiveAllConfirmation(group: group, appModel: fixture.appModel))
+        #expect(remaining.episodes.map(\.episodeID) == ["third"])
+        #expect(remaining.message == "1 episode of Queue Show will return to the Inbox.")
+        #expect(remaining.unarchive(appModel: fixture.appModel, modelContext: fixture.context))
+        #expect(library.archivedEpisodeIDs.isEmpty)
+        #expect(InboxUnarchiveAllConfirmation(group: group, appModel: fixture.appModel) == nil)
+        #expect(!fixture.appModel.unarchiveEpisodes(rows, modelContext: fixture.context))
+        #expect(library.syncedStoreSelfSaveCount == saves + 2)
+    }
+
+    @Test("Unarchive returns the episode to the Inbox and leaves Up Next alone")
+    func unarchiveRestoresTheEpisode() async throws {
+        let fixture = try await makeFixture()
+        let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
+        #expect(fixture.appModel.archiveEpisode(first, modelContext: fixture.context))
+
+        #expect(fixture.appModel.unarchiveEpisode(first, modelContext: fixture.context))
+
+        #expect(!fixture.appModel.library.isArchived(episodeID: "first"))
+        #expect(fixture.appModel.upNextQueue.items.isEmpty)
+        #expect(!fixture.appModel.unarchiveEpisode(first, modelContext: fixture.context))
     }
 
     @Test("An empty queue leaves a naturally completed episode parked")
@@ -897,7 +1122,8 @@ struct OpenCastAppModelUpNextTests {
         queuedEpisodeID: String? = nil,
         restorableEpisodeID: String? = nil,
         extraSubscriptionFeedURLs: [String] = [],
-        syncStatus: SyncStatusStore = SyncStatusStore()
+        syncStatus: SyncStatusStore = SyncStatusStore(),
+        audioURLs: [String: URL] = [:]
     ) async throws -> (
         appModel: OpenCastAppModel,
         context: ModelContext
@@ -905,7 +1131,7 @@ struct OpenCastAppModelUpNextTests {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let cache = SQLiteLocalLibraryCacheStore.inMemory()
-        try await cache.upsertCache(from: feedSnapshot(), refreshedAt: .now)
+        try await cache.upsertCache(from: feedSnapshot(audioURLs: audioURLs), refreshedAt: .now)
         context.insert(
             SubscriptionRecord(
                 feedURL: Self.podcastID,
@@ -1051,7 +1277,9 @@ struct OpenCastAppModelUpNextTests {
         ).map(\.value)
     }
 
-    private func feedSnapshot() throws -> FeedSnapshot {
+    /// `audioURLs` replaces an episode's remote audio, for local files the
+    /// player can really play.
+    private func feedSnapshot(audioURLs: [String: URL] = [:]) throws -> FeedSnapshot {
         let feedURL = try #require(URL(string: Self.podcastID))
         let podcast = Podcast(
             id: PodcastID(rawValue: Self.podcastID),
@@ -1069,11 +1297,44 @@ struct OpenCastAppModelUpNextTests {
                     duration: 60,
                     audioURL: id == "missing-audio"
                         ? nil
-                        : URL(string: "https://example.com/\(id).mp3"),
+                        : audioURLs[id] ?? URL(string: "https://example.com/\(id).mp3"),
                     guid: id
                 )
             }
         )
+    }
+
+    /// Silent AAC audio, so a test can reach `.playing` without the network
+    /// and without sound.
+    private func writeSilentAudio(duration: TimeInterval) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "opencast-up-next-playing-\(UUID().uuidString).m4a")
+        let sampleRate = 44_100.0
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1))
+        let frameCount = AVAudioFrameCount(sampleRate * duration)
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount))
+        buffer.frameLength = frameCount
+        let file = try AVAudioFile(
+            forWriting: url,
+            settings: [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: sampleRate,
+                AVNumberOfChannelsKey: 1,
+                AVEncoderBitRateKey: 64_000
+            ]
+        )
+        try file.write(from: buffer)
+        return url
+    }
+
+    /// Polls until the player reports `.playing`. The bound only ends a run
+    /// whose audio never starts; local audio starts well within it.
+    private func waitUntilPlaying(_ playback: AVFoundationPlaybackController) async throws -> Bool {
+        let deadline = Date.now.addingTimeInterval(60)
+        while playback.state != .playing, Date.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        return playback.state == .playing
     }
 
     private func playWithoutAutoplay(

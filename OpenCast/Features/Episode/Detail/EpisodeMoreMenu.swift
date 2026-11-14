@@ -14,7 +14,10 @@ struct EpisodeMoreMenu: View {
 
     let episode: EpisodeListItemSnapshot
     let isPlayed: Bool
-    let hasProgressRecord: Bool
+    let isArchived: Bool
+    /// A progress row that holds more than an archive: an archive-only row
+    /// leaves through Unarchive instead.
+    let offersClearProgress: Bool
     let onClearProgress: () -> Void
     let onShowEpisodeDiagnostics: () -> Void
     let onActionError: (String) -> Void
@@ -60,7 +63,8 @@ struct EpisodeMoreMenu: View {
         if !isPlayed {
             Button("Mark Played", systemImage: "checkmark.circle", action: markPlayed)
         }
-        if hasProgressRecord {
+        EpisodeArchiveButton(episode: episode, isArchived: isArchived)
+        if offersClearProgress {
             Button("Clear Progress", systemImage: "arrow.counterclockwise", role: .destructive, action: onClearProgress)
         }
     }
@@ -251,7 +255,8 @@ struct EpisodeMoreMenu: View {
                     EpisodeMoreMenu(
                         episode: .previewSample,
                         isPlayed: false,
-                        hasProgressRecord: true,
+                        isArchived: false,
+                        offersClearProgress: true,
                         onClearProgress: {},
                         onShowEpisodeDiagnostics: {},
                         onActionError: { _ in }
@@ -270,8 +275,9 @@ struct EpisodeMoreMenu: View {
                 ToolbarItem(placement: .primaryAction) {
                     EpisodeMoreMenu(
                         episode: .previewSample,
-                        isPlayed: true,
-                        hasProgressRecord: false,
+                        isPlayed: false,
+                        isArchived: true,
+                        offersClearProgress: false,
                         onClearProgress: {},
                         onShowEpisodeDiagnostics: {},
                         onActionError: { _ in }

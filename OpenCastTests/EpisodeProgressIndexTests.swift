@@ -130,4 +130,88 @@ struct EpisodeProgressIndexTests {
         let droppingReplaceChanged = index.replaceAll(secondFetch)
         #expect(droppingReplaceChanged)
     }
+
+    /// Copies stamped at one instant that agree on every listening field
+    /// must index the same copy whatever order the store hands them back
+    /// in, or two peers could disagree on whether the episode is archived.
+    @Test("Same-instant copies that differ only in their archive index the same copy in either order")
+    func fullTiesIndexTheSameCopyInEitherOrder() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let instant = Date(timeIntervalSince1970: 1_700_000_000)
+        func copy(archivedAt: Date?, dedupeUUID: String) -> EpisodeProgressRecord {
+            let record = EpisodeProgressRecord(
+                episodeID: "tied",
+                podcastID: "https://example.com/tied.xml",
+                position: 30,
+                duration: 120,
+                archivedAt: archivedAt,
+                updatedAt: instant,
+                dedupeUUID: dedupeUUID
+            )
+            context.insert(record)
+            return record
+        }
+        let archived = copy(archivedAt: instant, dedupeUUID: "bbbbbbbb")
+        let unarchived = copy(archivedAt: nil, dedupeUUID: "aaaaaaaa")
+        let laterArchive = copy(archivedAt: instant.addingTimeInterval(10), dedupeUUID: "cccccccc")
+        let smallerIdentity = copy(archivedAt: nil, dedupeUUID: "00000000")
+        try context.save()
+
+        let cases: [(copies: [EpisodeProgressRecord], winner: EpisodeProgressRecord)] = [
+            ([archived, unarchived], archived),
+            ([archived, laterArchive], laterArchive),
+            ([unarchived, smallerIdentity], smallerIdentity)
+        ]
+        for (copies, winner) in cases {
+            for order in [copies, Array(copies.reversed())] {
+                #expect(EpisodeProgressIndex.latestRecordsByEpisodeID(order)["tied"] === winner)
+            }
+        }
+        #expect(EpisodeProgressIndex.archivedEpisodeIDs(in: [archived, unarchived]) == ["tied"])
+        #expect(EpisodeProgressIndex.archivedEpisodeIDs(in: [unarchived, archived]) == ["tied"])
+    }
+
+    /// A missing duration and a zero duration say the same thing, as repair
+    /// reads them. Compared as optionals they differ while neither orders
+    /// first, so without that reading fetch order picks the copy.
+    @Test("Same-instant copies whose durations are nil and zero reach the final tie-break in either order")
+    func nilAndZeroDurationsReachTheFinalTieBreak() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let instant = Date(timeIntervalSince1970: 1_700_000_000)
+        func copy(duration: TimeInterval?, archivedAt: Date?, dedupeUUID: String) -> EpisodeProgressRecord {
+            let record = EpisodeProgressRecord(
+                episodeID: "tied",
+                podcastID: "https://example.com/tied.xml",
+                position: 0,
+                duration: duration,
+                archivedAt: archivedAt,
+                updatedAt: instant,
+                dedupeUUID: dedupeUUID
+            )
+            context.insert(record)
+            return record
+        }
+        let archivedWithoutDuration = copy(duration: nil, archivedAt: instant, dedupeUUID: "bbbbbbbb")
+        let unarchivedAtZero = copy(duration: 0, archivedAt: nil, dedupeUUID: "aaaaaaaa")
+        let archivedAtZero = copy(duration: 0, archivedAt: instant, dedupeUUID: "dddddddd")
+        let unarchivedWithoutDuration = copy(duration: nil, archivedAt: nil, dedupeUUID: "cccccccc")
+        let smallerIdentityWithoutDuration = copy(duration: nil, archivedAt: nil, dedupeUUID: "00000000")
+        try context.save()
+
+        let cases: [(copies: [EpisodeProgressRecord], winner: EpisodeProgressRecord)] = [
+            ([archivedWithoutDuration, unarchivedAtZero], archivedWithoutDuration),
+            ([archivedAtZero, unarchivedWithoutDuration], archivedAtZero),
+            ([unarchivedAtZero, smallerIdentityWithoutDuration], smallerIdentityWithoutDuration)
+        ]
+        for (copies, winner) in cases {
+            for order in [copies, Array(copies.reversed())] {
+                #expect(EpisodeProgressIndex.latestRecordsByEpisodeID(order)["tied"] === winner)
+            }
+        }
+        for order in [[archivedWithoutDuration, unarchivedAtZero], [unarchivedAtZero, archivedWithoutDuration]] {
+            #expect(EpisodeProgressIndex.archivedEpisodeIDs(in: order) == ["tied"])
+        }
+    }
 }

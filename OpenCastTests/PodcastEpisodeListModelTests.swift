@@ -136,6 +136,37 @@ struct PodcastEpisodeListModelTests {
         #expect(allHidden.isFilteredEmpty)
     }
 
+    /// The show lists its archived episodes (D5), but archiving moves
+    /// `updatedAt` without a listen, so Resume passes over them.
+    @Test("Archived episodes stay listed and are never the Resume target")
+    func archivedEpisodesStayListedButNeverResume() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let library = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        let newest = makeEpisode(id: "newest", publishedAt: 30)
+        let heard = makeEpisode(id: "heard", publishedAt: 20)
+        let archived = makeEpisode(id: "archived", publishedAt: 10)
+        let episodes = [newest, heard, archived]
+        for episode in [heard, archived] {
+            #expect(library.updateProgress(
+                episodeID: episode.episodeID,
+                podcastID: episode.podcastID,
+                position: 20,
+                duration: 100,
+                modelContext: context
+            ))
+        }
+        library.progressRecord(for: heard.episodeID)?.updatedAt = Date(timeIntervalSince1970: 200)
+        library.progressRecord(for: archived.episodeID)?.updatedAt = Date(timeIntervalSince1970: 100)
+        #expect(library.archive(archived, modelContext: context))
+
+        let model = makeModel(.all, episodes, library, [])
+
+        #expect(model.episodes.map(\.id) == episodes.map(\.id))
+        #expect(model.unplayedEpisodeCount == 3)
+        #expect(model.primaryAction == .resume(heard))
+    }
+
     private func makeModel(
         _ filter: PodcastEpisodeFilter,
         _ episodes: [EpisodeListItemSnapshot],

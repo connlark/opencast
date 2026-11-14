@@ -632,6 +632,234 @@ struct SyncTombstoneRepairTests {
         #expect(result.progressGroupsMerged == 1)
     }
 
+    /// The archive rides with `updatedAt`, as `isPlayed` does: whichever copy
+    /// wrote last decides, archive or unarchive, whichever identity survives.
+    @Test("Duplicate repair takes the archive from the newest copy in both directions")
+    func duplicateRepairTakesTheArchiveFromTheNewestCopy() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        let laterInstant = Self.clearInstant.addingTimeInterval(50)
+
+        // Archived later on the copy whose identity loses.
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "archived-later",
+                podcastID: Self.feedURL,
+                position: 30,
+                updatedAt: Self.clearInstant,
+                dedupeUUID: "aaaaaaaa-2222-0000-0000-000000000000"
+            )
+        )
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "archived-later",
+                podcastID: Self.feedURL,
+                position: 30,
+                archivedAt: laterInstant,
+                updatedAt: laterInstant,
+                dedupeUUID: "bbbbbbbb-2222-0000-0000-000000000000"
+            )
+        )
+        // Unarchived later on the copy whose identity loses.
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "unarchived-later",
+                podcastID: Self.feedURL,
+                position: 30,
+                archivedAt: Self.clearInstant,
+                updatedAt: Self.clearInstant,
+                dedupeUUID: "aaaaaaaa-3333-0000-0000-000000000000"
+            )
+        )
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "unarchived-later",
+                podcastID: Self.feedURL,
+                position: 30,
+                updatedAt: laterInstant,
+                dedupeUUID: "bbbbbbbb-3333-0000-0000-000000000000"
+            )
+        )
+        try context.save()
+
+        let result = try await store.repairSyncDuplicates(modelContext: context)
+
+        let progress = try context.fetch(FetchDescriptor<EpisodeProgressRecord>())
+        let archivedLater = try #require(progress.first { $0.episodeID == "archived-later" })
+        let unarchivedLater = try #require(progress.first { $0.episodeID == "unarchived-later" })
+        #expect(progress.count == 2)
+        #expect(result.progressGroupsMerged == 2)
+        #expect(archivedLater.dedupeUUID == "aaaaaaaa-2222-0000-0000-000000000000")
+        #expect(archivedLater.archivedAt == laterInstant)
+        #expect(archivedLater.updatedAt == laterInstant)
+        #expect(unarchivedLater.dedupeUUID == "aaaaaaaa-3333-0000-0000-000000000000")
+        #expect(unarchivedLater.archivedAt == nil)
+        #expect(unarchivedLater.updatedAt == laterInstant)
+        #expect(store.archivedEpisodeIDs == ["archived-later"])
+    }
+
+    @Test("Legacy duplicates carry the newest copy's archive into the identified record")
+    func legacyDuplicatesCarryTheNewestArchive() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        let laterInstant = Self.clearInstant.addingTimeInterval(50)
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "legacy-archived",
+                podcastID: Self.feedURL,
+                position: 15,
+                updatedAt: Self.clearInstant,
+                dedupeUUID: ""
+            )
+        )
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "legacy-archived",
+                podcastID: Self.feedURL,
+                position: 15,
+                archivedAt: laterInstant,
+                updatedAt: laterInstant,
+                dedupeUUID: ""
+            )
+        )
+        try context.save()
+
+        let result = try await store.repairSyncDuplicates(modelContext: context)
+
+        let progress = try context.fetch(FetchDescriptor<EpisodeProgressRecord>())
+        #expect(progress.count == 1)
+        #expect(progress.first?.dedupeUUID.isEmpty == false)
+        #expect(progress.first?.archivedAt == laterInstant)
+        #expect(result.progressGroupsMerged == 1)
+        #expect(store.archivedEpisodeIDs == ["legacy-archived"])
+    }
+
+    /// Copies that tie on `updatedAt`, played, duration and position but
+    /// differ in their archive must merge to the same archive in either
+    /// order, or two peers keep the same identity with opposite archives.
+    /// The merge runs directly because a fetch's order cannot be chosen.
+    @Test("Tied copies merge to the same archive in either input order, with or without identities")
+    func tiedCopiesMergeToTheSameArchiveInEitherOrder() throws {
+        let laterArchive = Self.clearInstant.addingTimeInterval(10)
+        let cases: [(copies: [TiedProgressCopy], archivedAt: Date?)] = [
+            (
+                [
+                    TiedProgressCopy(archivedAt: Self.clearInstant, dedupeUUID: "bbbbbbbb-4444-0000-0000-000000000000"),
+                    TiedProgressCopy(archivedAt: nil, dedupeUUID: "aaaaaaaa-4444-0000-0000-000000000000")
+                ],
+                Self.clearInstant
+            ),
+            (
+                [
+                    TiedProgressCopy(archivedAt: laterArchive, dedupeUUID: "bbbbbbbb-5555-0000-0000-000000000000"),
+                    TiedProgressCopy(archivedAt: Self.clearInstant, dedupeUUID: "aaaaaaaa-5555-0000-0000-000000000000")
+                ],
+                laterArchive
+            ),
+            (
+                [
+                    TiedProgressCopy(archivedAt: Self.clearInstant, dedupeUUID: ""),
+                    TiedProgressCopy(archivedAt: nil, dedupeUUID: "")
+                ],
+                Self.clearInstant
+            )
+        ]
+        for (copies, archivedAt) in cases {
+            for order in [copies, Array(copies.reversed())] {
+                #expect(try mergedArchive(of: order) == archivedAt)
+            }
+        }
+    }
+
+    private struct TiedProgressCopy {
+        let archivedAt: Date?
+        let dedupeUUID: String
+    }
+
+    /// Merges the copies, in the order given, into one survivor and returns
+    /// its archive.
+    private func mergedArchive(of copies: [TiedProgressCopy]) throws -> Date? {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let records = copies.map { copy in
+            EpisodeProgressRecord(
+                episodeID: "tied",
+                podcastID: Self.feedURL,
+                position: 30,
+                duration: 120,
+                archivedAt: copy.archivedAt,
+                updatedAt: Self.clearInstant,
+                dedupeUUID: copy.dedupeUUID
+            )
+        }
+        for record in records {
+            context.insert(record)
+        }
+        try context.save()
+
+        var result = SyncRepairResult()
+        SyncDuplicateRepairer.mergeProgressGroup(
+            records,
+            key: SyncDuplicateRepairer.EpisodeKey(canonicalFeedURL: Self.feedURL, episodeID: "tied"),
+            modelContext: context,
+            result: &result
+        )
+        try context.save()
+
+        let survivors = try context.fetch(FetchDescriptor<EpisodeProgressRecord>())
+        #expect(survivors.count == 1)
+        #expect(survivors.first?.dedupeUUID.isEmpty == false)
+        return survivors.first?.archivedAt
+    }
+
+    /// Clear Progress tombstones the episode; an archive written before the
+    /// clear goes with it, and one written after it survives.
+    @Test("An episode tombstone shadows an older archive and keeps a newer one")
+    func episodeTombstoneShadowsAnOlderArchive() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        let beforeClear = Self.clearInstant.addingTimeInterval(-10)
+        let afterClear = Self.clearInstant.addingTimeInterval(10)
+        for episodeID in ["archived-before-clear", "archived-after-clear"] {
+            context.insert(
+                SyncTombstoneRecord(
+                    scope: .episodeProgress,
+                    feedURL: Self.feedURL,
+                    episodeID: episodeID,
+                    deletedAt: Self.clearInstant
+                )
+            )
+        }
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "archived-before-clear",
+                podcastID: Self.feedURL,
+                archivedAt: beforeClear,
+                updatedAt: beforeClear
+            )
+        )
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: "archived-after-clear",
+                podcastID: Self.feedURL,
+                archivedAt: afterClear,
+                updatedAt: afterClear
+            )
+        )
+        try context.save()
+
+        let result = try await store.repairSyncDuplicates(modelContext: context)
+
+        let progress = try context.fetch(FetchDescriptor<EpisodeProgressRecord>())
+        #expect(progress.map(\.episodeID) == ["archived-after-clear"])
+        #expect(progress.first?.archivedAt == afterClear)
+        #expect(result.tombstonedProgressRecordsDeleted == 1)
+        #expect(store.archivedEpisodeIDs == ["archived-after-clear"])
+    }
+
     @Test("Repair credits the arbiter only when it changes the store")
     func repairCreditsTheArbiterOnlyWhenItChangesTheStore() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

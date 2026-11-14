@@ -10,12 +10,16 @@ struct LibraryCollectionsHeader: View {
     let playlistCount: Int
     let upNextCount: Int
     let notesCount: Int?
+    let onOpenPlaylists: () -> Void
     let onOpenUpNext: () -> Void
     let onOpenNotes: () -> Void
 
     var body: some View {
+        // In the Library list these rows share one list row, so each is a
+        // button. A link there is the row's selection instead: the row fires
+        // every link in it, and a touch beside a button goes to the button.
         VStack(spacing: 0) {
-            TwoPaneRootLink(route: .playlists, selectionStyle: .inline) {
+            Button(action: onOpenPlaylists) {
                 LibraryCollectionRow(
                     title: "Playlists",
                     systemImage: "music.note.list",
@@ -25,7 +29,7 @@ struct LibraryCollectionsHeader: View {
                 )
             }
             .buttonStyle(.plain)
-            .navigationLinkIndicatorVisibility(.hidden)
+            .twoPaneRootSelection(.playlists, style: .inline)
             .accessibilityValue(Self.accessibilityValue(for: playlistCount))
             .accessibilityIdentifier("Library Playlists Row")
 
@@ -49,9 +53,6 @@ struct LibraryCollectionsHeader: View {
                 .padding(.leading, iconWidth + 14)
 
             if let notesCount {
-                // In the Library list these rows share one list row, which a
-                // second NavigationLink would also activate: tapping Notes
-                // pushed Playlists beneath it. A button pushes Notes alone.
                 Button(action: onOpenNotes) {
                     LibraryCollectionRow(
                         title: "Notes",
@@ -80,7 +81,14 @@ struct LibraryCollectionsHeader: View {
 #Preview {
     NavigationStack {
         ScrollView {
-            LibraryCollectionsHeader(playlistCount: 3, upNextCount: 0, notesCount: 2, onOpenUpNext: {}, onOpenNotes: {})
+            LibraryCollectionsHeader(
+                playlistCount: 3,
+                upNextCount: 0,
+                notesCount: 2,
+                onOpenPlaylists: {},
+                onOpenUpNext: {},
+                onOpenNotes: {}
+            )
                 .padding(.horizontal, 20)
         }
         .navigationTitle("Library")

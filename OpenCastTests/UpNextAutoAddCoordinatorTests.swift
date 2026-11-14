@@ -223,6 +223,28 @@ struct UpNextAutoAddCoordinatorTests {
         #expect(fixture.watermark() == Fixture.release(6))
     }
 
+    @Test("An archived release is skipped, and the watermark still moves past it")
+    func archivedReleaseIsSkippedForGood() async throws {
+        let fixture = try await Fixture.make()
+        try await fixture.publish(releaseDays: [1])
+        #expect(fixture.coordinator.setPosition(.bottom, forPodcastID: Fixture.topFeedURL, modelContext: fixture.context))
+        try await fixture.publish(releaseDays: [1, 2, 3])
+        let archived = try fixture.episode(1)
+        #expect(fixture.library.archive(archived, modelContext: fixture.context))
+
+        fixture.coordinator.runPass(modelContext: fixture.context)
+
+        #expect(fixture.queuedIDs == [fixture.id(2)])
+        #expect(fixture.watermark() == Fixture.release(3))
+
+        // Skipped stays skipped once it is unarchived.
+        #expect(fixture.library.unarchive(archived, modelContext: fixture.context))
+        #expect(fixture.upNextQueue.clear(modelContext: fixture.context))
+        fixture.coordinator.runPass(modelContext: fixture.context)
+
+        #expect(fixture.queuedIDs.isEmpty)
+    }
+
     @Test("Played, already queued, playing and audio-less releases are skipped, and the watermark still moves past them")
     func ineligibleReleasesAreSkippedForGood() async throws {
         let fixture = try await Fixture.make()

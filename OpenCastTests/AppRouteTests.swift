@@ -19,6 +19,22 @@ struct AppRouteTests {
         #expect(!plain.opensSameScreen(as: otherShow))
     }
 
+    @Test("An override lists every episode by archive state unless the Inbox view it came from says otherwise")
+    func overrideArchiveScopeDefaultsToAllAndTakesPartInEquality() {
+        let unset = PodcastEpisodeListOverride(filter: .unplayed, hidesQueuedEpisodes: true)
+        let hiding = PodcastEpisodeListOverride(filter: .unplayed, hidesQueuedEpisodes: true, archiveScope: .hidingArchived)
+        let only = PodcastEpisodeListOverride(filter: .unplayed, hidesQueuedEpisodes: true, archiveScope: .onlyArchived)
+
+        #expect(unset.archiveScope == .all)
+        #expect(unset == PodcastEpisodeListOverride(filter: .unplayed, hidesQueuedEpisodes: true, archiveScope: .all))
+        #expect(hiding.archiveScope == .hidingArchived)
+        #expect(only.archiveScope == .onlyArchived)
+        #expect(unset != hiding)
+        #expect(unset != only)
+        #expect(hiding != only)
+        #expect(Set([unset, hiding, only, unset]).count == 3)
+    }
+
     @Test("Other routes are the same screen only when equal")
     func otherRoutesCompareByEquality() {
         #expect(AppRoute.episodeDetail(id: "a").opensSameScreen(as: .episodeDetail(id: "a")))

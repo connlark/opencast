@@ -224,6 +224,57 @@ struct EpisodeIdentityReconciliationTests {
         #expect(progress.first?.dedupeUUID == "aaaaaaaa")
     }
 
+    @Test("Migration carries the newest copy's archive onto the successor's kept row")
+    func migrationCarriesTheNewestArchive() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let v1 = makeSnapshot(episodes: [
+            makeEpisode(guid: nil, audio: "https://example.com/audio/one.mp3", title: "One", date: Self.dateOne)
+        ])
+        let v2 = makeSnapshot(episodes: [
+            makeEpisode(guid: "guid-one", audio: "https://example.com/audio/one.mp3", title: "One", date: Self.dateOne)
+        ])
+        let oldID = v1.episodes[0].id.rawValue
+        let newID = v2.episodes[0].id.rawValue
+        let archivedAt = Date(timeIntervalSince1970: 1_750_000_900)
+        let store = LibraryStore(
+            feedService: SequencedStubFeedService(snapshots: [Self.feedURL: [v1, v2]]),
+            localCache: SQLiteLocalLibraryCacheStore.inMemory()
+        )
+        try await store.subscribe(to: Self.feedURL, modelContext: context)
+        // The old ID's copy was archived last; the successor's copy keeps
+        // its identity.
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: oldID,
+                podcastID: Self.feedURL,
+                position: 100,
+                archivedAt: archivedAt,
+                updatedAt: archivedAt,
+                dedupeUUID: "bbbbbbbb"
+            )
+        )
+        context.insert(
+            EpisodeProgressRecord(
+                episodeID: newID,
+                podcastID: Self.feedURL,
+                position: 250,
+                updatedAt: Date(timeIntervalSince1970: 1_750_000_500),
+                dedupeUUID: "aaaaaaaa"
+            )
+        )
+        try context.save()
+
+        await store.refresh(feedURL: Self.feedURL, modelContext: context)
+
+        let progress = try context.fetch(FetchDescriptor<EpisodeProgressRecord>())
+        #expect(progress.count == 1)
+        #expect(progress.first?.episodeID == newID)
+        #expect(progress.first?.dedupeUUID == "aaaaaaaa")
+        #expect(progress.first?.archivedAt == archivedAt)
+        #expect(store.archivedEpisodeIDs == [newID])
+    }
+
     @Test("Migrated progress survives the sync repairer's tombstone pass")
     func migratedProgressSurvivesRepair() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

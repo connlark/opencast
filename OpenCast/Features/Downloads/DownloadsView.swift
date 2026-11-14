@@ -20,6 +20,7 @@ struct DownloadsView: View {
     @State private var collapsedShowIDs: Set<String> = []
 
     let onOpenEpisode: (String) -> Void
+    let onOpenDownloadSettings: () -> Void
 
     var body: some View {
         let allDownloads = DownloadsListModel.make(
@@ -136,7 +137,7 @@ struct DownloadsView: View {
                     }
                 }
             } else if appModel.downloads.records.isEmpty {
-                DownloadsEmptyStateView()
+                DownloadsEmptyStateView(onOpenDownloadSettings: onOpenDownloadSettings)
             } else if showsUnplayedOnly && model.downloading.isEmpty && model.failed.isEmpty {
                 ContentUnavailableView(
                     "No Unplayed Downloads",
