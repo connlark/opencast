@@ -60,8 +60,6 @@ struct PodcastEpisodeSwipeActionsModifier: ViewModifier {
     }
 
     private func enqueueNext() {
-        appModel.performUpNextQueueMutation {
-            appModel.upNextQueue.enqueueNext(episode, modelContext: modelContext)
-        }
+        appModel.enqueueInUpNext(episode, at: .next, modelContext: modelContext)
     }
 }

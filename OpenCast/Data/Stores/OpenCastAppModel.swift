@@ -1162,11 +1162,37 @@ final class OpenCastAppModel {
         sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
     }
 
-    func performUpNextQueueMutation(_ mutation: () -> Bool) {
+    @discardableResult
+    func performUpNextQueueMutation(_ mutation: () -> Bool) -> Bool {
         guard !mutation() else {
-            return
+            return true
         }
         lastUpNextError = upNextQueue.consumeLastErrorMessage()
+        return false
+    }
+
+    /// Play Next / Play Last for one episode. The episode in the player is
+    /// refused here, not only by a disabled button: a menu drawn before it
+    /// became current can still fire. A queued episode moves.
+    /// Returns `true` when the store saved it at the asked end, even if it was
+    /// already there; `false` for the episode in the player or a failed save.
+    @discardableResult
+    func enqueueInUpNext(
+        _ episode: EpisodeListItemSnapshot,
+        at position: UpNextQueuePosition,
+        modelContext: ModelContext
+    ) -> Bool {
+        guard !isCurrentEpisode(episode) else {
+            return false
+        }
+        return performUpNextQueueMutation {
+            switch position {
+            case .next:
+                upNextQueue.enqueueNext(episode, modelContext: modelContext)
+            case .last:
+                upNextQueue.enqueueLast(episode, modelContext: modelContext)
+            }
+        }
     }
 
     /// Generic so `create` and `add` still hand back their summary and count.
@@ -2431,6 +2457,15 @@ final class OpenCastAppModel {
         case .paused, .failed, .missing:
             return .available
         }
+    }
+
+    /// Both reads are observed, so a view that asks in `body` follows
+    /// playback and the queue.
+    func upNextMenuState(for episode: EpisodeListItemSnapshot) -> EpisodeUpNextMenuState {
+        EpisodeUpNextMenuState(
+            isCurrentEpisode: isCurrentEpisode(episode),
+            isQueued: upNextQueue.contains(episodeID: episode.episodeID)
+        )
     }
 
     /// One continued-processing card per app: while the transcript

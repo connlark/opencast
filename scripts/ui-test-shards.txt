@@ -9,7 +9,7 @@
 # Balanced by measured per-test wall-clock (log 'passed (N seconds)' lines), NOT the
 # .xcresult duration field — that reports 0.0s for screenshot-matrix tests. Regenerate
 # with scripts/gen-ui-test-shards.py <run-dir> after a fresh run.
-# Current assignments: shard1 85 tests | shard2 86 tests | serial 6 tests | exclude 15 tests
+# Current assignments: shard1 86 tests | shard2 87 tests | serial 6 tests | exclude 15 tests
 # Timing estimates are omitted until these scenarios are remeasured.
 
 # --- shard1 ---
@@ -20,6 +20,7 @@ shard1 OpenCastUITests/OpenCastUITests/testAddPodcastRSSClipboardPrefillScreensh
 shard1 OpenCastUITests/OpenCastUITests/testCloudUnavailableDetectPassOffersOneTapOnDeviceFallback
 shard1 OpenCastUITests/OpenCastUITests/testEpisodeMenuShowsRemoteSurfacesOnFreshLaunchWithoutSettings
 shard1 OpenCastUITests/OpenCastUITests/testSeededEpisodeActionsShareEpisodeOpensActivitySheet
+shard1 OpenCastUITests/OpenCastUITests/testEpisodeActionsPlayNextQueuesTheEpisodeButNotTheCurrentOne
 shard1 OpenCastUITests/OpenCastUITests/testSeededShareMenusHoldStillAndShareWhilePlaying
 shard1 OpenCastUITests/OpenCastUITests/testFirstTimeOnboardingNotificationPageDismissesOnboarding
 shard1 OpenCastUITests/OpenCastUITests/testSlowICloudAccountCheckDoesNotHoldOnboarding
@@ -107,6 +108,7 @@ shard1 OpenCastUITests/OpenCastUITests/testEmptyLibraryStopsWaitingForAnICloudAc
 shard1 OpenCastUITests/OpenCastUITests/testSeededDetachedAdAnalysisOffersDetectAdsAgainScreenshots
 shard2 OpenCastUITests/OpenCastUITests/testDetectAdsFirstTapPromptsForModeAndRemembersOnDeviceChoice
 shard2 OpenCastUITests/OpenCastUITests/testEpisodeActionsMarkPlayedAndClearProgress
+shard2 OpenCastUITests/OpenCastUITests/testEpisodeAddToUpNextQueuesOnTapAndOpensItsMenuOnceQueued
 shard2 OpenCastUITests/OpenCastUITests/testEpisodeDetailSupportsAccessibilityDynamicType
 shard2 OpenCastUITests/OpenCastUITests/testFirstLaunchOnboardingScreenshotsOPMLSkipAndPodcastSetup
 shard2 OpenCastUITests/OpenCastUITests/testForcedAppleSpeechDiagnosticsSectionScreenshots

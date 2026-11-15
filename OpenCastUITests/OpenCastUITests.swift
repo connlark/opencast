@@ -5562,6 +5562,7 @@ final class OpenCastUITests: XCTestCase {
         assertExists(episodePlaybackControl(in: app), named: "episode playback control at AX size")
         assertExists(app.buttons["Download"], named: "Download button at AX size")
         assertExists(app.buttons["Make Ad-Free"], named: "Make Ad-Free button at AX size")
+        assertExists(episodeUpNextControl(in: app), named: "Add to Up Next toolbar button at AX size")
         let showLink = app.buttons["UI Test Show"]
         assertHittable(showLink, named: "episode show link at AX size")
         XCTAssertGreaterThanOrEqual(showLink.frame.width, 44)
@@ -5691,6 +5692,153 @@ final class OpenCastUITests: XCTestCase {
             named: "Played chip after Mark Played",
             timeout: 10
         )
+    }
+
+    /// The Inbox and Up Next share row identifiers, so the queue is read from
+    /// the Up Next accessory, which names its head and counts the queue. With
+    /// another episode queued first, Play Last leaves it at the head and Play
+    /// Next takes the head. The page of the episode in the player offers the
+    /// pair disabled.
+    @MainActor
+    func testEpisodeActionsPlayNextQueuesTheEpisodeButNotTheCurrentOne() throws {
+        let app = makeSeededApp(extraFeedCount: 1)
+        // A shareable episode, so the menu shows Share above the pair. No
+        // episode plays, so the unreachable https URL is harmless.
+        app.launchEnvironment["OPENCAST_SEED_AUDIO_FILE_URL"] = "https://example.com/ui-test-episode.mp3"
+        app.launch()
+        openInbox(in: app)
+        let upNextAccessory = app.buttons["Open Up Next"]
+        assertDoesNotExist(upNextAccessory, named: "Up Next accessory before anything is queued")
+        tapTrailingSwipeAction(
+            "Play Next",
+            on: seededExtraEpisodeRow(in: app, index: 1),
+            named: "extra Inbox episode",
+            in: app
+        )
+        assertHittable(upNextAccessory, named: "Up Next accessory after the row's Play Next")
+        assertValue(
+            of: upNextAccessory,
+            becomes: "Extra Deterministic Episode 1, UI Test Extra Show 1; 1 episode queued",
+            named: "Up Next accessory after the row's Play Next"
+        )
+
+        openEpisodeDetailFromContextMenu(seededEpisodeRow(in: app), in: app, named: "seeded inbox episode")
+        let actions = app.buttons["Episode Actions"].firstMatch
+        assertHittable(actions, named: "Episode Actions menu")
+        actions.tap()
+        let playNext = app.buttons["Play Next"].firstMatch
+        let playLast = app.buttons["Play Last"].firstMatch
+        assertHittable(playNext, named: "Episode Actions Play Next")
+        assertHittable(playLast, named: "Episode Actions Play Last")
+        XCTAssertTrue(playNext.isEnabled, "Play Next should be enabled for an episode that is not in the player")
+        XCTAssertTrue(playLast.isEnabled, "Play Last should be enabled for an episode that is not in the player")
+        attachSmokeScreenshot(named: "episode_actions_up_next_pair")
+        playLast.tap()
+
+        assertValue(
+            of: upNextAccessory,
+            becomes: "Extra Deterministic Episode 1, UI Test Extra Show 1; 2 episodes queued",
+            named: "Up Next accessory after Play Last"
+        )
+
+        assertHittable(actions, named: "Episode Actions menu after Play Last")
+        actions.tap()
+        assertHittable(playNext, named: "Episode Actions Play Next after Play Last")
+        playNext.tap()
+
+        assertValue(
+            of: upNextAccessory,
+            becomes: "Deterministic UI Episode, UI Test Show; 2 episodes queued",
+            named: "Up Next accessory after Play Next"
+        )
+
+        let currentApp = makeSeededApp()
+        currentApp.launch()
+        openSeededEpisodeDetail(in: currentApp)
+        let currentActions = currentApp.buttons["Episode Actions"].firstMatch
+        assertHittable(currentActions, named: "Episode Actions menu of the episode in the player")
+        currentActions.tap()
+        for title in ["Play Next", "Play Last"] {
+            let action = currentApp.buttons[title].firstMatch
+            assertExists(action, named: "\(title) for the episode in the player")
+            XCTAssertFalse(action.isEnabled, "\(title) should be disabled for the episode in the player")
+        }
+        attachSmokeScreenshot(named: "episode_actions_up_next_pair_current_episode")
+    }
+
+    /// The page's Add to Up Next toolbar control. With another episode queued
+    /// first, a tap that takes the head is Play Next, with no menu; touch and
+    /// hold offers the pair alone and queues nothing until one is chosen. Once
+    /// queued, a tap opens the menu with Remove from Up Next. The queue is read
+    /// from the Up Next accessory, as above, and the control's state from its
+    /// label: a toolbar item drops `accessibilityValue`. The page of the
+    /// episode in the player shows the control disabled.
+    @MainActor
+    func testEpisodeAddToUpNextQueuesOnTapAndOpensItsMenuOnceQueued() throws {
+        let app = makeSeededApp(extraFeedCount: 1)
+        app.launch()
+        openInbox(in: app)
+        let upNextAccessory = app.buttons["Open Up Next"]
+        let otherEpisodeQueued = "Extra Deterministic Episode 1, UI Test Extra Show 1; 1 episode queued"
+        tapTrailingSwipeAction(
+            "Play Next",
+            on: seededExtraEpisodeRow(in: app, index: 1),
+            named: "extra Inbox episode",
+            in: app
+        )
+        assertValue(of: upNextAccessory, becomes: otherEpisodeQueued, named: "Up Next accessory after the row's Play Next")
+        openEpisodeDetailFromContextMenu(seededEpisodeRow(in: app), in: app, named: "seeded inbox episode")
+
+        let control = episodeUpNextControl(in: app)
+        assertHittable(control, named: "Add to Up Next")
+        XCTAssertEqual(control.label, "Add to Up Next")
+        XCTAssertTrue(control.isEnabled, "Add to Up Next should be enabled for an episode that is not in the player")
+        assertValue(of: upNextAccessory, becomes: otherEpisodeQueued, named: "Up Next accessory before Add to Up Next")
+        attachSmokeScreenshot(named: "episode_add_to_up_next_not_queued")
+
+        control.tap()
+        assertValue(
+            of: upNextAccessory,
+            becomes: "Deterministic UI Episode, UI Test Show; 2 episodes queued",
+            named: "Up Next accessory after the tap, which is Play Next"
+        )
+        assertLabel(of: control, becomes: "In Up Next", named: "the control after the tap")
+        assertDoesNotExist(app.buttons["Play Last"].firstMatch, named: "a menu after the tap that queues")
+        attachSmokeScreenshot(named: "episode_add_to_up_next_queued")
+
+        control.tap()
+        let playNext = app.buttons["Play Next"].firstMatch
+        let playLast = app.buttons["Play Last"].firstMatch
+        let remove = app.buttons["Remove from Up Next"].firstMatch
+        assertHittable(playNext, named: "the queued menu's Play Next")
+        assertHittable(playLast, named: "the queued menu's Play Last")
+        assertHittable(remove, named: "the queued menu's Remove from Up Next")
+        attachSmokeScreenshot(named: "episode_add_to_up_next_queued_menu")
+        remove.tap()
+        assertValue(of: upNextAccessory, becomes: otherEpisodeQueued, named: "Up Next accessory after Remove from Up Next")
+        assertLabel(of: control, becomes: "Add to Up Next", named: "the control after Remove from Up Next")
+
+        control.press(forDuration: 1.2)
+        assertHittable(playNext, named: "the held menu's Play Next")
+        assertHittable(playLast, named: "the held menu's Play Last")
+        assertDoesNotExist(remove, named: "Remove from Up Next in the held menu")
+        assertValue(of: upNextAccessory, becomes: otherEpisodeQueued, named: "Up Next accessory while the held menu is open")
+        playLast.tap()
+        assertValue(
+            of: upNextAccessory,
+            becomes: "Extra Deterministic Episode 1, UI Test Extra Show 1; 2 episodes queued",
+            named: "Up Next accessory after the held Play Last"
+        )
+        assertLabel(of: control, becomes: "In Up Next", named: "the control after the held Play Last")
+
+        let currentApp = makeSeededApp()
+        currentApp.launch()
+        openSeededEpisodeDetail(in: currentApp)
+        let currentControl = episodeUpNextControl(in: currentApp)
+        assertExists(currentControl, named: "Add to Up Next for the episode in the player")
+        XCTAssertEqual(currentControl.label, "Add to Up Next")
+        XCTAssertFalse(currentControl.isEnabled, "Add to Up Next should be disabled for the episode in the player")
+        attachSmokeScreenshot(named: "episode_add_to_up_next_current_episode")
     }
 
     @MainActor
@@ -9487,6 +9635,11 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    private func episodeUpNextControl(in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(identifier: "Episode Up Next Control").firstMatch
+    }
+
+    @MainActor
     private func liveAdAnalysisEpisodeRow(in app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(identifier: Self.liveAdAnalysisEpisodeRowIdentifier).firstMatch
     }
@@ -11608,6 +11761,23 @@ final class OpenCastUITests: XCTestCase {
         XCTAssertTrue(
             waitUntil(timeout: timeout) { (element.value as? String) == expected },
             "\(name) value should read \"\(expected)\"; got \"\(element.value as? String ?? "nil")\"",
+            file: file,
+            line: line
+        )
+    }
+
+    @MainActor
+    private func assertLabel(
+        of element: XCUIElement,
+        becomes expected: String,
+        named name: String,
+        timeout: TimeInterval = 5,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertTrue(
+            waitUntil(timeout: timeout) { element.exists && element.label == expected },
+            "\(name) label should read \"\(expected)\"; got \"\(element.exists ? element.label : "no element")\"",
             file: file,
             line: line
         )

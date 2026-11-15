@@ -47,7 +47,7 @@ struct EpisodeActionBar: View {
         .overlay(alignment: .topTrailing) {
             if detectAdsState == .detected {
                 Image(systemName: "checkmark")
-                    .font(.caption.bold())
+                    .font(.system(size: completionBadgeGlyphSize, weight: .bold))
                     .foregroundStyle(.white)
                     .frame(width: resolvedCompletionBadgeSize, height: resolvedCompletionBadgeSize)
                     .background(.green, in: .circle)
@@ -149,6 +149,13 @@ struct EpisodeActionBar: View {
         completionBadgeSize.clamped(to: 18...(dynamicTypeSize.isAccessibilitySize ? 22 : 20))
     }
 
+    /// Follows the clamped disc, not Dynamic Type, so the check stays inside
+    /// it at accessibility sizes; 0.6 is caption's 12 pt on the 20 pt disc
+    /// at the default size.
+    private var completionBadgeGlyphSize: CGFloat {
+        resolvedCompletionBadgeSize * 0.6
+    }
+
     private var completionBadgeTopInset: CGFloat {
         max((resolvedPlayButtonSize - resolvedSideButtonSize) / 2, 0)
     }
@@ -195,6 +202,18 @@ struct EpisodeActionBar: View {
     EpisodeActionBar(
         downloadRecord: nil,
         detectAdsState: .detect,
+        showsPauseButton: false,
+        onTogglePlayback: {}, onDownload: {}, onResumeDownload: {},
+        onCancelDownload: {}, onDeleteDownload: {}, onMakeAdFree: {}
+    )
+    .padding()
+    .dynamicTypeSize(.accessibility5)
+}
+
+#Preview("AX5 Ads Detected") {
+    EpisodeActionBar(
+        downloadRecord: nil,
+        detectAdsState: .detected,
         showsPauseButton: false,
         onTogglePlayback: {}, onDownload: {}, onResumeDownload: {},
         onCancelDownload: {}, onDeleteDownload: {}, onMakeAdFree: {}

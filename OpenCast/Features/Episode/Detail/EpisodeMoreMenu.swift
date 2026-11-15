@@ -1,9 +1,9 @@
 import SwiftData
 import SwiftUI
 
-/// The episode detail toolbar's "Episode Actions" menu: progress actions plus
-/// the solo download/transcript/ad-analysis steps the one-tap pipeline
-/// otherwise automates.
+/// The episode detail toolbar's "Episode Actions" menu: Play Next / Play
+/// Last, progress actions, and the solo download/transcript/ad-analysis steps
+/// the one-tap pipeline otherwise automates.
 struct EpisodeMoreMenu: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
@@ -29,6 +29,13 @@ struct EpisodeMoreMenu: View {
         Menu {
             Section {
                 EpisodeShareMenu(episode: episode)
+            }
+            Section {
+                EpisodeUpNextMenuButtons(
+                    state: appModel.upNextMenuState(for: episode),
+                    onPlayNext: enqueueNext,
+                    onPlayLast: enqueueLast
+                )
             }
             progressActions
             Button("Add to Playlist…", systemImage: "music.note.list", action: addToPlaylist)
@@ -161,6 +168,14 @@ struct EpisodeMoreMenu: View {
         if appModel.adAnalyses.record(for: episode.episodeID) != nil {
             Button("Delete Ad Analysis", systemImage: "trash", role: .destructive, action: deleteAdAnalysis)
         }
+    }
+
+    private func enqueueNext() {
+        appModel.enqueueInUpNext(episode, at: .next, modelContext: modelContext)
+    }
+
+    private func enqueueLast() {
+        appModel.enqueueInUpNext(episode, at: .last, modelContext: modelContext)
     }
 
     private func markPlayed() {

@@ -37,6 +37,7 @@ struct EpisodeDetailView: View {
     @State private var episodeActionErrorTitle = "Couldn’t Complete Action"
     @State private var episodeActionErrorMessage = ""
     @State private var isShowingEpisodeActionError = false
+    @State private var upNextEnqueueFeedback = 0
 
     private var episode: EpisodeListItemSnapshot? {
         appModel.episodeSnapshot(for: episodeID)
@@ -81,6 +82,9 @@ struct EpisodeDetailView: View {
         .toolbar {
             if let episode, let progressSummary {
                 ToolbarItem(placement: .primaryAction) {
+                    EpisodeUpNextToolbarButton(episode: episode, onEnqueued: confirmUpNextEnqueue)
+                }
+                ToolbarItem(placement: .primaryAction) {
                     EpisodeMoreMenu(
                         episode: episode,
                         isPlayed: progressSummary.isCompleted,
@@ -96,6 +100,9 @@ struct EpisodeDetailView: View {
         }
         // Outside the toolbar so its Episode Actions menu reads the gate.
         .environment(noticeGate)
+        // On the page, not the toolbar button: the tap that queues replaces
+        // the button's branch, and a replaced view has no change to play.
+        .sensoryFeedback(.success, trigger: upNextEnqueueFeedback)
         .confirmationDialog(
             "Clear progress for \(episode?.title ?? "this episode")?",
             isPresented: $isConfirmingClearProgress,
@@ -593,6 +600,10 @@ struct EpisodeDetailView: View {
 
     private func confirmClearProgress() {
         isConfirmingClearProgress = true
+    }
+
+    private func confirmUpNextEnqueue() {
+        upNextEnqueueFeedback += 1
     }
 
     private func clearProgress() {

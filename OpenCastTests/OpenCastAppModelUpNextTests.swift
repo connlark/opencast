@@ -233,6 +233,135 @@ struct OpenCastAppModelUpNextTests {
         #expect(try fixture.context.fetch(FetchDescriptor<UpNextQueueItemRecord>()).isEmpty)
     }
 
+    @Test("Play Next and Play Last are offered for an episode neither in the player nor queued")
+    func upNextMenuStateOfAnIdleEpisode() async throws {
+        let fixture = try await makeFixture()
+        let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
+        let second = try #require(fixture.appModel.episodeSnapshot(for: "second"))
+        try playWithoutAutoplay(second, fixture: fixture)
+
+        let state = fixture.appModel.upNextMenuState(for: first)
+
+        #expect(state == EpisodeUpNextMenuState(isCurrentEpisode: false, isQueued: false))
+        #expect(state.canEnqueue)
+    }
+
+    @Test("Play Next and Play Last are refused for the episode in the player, paused or playing", arguments: [false, true])
+    func upNextMenuStateOfTheCurrentEpisode(isPlaying: Bool) async throws {
+        let audioURL = try writeSilentAudio(duration: 60)
+        defer { try? FileManager.default.removeItem(at: audioURL) }
+        let fixture = try await makeFixture(audioURLs: ["first": audioURL])
+        let playback = fixture.appModel.playback
+        defer { playback.unload() }
+        let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
+        try playWithoutAutoplay(first, fixture: fixture)
+        if isPlaying {
+            playback.play()
+            let reachedPlaying = try await waitUntilPlaying(playback)
+            try #require(reachedPlaying, "The local audio should reach .playing")
+        } else {
+            #expect(playback.state == .paused)
+        }
+
+        let state = fixture.appModel.upNextMenuState(for: first)
+
+        #expect(state == EpisodeUpNextMenuState(isCurrentEpisode: true, isQueued: false))
+        #expect(!state.canEnqueue)
+    }
+
+    /// Queueing a queued episode moves it, so the pair stays offered until
+    /// the episode starts, which takes it out of Up Next.
+    @Test("A queued episode keeps Play Next and Play Last until it becomes the current one")
+    func upNextMenuStateOfAQueuedEpisodeThatBecomesCurrent() async throws {
+        let fixture = try await makeFixture()
+        let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
+        #expect(fixture.appModel.upNextQueue.enqueueLast(first, modelContext: fixture.context))
+
+        let queued = fixture.appModel.upNextMenuState(for: first)
+        #expect(queued == EpisodeUpNextMenuState(isCurrentEpisode: false, isQueued: true))
+        #expect(queued.canEnqueue)
+
+        try playWithoutAutoplay(first, fixture: fixture)
+
+        let current = fixture.appModel.upNextMenuState(for: first)
+        #expect(current == EpisodeUpNextMenuState(isCurrentEpisode: true, isQueued: false))
+        #expect(!current.canEnqueue)
+    }
+
+    @Test("Play Next puts the episode at the top of Up Next and Play Last at the bottom")
+    func enqueueInUpNextAddsAtTheTopAndTheBottom() async throws {
+        let fixture = try await makeFixture()
+        let appModel = fixture.appModel
+        let first = try #require(appModel.episodeSnapshot(for: "first"))
+        let second = try #require(appModel.episodeSnapshot(for: "second"))
+        let third = try #require(appModel.episodeSnapshot(for: "third"))
+        #expect(appModel.upNextQueue.enqueueLast(second, modelContext: fixture.context))
+
+        #expect(appModel.enqueueInUpNext(first, at: .next, modelContext: fixture.context))
+        #expect(appModel.enqueueInUpNext(third, at: .last, modelContext: fixture.context))
+
+        #expect(appModel.upNextQueue.items.map(\.episodeID) == ["first", "second", "third"])
+        #expect(appModel.lastUpNextError == nil)
+    }
+
+    @Test("Play Next and Play Last move an episode already in Up Next without duplicating it")
+    func enqueueInUpNextMovesAQueuedEpisode() async throws {
+        let fixture = try await makeFixture()
+        let appModel = fixture.appModel
+        for id in ["first", "second", "third"] {
+            let episode = try #require(appModel.episodeSnapshot(for: id))
+            #expect(appModel.upNextQueue.enqueueLast(episode, modelContext: fixture.context))
+        }
+        let first = try #require(appModel.episodeSnapshot(for: "first"))
+        let third = try #require(appModel.episodeSnapshot(for: "third"))
+
+        #expect(appModel.enqueueInUpNext(third, at: .next, modelContext: fixture.context))
+        #expect(appModel.upNextQueue.items.map(\.episodeID) == ["third", "first", "second"])
+
+        #expect(appModel.enqueueInUpNext(first, at: .last, modelContext: fixture.context))
+        #expect(appModel.upNextQueue.items.map(\.episodeID) == ["third", "second", "first"])
+        #expect(try fixture.context.fetch(FetchDescriptor<UpNextQueueItemRecord>()).count == 3)
+        #expect(appModel.lastUpNextError == nil)
+    }
+
+    /// A menu drawn before its episode started can still fire.
+    @Test("Play Next and Play Last refuse the episode in the player and leave Up Next as it was")
+    func enqueueInUpNextRefusesTheCurrentEpisode() async throws {
+        let fixture = try await makeFixture()
+        let appModel = fixture.appModel
+        let first = try #require(appModel.episodeSnapshot(for: "first"))
+        let second = try #require(appModel.episodeSnapshot(for: "second"))
+        try playWithoutAutoplay(first, fixture: fixture)
+        #expect(appModel.upNextQueue.enqueueLast(second, modelContext: fixture.context))
+
+        #expect(!appModel.enqueueInUpNext(first, at: .next, modelContext: fixture.context))
+        #expect(!appModel.enqueueInUpNext(first, at: .last, modelContext: fixture.context))
+
+        #expect(appModel.upNextQueue.items.map(\.episodeID) == ["second"])
+        #expect(
+            try fixture.context.fetch(FetchDescriptor<UpNextQueueItemRecord>()).map(\.episodeID)
+                == ["second"]
+        )
+        #expect(appModel.playback.currentEpisode?.id.rawValue == "first")
+        #expect(appModel.lastUpNextError == nil)
+    }
+
+    @Test("A failed Play Next save reports false and surfaces the Up Next error")
+    func enqueueInUpNextSurfacesAFailedSave() async throws {
+        let fixture = try await makeFixture(
+            upNextQueue: UpNextQueueStore { _ in throw AppModelQueueSaveFailure() }
+        )
+        let first = try #require(fixture.appModel.episodeSnapshot(for: "first"))
+
+        #expect(!fixture.appModel.enqueueInUpNext(first, at: .next, modelContext: fixture.context))
+
+        #expect(fixture.appModel.upNextQueue.items.isEmpty)
+        #expect(
+            fixture.appModel.lastUpNextError
+                == "Unable to add the episode to Up Next: Simulated queue save failure"
+        )
+    }
+
     @Test("Mark Played dequeues the episode")
     func markPlayedDequeues() async throws {
         let fixture = try await makeFixture()

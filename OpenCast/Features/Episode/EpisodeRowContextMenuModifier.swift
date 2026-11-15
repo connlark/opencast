@@ -21,7 +21,6 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
             .adDetectionModeDialog(episode: $modePromptEpisode)
             .analysisKeyNotice(gate: noticeGate)
             .contextMenu {
-            let isCurrentlyPlaying = appModel.playback.currentEpisode?.id.rawValue == episode.episodeID
             Section {
                 EpisodeShareMenu(episode: episode)
             }
@@ -33,18 +32,11 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
                     Label("Go to Show", systemImage: "rectangle.stack")
                 }
             }
-            Button(
-                "Play Next",
-                systemImage: "text.line.first.and.arrowtriangle.forward",
-                action: enqueueNext
+            EpisodeUpNextMenuButtons(
+                state: appModel.upNextMenuState(for: episode),
+                onPlayNext: enqueueNext,
+                onPlayLast: enqueueLast
             )
-            .disabled(isCurrentlyPlaying)
-            Button(
-                "Play Last",
-                systemImage: "text.line.last.and.arrowtriangle.forward",
-                action: enqueueLast
-            )
-            .disabled(isCurrentlyPlaying)
             Button("Add to Playlist…", systemImage: "music.note.list", action: addToPlaylist)
             Button(
                 isPlayed ? "Mark Unplayed" : "Mark Played",
@@ -95,15 +87,11 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
     }
 
     private func enqueueNext() {
-        appModel.performUpNextQueueMutation {
-            appModel.upNextQueue.enqueueNext(episode, modelContext: modelContext)
-        }
+        appModel.enqueueInUpNext(episode, at: .next, modelContext: modelContext)
     }
 
     private func enqueueLast() {
-        appModel.performUpNextQueueMutation {
-            appModel.upNextQueue.enqueueLast(episode, modelContext: modelContext)
-        }
+        appModel.enqueueInUpNext(episode, at: .last, modelContext: modelContext)
     }
 
     private func addToPlaylist() {
