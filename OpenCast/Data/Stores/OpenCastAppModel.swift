@@ -576,6 +576,7 @@ final class OpenCastAppModel {
             transcriptionModels: transcriptionModels,
             cacheController: cacheController,
             siriMediaDiscovery: siriMediaDiscovery,
+            customSkipSoundFiles: playbackSettings.customSkipSoundFiles,
             appAttestSuspension: appAttestSuspension
         )
         self.unsubscribeSidecarCleanupOverride = unsubscribeSidecarCleanupOverride
@@ -3275,6 +3276,27 @@ final class OpenCastAppModel {
         )
     }
 
+    func loadCustomSkipSound(modelContext: ModelContext) {
+        playbackSettings.loadCustomSkipSound(modelContext: modelContext)
+    }
+
+    @discardableResult
+    func importCustomSkipSound(
+        from url: URL,
+        modelContext: ModelContext
+    ) async throws(CustomSkipSoundImportError) -> Bool {
+        try await playbackSettings.importCustomSkipSound(
+            from: url,
+            modelContext: modelContext,
+            playback: playback
+        )
+    }
+
+    @discardableResult
+    func removeCustomSkipSound(modelContext: ModelContext) -> Bool {
+        playbackSettings.removeCustomSkipSound(modelContext: modelContext, playback: playback)
+    }
+
     @discardableResult
     func setTapToPlayEnabled(
         _ isEnabled: Bool,
@@ -3360,6 +3382,10 @@ final class OpenCastAppModel {
         // the wipe deleted (DataNukeRunner.run names the same invariant).
         dismissNowPlayingAndDiscardFinishedPlayback()
         playback.unload()
+        // Also before the first suspension: a custom skip sound import that
+        // resumes after the row wipe must find this reset already counted,
+        // or it would save its preferences into the wiped store.
+        playbackSettings.resetAfterDataNuke()
         coreStoresHydrated = false
         hasLoadedLibrary = false
         lastPlaybackError = nil

@@ -23,6 +23,7 @@ final class DataNukeRunner {
     @ObservationIgnored private let cacheController: OpenCastCacheController
     @ObservationIgnored private let siriMediaDiscovery: SiriMediaDiscovery
     @ObservationIgnored private let transcriptRecaps: TranscriptRecapCache
+    @ObservationIgnored private let customSkipSoundFiles: CustomSkipSoundFiles
     /// Runs after the iCloud check and before any store is nuked.
     @ObservationIgnored var prepareRuntime: () async -> Void = {}
     /// Runs after the store nukes and before the row wipe.
@@ -42,6 +43,7 @@ final class DataNukeRunner {
         cacheController: OpenCastCacheController,
         siriMediaDiscovery: SiriMediaDiscovery,
         transcriptRecaps: TranscriptRecapCache = TranscriptRecapCache(),
+        customSkipSoundFiles: CustomSkipSoundFiles = CustomSkipSoundFiles(),
         appAttestSuspension: AppAttestSuspension = .shared
     ) {
         self.syncStatus = syncStatus
@@ -54,6 +56,7 @@ final class DataNukeRunner {
         self.cacheController = cacheController
         self.siriMediaDiscovery = siriMediaDiscovery
         self.transcriptRecaps = transcriptRecaps
+        self.customSkipSoundFiles = customSkipSoundFiles
         self.appAttestSuspension = appAttestSuspension
     }
 
@@ -97,6 +100,7 @@ final class DataNukeRunner {
             try await library.deleteAllLocalCache()
             try await cacheController.clearCachesNow()
             try transcriptRecaps.removeAll()
+            try customSkipSoundFiles.removeAll()
             completionID += 1
         } catch {
             appAttestSuspension.resume()

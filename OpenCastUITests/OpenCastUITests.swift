@@ -4339,6 +4339,16 @@ final class OpenCastUITests: XCTestCase {
         for id in ["rewind", "cassette", "guitar-riff"] {
             assertExists(app.buttons["skip-sound-option-\(id)"], named: "\(id) option")
         }
+        // The system file importer is not driven here; CustomSkipSoundTests
+        // covers the import itself.
+        let importRow = app.buttons["skip-sound-import"]
+        assertExists(importRow, named: "Add Sound row")
+        XCTAssertEqual(importRow.label, "Add Sound…", "With no sound of your own the import row should read Add Sound…")
+        assertDoesNotExist(app.buttons["skip-sound-option-custom"], named: "custom sound row with none imported")
+        assertDoesNotExist(
+            app.staticTexts["Your own sound plays at the volume it was recorded at."],
+            named: "custom sound footer with none imported"
+        )
         XCTAssertTrue(waitForSelection(of: noneOption), "None should start selected")
         vinylScratchOption.tap()
         XCTAssertTrue(waitForSelection(of: vinylScratchOption), "Vinyl Scratch should be selected after tapping it")

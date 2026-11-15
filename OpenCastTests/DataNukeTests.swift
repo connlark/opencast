@@ -137,6 +137,9 @@ struct DataNukeTests {
         )
         let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: fileStore.baseDirectory)
         let adAnalysisFileStore = EpisodeAdAnalysisFileStore(baseDirectory: fileStore.baseDirectory)
+        let customSkipSoundFiles = CustomSkipSoundFiles(
+            directory: fileStore.baseDirectory.appending(path: CustomSkipSoundFiles.directoryName, directoryHint: .isDirectory)
+        )
         let localCache = SQLiteLocalLibraryCacheStore.inMemory()
         let appModel = OpenCastAppModel(
             appAttestSuspension: AppAttestSuspension(),
@@ -148,6 +151,7 @@ struct DataNukeTests {
                 client: UnusedEpisodeAdAnalysisClient(),
                 fileStore: adAnalysisFileStore
             ),
+            playbackSettings: PlaybackSettingsStore(customSkipSoundFiles: customSkipSoundFiles),
             syncStatus: SyncStatusStore(
                 accountStatusProvider: SequencedCloudKitAccountStatusProvider(statuses: [.available])
             ),
@@ -162,6 +166,7 @@ struct DataNukeTests {
         try writeCacheFixture(in: cacheController.feedCacheDirectory, fileName: "feed.cache")
         try writeCacheFixture(in: cacheController.artworkCacheDirectory, fileName: "artwork.cache")
         try writeOrphanPartialDownload(fileStore: fileStore)
+        let customSkipSoundFileName = try seedChosenCustomSkipSound(files: customSkipSoundFiles, context: context)
 
         await appModel.library.load(modelContext: context)
         await appModel.downloads.load(modelContext: context)
@@ -187,6 +192,9 @@ struct DataNukeTests {
         #expect(!appModel.adAnalyses.records.isEmpty)
         #expect(FileManager.default.fileExists(atPath: transcriptFileStore.transcriptsDirectory.path))
         #expect(FileManager.default.fileExists(atPath: adAnalysisFileStore.analysesDirectory.path))
+        #expect(customSkipSoundFiles.fileExists(named: customSkipSoundFileName))
+        #expect(appModel.playbackSettings.autoSkipSound?.id == SkipSoundCatalog.customID)
+        #expect(appModel.playbackSettings.customSkipSound?.fileName == customSkipSoundFileName)
 
         try await appModel.nukeAllData(modelContext: context)
 
@@ -214,6 +222,22 @@ struct DataNukeTests {
         #expect(!FileManager.default.fileExists(atPath: fileStore.downloadsDirectory.path))
         #expect(!FileManager.default.fileExists(atPath: transcriptFileStore.transcriptsDirectory.path))
         #expect(!FileManager.default.fileExists(atPath: adAnalysisFileStore.analysesDirectory.path))
+        #expect(!FileManager.default.fileExists(atPath: customSkipSoundFiles.directory.path))
+        #expect(appModel.playbackSettings.autoSkipSound == nil)
+        #expect(appModel.playbackSettings.customSkipSound == nil)
+    }
+
+    /// The listener's own sound, chosen, as an import leaves it: the file and
+    /// its three preferences.
+    private func seedChosenCustomSkipSound(files: CustomSkipSoundFiles, context: ModelContext) throws -> String {
+        let fileName = "custom-\(UUID().uuidString).wav"
+        try FileManager.default.createDirectory(at: files.directory, withIntermediateDirectories: true)
+        try Data("custom sound".utf8).write(to: files.url(forFileName: fileName), options: .atomic)
+        context.insert(LocalPreferenceRecord(key: PlaybackSettingsStore.autoSkipSoundPreferenceKey, value: SkipSoundCatalog.customID))
+        context.insert(LocalPreferenceRecord(key: PlaybackSettingsStore.customSkipSoundFilePreferenceKey, value: fileName))
+        context.insert(LocalPreferenceRecord(key: PlaybackSettingsStore.customSkipSoundNamePreferenceKey, value: "Nuke Chime"))
+        try context.save()
+        return fileName
     }
 
     @Test("Unavailable iCloud aborts before deleting anything")

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-11-15T06:37:04Z",
+  "updatedAt": "2026-11-15T07:13:47Z",
   "topics": [
     {
       "id": "why-we-charge",
@@ -127,7 +127,7 @@
       "title": "Ad detection",
       "symbol": "forward.end",
       "summary": "Find promo and ad breaks on your device or in the cloud.",
-      "updatedAt": "2026-11-15T06:37:04Z",
+      "updatedAt": "2026-11-15T07:13:47Z",
       "related": [
         "credits",
         "transcription-engines",
@@ -156,7 +156,7 @@
         },
         {
           "type": "paragraph",
-          "text": "Automatic skips apply only when the downloaded audio matches the analyzed transcript, so a re-edited episode never skips at the wrong spot. From version 2026.11.3, **Skip Sound** in Settings › Ad Skipping can play one of a few short sounds when an ad is skipped while you are listening, so you can tell a skip from a glitch."
+          "text": "Automatic skips apply only when the downloaded audio matches the analyzed transcript, so a re-edited episode never skips at the wrong spot. From version 2026.11.3, **Skip Sound** in Settings › Ad Skipping can play one of a few short sounds, or one of your own up to 3 seconds long, when an ad is skipped while you are listening, so you can tell a skip from a glitch."
         }
       ]
     },

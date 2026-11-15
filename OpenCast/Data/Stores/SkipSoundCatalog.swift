@@ -11,10 +11,14 @@ enum SkipSoundCatalog {
         SkipSound(id: "guitar-riff", name: "Guitar Riff"),
     ]
 
+    /// The stored choice for the listener's own sound, which is not in
+    /// `sounds`: its file is in `CustomSkipSoundFiles`, not the bundle.
+    nonisolated static let customID = "custom"
+
     private static let fileExtension = "m4a"
 
-    /// Nil for an empty or unknown id, such as a sound a later build removed.
-    /// Reads no file.
+    /// Nil for an empty or unknown id, such as a sound a later build removed,
+    /// and for `customID`. Reads no file.
     static func sound(id: String) -> SkipSound? {
         sounds.first { $0.id == id }
     }

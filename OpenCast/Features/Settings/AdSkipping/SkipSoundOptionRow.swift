@@ -8,6 +8,7 @@ struct SkipSoundOptionRow: View {
     @Environment(\.modelContext) private var modelContext
 
     let sound: SkipSound?
+    let onChoose: () -> Void
 
     private var isSelected: Bool {
         appModel.playbackSettings.autoSkipSound == sound
@@ -33,6 +34,7 @@ struct SkipSoundOptionRow: View {
     }
 
     private func choose() {
+        onChoose()
         appModel.setAutoSkipSound(sound, modelContext: modelContext)
     }
 }
