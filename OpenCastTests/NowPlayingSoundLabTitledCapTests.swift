@@ -63,6 +63,7 @@ struct NowPlayingSoundLabTitledCapTests {
         arguments: [
             (title: "Skip Promos & Ads", phase: EpisodeAdFreePassPresentationPhase.idle),
             (title: "Skip Promos & Ads", phase: .unavailable),
+            (title: "Detect Ads Again", phase: .idle),
             (title: "Transcribe", phase: .idle),
             (title: "Transcribe Remotely", phase: .idle)
         ]
@@ -70,6 +71,18 @@ struct NowPlayingSoundLabTitledCapTests {
     func glyphlessStates(title: String, phase: EpisodeAdFreePassPresentationPhase) throws {
         let measured = Self.idealRowWidth(title: title, phase: phase)
         #expect(measured <= Layout.glyphActionRowFixedWidth + (try Self.titleWidth(title)), "\(title) row \(measured)")
+    }
+
+    @Test(
+        "A title that shows only without a glyph is measured as the glyph titles are, beside one, and as tightly",
+        arguments: ["Detect Ads Again"]
+    )
+    func glyphlessOnlyTitleWidth(title: String) throws {
+        let measured = Self.idealRowWidth(title: title, phase: .completed)
+        let derived = Layout.glyphActionRowFixedWidth + (try Self.titleWidth(title))
+        #expect(measured <= derived, "\(title) row \(measured)")
+        #expect(measured > derived - 1, "\(title) row \(measured)")
+        #expect(measured <= Layout.titledRowAreaCap, "\(title) row \(measured)")
     }
 
     @Test("Voice Boost's row fits the cap: the toggle's own threshold is no wider")

@@ -113,6 +113,11 @@ struct EpisodeDownloadFileStore: Sendable {
         return attributes[.size] as? Int64 ?? 0
     }
 
+    nonisolated func sizeAndModificationDate(at url: URL) throws -> (size: Int64, modificationDate: Date?) {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return (attributes[.size] as? Int64 ?? 0, attributes[.modificationDate] as? Date)
+    }
+
     @discardableResult
     nonisolated func moveCompletedDownload(from temporaryURL: URL, relativePath: String) throws -> URL {
         try prepareDownloadsDirectory()

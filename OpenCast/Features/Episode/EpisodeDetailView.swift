@@ -87,6 +87,7 @@ struct EpisodeDetailView: View {
                         isArchived: isArchived,
                         offersClearProgress: offersClearProgress(progressRecord),
                         onClearProgress: confirmClearProgress,
+                        onDetectAdsAgain: { noticeGate.run(appModel: appModel) { makeAdFree(episode) } },
                         onShowEpisodeDiagnostics: showEpisodeDiagnostics,
                         onActionError: { showEpisodeActionError($0) }
                     )
@@ -240,7 +241,8 @@ struct EpisodeDetailView: View {
                     downloadRecord: downloadRecord,
                     detectAdsState: EpisodeDetectAdsMenuState(
                         queueStatus: appModel.adFreePass.queueStatus(for: episode.episodeID),
-                        hasCurrentCompletedAnalysis: hasCurrentAnalysis
+                        hasCurrentCompletedAnalysis: hasCurrentAnalysis,
+                        isAnalysisAttached: appModel.isAdAnalysisAttached(for: episode.episodeID)
                     ),
                     showsPauseButton: showsPauseButton(for: episode),
                     onTogglePlayback: { togglePlayback(episode) },
@@ -282,7 +284,8 @@ struct EpisodeDetailView: View {
                     EpisodeAdSpanTimelineView(
                         duration: adSection.timelineDuration(forKey: adAnalysisKey, episode: episode),
                         zoneTiers: zoneTiers,
-                        isStale: isStale
+                        isStale: isStale,
+                        isDetached: !adSection.isAnalysisAttached(forKey: adAnalysisKey, episodeID: episode.episodeID)
                     )
                 }
 

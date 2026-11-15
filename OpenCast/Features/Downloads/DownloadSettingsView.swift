@@ -37,7 +37,7 @@ struct DownloadSettingsView: View {
                 Text("Storage")
             } footer: {
                 Text(
-                    "Keep Downloaded applies to every show without its own limit. When a show has more downloads than its limit, the oldest downloads are removed. \(DownloadSettingsCopy.keptDownloadsSentence)"
+                    "Keep Downloaded applies to every show without its own limit. When a show has more downloads than its limit, the oldest downloads are removed. \(DownloadSettingsCopy.keptDownloadsSentence) \(DownloadSettingsCopy.scannedEpisodesSentence)"
                 )
             }
 
@@ -71,7 +71,7 @@ struct DownloadSettingsView: View {
                         Button("Delete Downloads", role: .destructive, action: deleteAllDownloads)
                         Button("Cancel", role: .cancel) {}
                     } message: {
-                        Text("Downloaded files will be removed from this device. Subscriptions and listening progress are unchanged.")
+                        Text("Downloaded files will be removed from this device. Subscriptions and listening progress are unchanged. \(DownloadSettingsCopy.scannedEpisodesSentence)")
                     }
                 }
             } footer: {

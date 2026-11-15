@@ -231,6 +231,56 @@ final class DownloadStore {
         try commit(episodeID: record.episodeID, modelContext: modelContext, resort: true)
     }
 
+    /// The completed download's file as it is now, or nil while the record
+    /// is not completed or its file cannot be read. Taken before a caller
+    /// measures the file, it lets `adoptSourceHash` refuse a download that
+    /// was replaced while the measurement ran.
+    func completedFileStamp(of record: EpisodeDownloadRecord) -> EpisodeDownloadFileStamp? {
+        guard let fileURL = localFileURL(for: record),
+              let localRelativePath = record.localRelativePath,
+              let file = try? fileStore.sizeAndModificationDate(at: fileURL)
+        else {
+            return nil
+        }
+        return EpisodeDownloadFileStamp(
+            localRelativePath: localRelativePath,
+            completedAt: record.completedAt,
+            byteCount: file.size,
+            modificationDate: file.modificationDate
+        )
+    }
+
+    /// Gives an unhashed completed download the identity a caller computed
+    /// from its file, so it reads trusted (`completedSourceIdentity`). The
+    /// hash took a suspension to compute, so this writes only while the
+    /// record is still completed, still unhashed and still of `byteCount`
+    /// bytes, and its file is still the one `measuredFile` stamped before
+    /// the hash began: a replacement meanwhile, even of the same size, is
+    /// refused. Any other record is left as it is. Returns whether it wrote.
+    @discardableResult
+    func adoptSourceHash(
+        _ sha256: String,
+        byteCount: Int64,
+        measuredFile: EpisodeDownloadFileStamp,
+        for episodeID: String,
+        modelContext: ModelContext
+    ) throws -> Bool {
+        guard !sha256.isEmpty,
+              measuredFile.byteCount == byteCount,
+              let record = try fetchRecord(episodeID: episodeID, modelContext: modelContext),
+              record.state == .completed,
+              record.sourceFileSHA256.isEmpty,
+              record.bytesReceived == byteCount,
+              completedFileStamp(of: record) == measuredFile
+        else {
+            return false
+        }
+        record.sourceFileSHA256 = sha256
+        record.updatedAt = .now
+        try commit(episodeID: episodeID, modelContext: modelContext)
+        return true
+    }
+
     /// Returns whether the download is now in flight. A `false` leaves the
     /// reason in `lastErrorMessage(for:)`, so a bulk caller can report the
     /// failures that a later successful start would otherwise clear.
@@ -1510,13 +1560,18 @@ final class DownloadStore {
             case .markMissing:
                 guard isProbedCompletedRecord else { continue }
                 record.state = .missing
+                record.sourceFileSHA256 = ""
                 record.errorMessage = EpisodeDownloadError.missingDownloadedFile.localizedDescription
                 record.updatedAt = .now
                 changed = true
             case .refreshCompletedSize(let fileSize):
                 guard isProbedCompletedRecord else { continue }
                 if record.bytesReceived != fileSize {
+                    // The hash measured the bytes the old count describes;
+                    // kept, the corrected count would make the drifted file
+                    // read as trusted again.
                     record.bytesReceived = fileSize
+                    record.sourceFileSHA256 = ""
                     record.updatedAt = .now
                     changed = true
                 }
@@ -1525,7 +1580,9 @@ final class DownloadStore {
                 // The rename sits beside the record update; a death before
                 // the save leaves the record on a vanished path, which the
                 // next launch's sibling probe re-points. The SHA-256 covers
-                // content only, so it stays valid.
+                // content only, so a rename keeps it valid; a size the
+                // extension repair corrects means the content drifted since
+                // hashing, so the hash goes with the old count.
                 if fileStore.fileExists(relativePath: fromPath) {
                     do {
                         try fileStore.moveCompletedDownload(
@@ -1538,7 +1595,10 @@ final class DownloadStore {
                     }
                 }
                 record.localRelativePath = relativePath
-                record.bytesReceived = size
+                if record.bytesReceived != size {
+                    record.bytesReceived = size
+                    record.sourceFileSHA256 = ""
+                }
                 record.updatedAt = .now
                 claimedRelativePaths.append(relativePath)
                 changed = true

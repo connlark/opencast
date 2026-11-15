@@ -194,15 +194,13 @@ final class RemoteTranscriptionJobRunner {
 
             // The explicit local download runs concurrently with the server's
             // origin fetch; policy stays foreground/local-only.
-            let localFileURL = try await completedDownloadFileURL(
+            let download = try await trustedCompletedDownload(
                 episode: episode,
                 modelContext: modelContext
             )
+            let localFileURL = download.fileURL
             onEvent(.verifying)
-            let identity = try await localSourceIdentity(
-                episode: episode,
-                localFileURL: localFileURL
-            )
+            let identity = localSourceIdentity(of: download)
             _ = try await performLeg(.source, trail) {
                 try await api.reportSource(jobID: jobID, identity: identity)
             }
@@ -451,24 +449,24 @@ final class RemoteTranscriptionJobRunner {
         )
     }
 
-    private func completedDownloadFileURL(
+    /// The download this job reports and may upload, made trusted first: an
+    /// unhashed one adopts the hash computed here, so the transcript this
+    /// job delivers attaches to it; a missing or size-drifted file downloads
+    /// again, once, before any failure maps to `.downloadFailed`.
+    private func trustedCompletedDownload(
         episode: EpisodeListItemSnapshot,
         modelContext: ModelContext
-    ) async throws -> URL {
-        let record: EpisodeDownloadRecord
+    ) async throws -> TrustedCompletedDownload {
         do {
-            record = try await downloads.ensureCompletedDownload(
+            return try await TrustedCompletedDownload.ensure(
                 for: episode,
+                downloads: downloads,
                 modelContext: modelContext,
                 onWaitStarted: { try Task.checkCancellation() }
             )
         } catch is DownloadStore.CompletedDownloadError {
             throw RemoteTranscriptionJobRunError.downloadFailed
         }
-        guard let fileURL = downloads.localFileURL(for: record) else {
-            throw RemoteTranscriptionJobRunError.downloadFailed
-        }
-        return fileURL
     }
 
     /// Drives the exact-device upload session and cleans its part files on
@@ -494,20 +492,18 @@ final class RemoteTranscriptionJobRunner {
         }
     }
 
+    /// A download hashed for this run reports what was measured, its audio
+    /// duration included; one already trusted reports its persisted identity.
     private func localSourceIdentity(
-        episode: EpisodeListItemSnapshot,
-        localFileURL: URL
-    ) async throws -> OpenCastRemoteTranscriptionSourceIdentity {
-        if let persisted = downloads.completedSourceIdentity(for: episode.episodeID) {
-            return persisted
+        of download: TrustedCompletedDownload
+    ) -> OpenCastRemoteTranscriptionSourceIdentity {
+        guard let measured = download.measuredIdentity else {
+            return download.identity
         }
-        // Preexisting downloads from before hash persistence: compute the
-        // definitive identity from the completed file now.
-        let identity = try await EpisodeTranscriptionSourceIdentity.load(from: localFileURL)
         return OpenCastRemoteTranscriptionSourceIdentity(
-            sha256: identity.sha256,
-            byteCount: identity.byteCount,
-            durationSeconds: identity.duration
+            sha256: measured.sha256,
+            byteCount: measured.byteCount,
+            durationSeconds: measured.duration
         )
     }
 

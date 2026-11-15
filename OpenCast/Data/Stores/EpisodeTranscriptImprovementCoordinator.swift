@@ -159,7 +159,7 @@ final class EpisodeTranscriptImprovementCoordinator {
                 engine: .appleSpeech,
                 modelIdentity: identity,
                 languageCode: languageCode,
-                preservesPriorCompletedTranscript: true,
+                priorCompletedTranscript: .preserve,
                 localReservation: localReservation,
                 modelContext: modelContext
             ) else {

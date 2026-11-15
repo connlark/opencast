@@ -57,6 +57,31 @@ struct EpisodeAdSpanSummaryTests {
         #expect(summary.totalDuration == 0)
     }
 
+    @Test("The timeline caption: an outdated analysis wins over a detached one, a detached one over the summary")
+    func timelineCaptionPrecedence() throws {
+        let summary = try #require(EpisodeAdSpanSummary.make(zoneTiers: EpisodeAdAnalysisZoneTiers(
+            autoSkip: [PlaybackSkipZone(id: 1, startTime: 0, endTime: 45)],
+            displayOnly: []
+        )))
+        typealias Timeline = EpisodeAdSpanTimelineView
+
+        #expect(Timeline.caption(for: summary, isStale: true, isDetached: true) == Timeline.outdatedCaption)
+        #expect(Timeline.caption(for: summary, isStale: true, isDetached: false) == Timeline.outdatedCaption)
+        #expect(Timeline.caption(for: summary, isStale: false, isDetached: true) == Timeline.detachedCaption)
+        #expect(Timeline.caption(for: summary, isStale: false, isDetached: false) == "1 ad segment · 45s")
+        #expect(Timeline.caption(for: nil, isStale: false, isDetached: false) == Timeline.emptyCaption)
+        #expect(Timeline.detachedCaption == "Ad skips unavailable for this audio. Detect Ads Again to restore them.")
+    }
+
+    @Test("A detached analysis that found no ad spans keeps the caption it has attached: it lost no skips")
+    func detachedAnalysisWithoutSpansKeepsTheEmptyCaption() {
+        typealias Timeline = EpisodeAdSpanTimelineView
+        let summary = EpisodeAdSpanSummary.make(zoneTiers: .empty)
+
+        #expect(Timeline.caption(for: summary, isStale: false, isDetached: true) == Timeline.emptyCaption)
+        #expect(Timeline.caption(for: summary, isStale: true, isDetached: true) == Timeline.outdatedCaption)
+    }
+
     private func caption(totalSeconds: TimeInterval) -> String? {
         let tiers = EpisodeAdAnalysisZoneTiers(
             autoSkip: [PlaybackSkipZone(id: 1, startTime: 0, endTime: totalSeconds)],

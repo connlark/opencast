@@ -104,6 +104,7 @@ struct NowPlayingSoundLabTitledFitTests {
             (title: "Reanalyze", phase: EpisodeAdFreePassPresentationPhase.completed),
             (title: "Show Transcript", phase: .completed),
             (title: "Skip Promos & Ads", phase: .idle),
+            (title: "Detect Ads Again", phase: .idle),
             (title: "Transcribe", phase: .idle),
             (title: "Transcribe Remotely", phase: .idle)
         ]

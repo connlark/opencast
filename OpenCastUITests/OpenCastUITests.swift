@@ -45,6 +45,10 @@ final class OpenCastUITests: XCTestCase {
     private static let liveAdAnalysisResponsePathEnvironmentKey = "OPENCAST_SEED_LIVE_AD_ANALYSIS_RESPONSE_PATH"
     private static let adFreePassPresentationOverrideEnvironmentKey = "OPENCAST_UI_TEST_AD_FREE_PASS_STAGE"
     private static let seedAdAnalysisSpanAtStartEnvironmentKey = "OPENCAST_SEED_AD_ANALYSIS_SPAN_AT_START"
+    private static let seedDetachedAdAnalysisEnvironmentKey = "OPENCAST_SEED_DETACHED_AD_ANALYSIS"
+    private static let detachedAdAnalysisCaption = "Ad skips unavailable for this audio. Detect Ads Again to restore them."
+    private static let scannedEpisodesRemovalSentence =
+        "Removing a scanned episode’s audio turns off its automatic ad skips until it is scanned again."
     private static let seedUpNextAutoAddEnvironmentKey = "OPENCAST_SEED_UP_NEXT_AUTO_ADD"
     private static let seedUpNextAutoAddLimitEnvironmentKey = "OPENCAST_SEED_UP_NEXT_AUTO_ADD_LIMIT"
     private static let seedUpNextQueueIncludesExtraFeedsEnvironmentKey = "OPENCAST_SEED_UP_NEXT_QUEUE_INCLUDES_EXTRA_FEEDS"
@@ -5102,10 +5106,12 @@ final class OpenCastUITests: XCTestCase {
         openInbox(in: app)
         let liveEpisode = liveAdAnalysisEpisodeRow(in: app)
         scrollUntilExists(liveEpisode, in: app, maxSwipes: 3)
+        // The artifact seed saves a current analysis but no download.
         openEpisodeDetailFromContextMenu(
             liveEpisode,
             in: app,
-            named: "live Worker ad-analysis episode"
+            named: "live Worker ad-analysis episode",
+            detectAdsTitle: "Detect Ads Again"
         )
 
         let viewTranscriptButton = app.buttons["Read Transcript"]
@@ -5125,6 +5131,95 @@ final class OpenCastUITests: XCTestCase {
         scrollUntilVisible(cancerResearchRow, in: app, maxSwipes: 12)
         assertExists(cancerResearchRow, named: "live Worker transcript ad row with promo/ad span")
         attachSmokeScreenshot(named: "episode_transcript_live_worker_ad_analysis")
+    }
+
+    /// The analysis seed without its download, as after Remove Played: the
+    /// analysis is current, but nothing it marks can skip the audio that
+    /// plays.
+    @MainActor
+    func testSeededDetachedAdAnalysisOffersDetectAdsAgainScreenshots() throws {
+        let app = makeSeededApp(seedsCompletedAdAnalysis: true)
+        app.launchEnvironment[Self.seedDetachedAdAnalysisEnvironmentKey] = "1"
+        app.launch()
+
+        openSeededNowPlayingSoundLab(in: app)
+        let passButton = app.buttons.matching(identifier: "Skip Promos & Ads").firstMatch
+        assertExists(passButton, named: "Sound Lab ad-free row")
+        let detectAgainTitle = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "label == %@", "Detect Ads Again"),
+            object: passButton
+        )
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [detectAgainTitle], timeout: 10),
+            .completed,
+            "The Sound Lab row should offer Detect Ads Again, read \(passButton.label)"
+        )
+        XCTAssertTrue(passButton.isEnabled, "Detect Ads Again should be enabled in the Sound Lab")
+        assertValue(of: passButton, contains: Self.detachedAdAnalysisCaption, named: "Sound Lab ad-free row")
+        attachSmokeScreenshot(named: "detached_sound_lab_row")
+
+        closeNowPlayingSoundLab(in: app)
+        openCurrentEpisodeDetailFromNowPlaying(in: app)
+        let makeAdFree = app.buttons["Make Ad-Free"]
+        assertExists(makeAdFree, named: "Make Ad-Free")
+        assertValue(of: makeAdFree, becomes: "Ad skips unavailable", named: "Make Ad-Free", timeout: 10)
+        XCTAssertTrue(makeAdFree.isEnabled, "Make Ad-Free should stay enabled for a detached analysis")
+        assertExists(
+            elementContaining(label: Self.detachedAdAnalysisCaption, in: app),
+            named: "detached analysis caption",
+            timeout: 10
+        )
+        attachSmokeScreenshot(named: "detached_episode_page_caption")
+
+        let actions = app.buttons["Episode Actions"].firstMatch
+        assertHittable(actions, named: "Episode Actions menu")
+        actions.tap()
+        let detectAgain = app.buttons.matching(NSPredicate(
+            format: "label == %@ AND identifier != %@",
+            "Detect Ads Again",
+            "Skip Promos & Ads"
+        )).firstMatch
+        assertHittable(detectAgain, named: "Detect Ads Again in Episode Actions")
+        let detectOnly = app.buttons["Detect Ads Only"].firstMatch
+        assertExists(detectOnly, named: "Detect Ads Only in Episode Actions")
+        XCTAssertFalse(detectOnly.isEnabled, "Detect Ads Only should stay disabled over a current analysis")
+        attachSmokeScreenshot(named: "detached_episode_actions_detect_again")
+        dismissContextualMenu(in: app)
+    }
+
+    @MainActor
+    func testSeededRemovePlayedConfirmationSaysScannedEpisodesLoseSkips() throws {
+        let app = makeSeededApp(seedsCompletedDownload: true)
+        app.launch()
+
+        openSection("Downloads", in: app)
+        assertScreen("Downloads", named: "Downloads navigation bar", in: app)
+        let downloadedRow = app.buttons.matching(identifier: Self.seededEpisodeRowIdentifier).firstMatch
+        scrollUntilHittable(downloadedRow, in: app)
+        downloadedRow.press(forDuration: 1.2)
+        let markPlayed = app.buttons["Mark Played"].firstMatch
+        assertHittable(markPlayed, named: "Mark Played context action")
+        markPlayed.tap()
+
+        let editButton = toolbarButton("Edit", in: "Downloads", of: app)
+        assertHittable(editButton, named: "Downloads Edit button")
+        editButton.tap()
+        let removePlayed = app.buttons["Remove Played"].firstMatch
+        assertHittable(removePlayed, named: "Remove Played edit action")
+        XCTAssertTrue(removePlayed.isEnabled, "Remove Played should be enabled once the download is played")
+        removePlayed.tap()
+
+        let confirmation = app.alerts["Remove played downloads?"]
+        assertExists(confirmation, named: "Remove Played confirmation")
+        assertExists(
+            confirmation.staticTexts.matching(NSPredicate(
+                format: "label CONTAINS %@",
+                Self.scannedEpisodesRemovalSentence
+            )).firstMatch,
+            named: "Remove Played confirmation's scanned-episode sentence"
+        )
+        attachSmokeScreenshot(named: "remove_played_confirmation_scanned_sentence")
+        confirmation.buttons["Cancel"].tap()
     }
 
     @MainActor
@@ -5178,9 +5273,9 @@ final class OpenCastUITests: XCTestCase {
         scrollUntilExists(episode, in: app, maxSwipes: 3)
         assertExists(episode, named: "saved word-boundary episode")
         episode.press(forDuration: 1.2)
-        // A current saved analysis correctly replaces the generic helper's
-        // "Detect Ads" action with the disabled "Ads Detected" status.
-        assertExists(app.buttons["Ads Detected"], named: "accepted saved v3 analysis")
+        // The artifact seed saves a current analysis but no download, so the
+        // analysis is detached: the menu offers Detect Ads Again.
+        assertExists(app.buttons["Detect Ads Again"], named: "accepted saved v3 analysis without its download")
         let details = app.buttons["View Episode Details"]
         assertExists(details, named: "saved word-boundary episode details action")
         details.tap()
@@ -9815,6 +9910,7 @@ final class OpenCastUITests: XCTestCase {
         in app: XCUIApplication,
         named name: String,
         expectsGoToShow: Bool = true,
+        detectAdsTitle: String = "Detect Ads",
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
@@ -9852,8 +9948,8 @@ final class OpenCastUITests: XCTestCase {
             line: line
         )
         assertExists(
-            app.buttons["Detect Ads"].firstMatch,
-            named: "\(name) Detect Ads context action",
+            app.buttons[detectAdsTitle].firstMatch,
+            named: "\(name) \(detectAdsTitle) context action",
             file: file,
             line: line
         )

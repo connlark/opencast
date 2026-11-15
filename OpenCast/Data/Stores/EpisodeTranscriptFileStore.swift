@@ -5,9 +5,21 @@ struct EpisodeTranscriptFileStore: Sendable {
     nonisolated static let directoryName = "EpisodeTranscripts"
 
     let baseDirectory: URL
+    /// Lets a test hold a document write (a transcription run's or a remote
+    /// import's) once it is under way: past its cancellation check, before
+    /// its bytes land.
+    let beforeDocumentWriteForTesting: (@Sendable (_ relativePath: String) async -> Void)?
+    /// Lets a test act while a caller is suspended on a document read.
+    let beforeDocumentReadForTesting: (@Sendable (_ relativePath: String) async -> Void)?
 
-    init(baseDirectory: URL = .applicationSupportDirectory) {
+    init(
+        baseDirectory: URL = .applicationSupportDirectory,
+        beforeDocumentWriteForTesting: (@Sendable (_ relativePath: String) async -> Void)? = nil,
+        beforeDocumentReadForTesting: (@Sendable (_ relativePath: String) async -> Void)? = nil
+    ) {
         self.baseDirectory = baseDirectory
+        self.beforeDocumentWriteForTesting = beforeDocumentWriteForTesting
+        self.beforeDocumentReadForTesting = beforeDocumentReadForTesting
     }
 
     nonisolated var transcriptsDirectory: URL {
@@ -77,29 +89,54 @@ struct EpisodeTranscriptFileStore: Sendable {
 
     @concurrent
     func readOffCaller(relativePath: String) async throws -> EpisodeTranscriptDocument {
-        try read(relativePath: relativePath)
+        await beforeDocumentReadForTesting?(relativePath)
+        return try read(relativePath: relativePath)
     }
 
+    /// Writes a document beside its place, off the caller, and returns
+    /// where. The caller places it (`placeStagedDocument`) only once it knows
+    /// it may still write the transcript, and discards it otherwise: a run's
+    /// write that comes back after the run was ended, or a remote import's
+    /// that comes back after a local run took the episode, must not leave a
+    /// document behind. A terminal flush ignores cancellation, so a pending
+    /// checkpoint still persists while the run's task is cancelled.
     @concurrent
-    func writeOffCaller(_ document: EpisodeTranscriptDocument, relativePath: String) async throws {
-        try Task.checkCancellation()
-        try write(document, relativePath: relativePath)
-        try Task.checkCancellation()
-    }
-
-    /// Terminal-flush variant: a pending throttled checkpoint must still be
-    /// able to persist while the run's task is already cancelled.
-    @concurrent
-    func writeOffCallerIgnoringCancellation(
+    func stageOffCaller(
         _ document: EpisodeTranscriptDocument,
-        relativePath: String
-    ) async throws {
-        try write(document, relativePath: relativePath)
+        relativePath: String,
+        ignoringCancellation: Bool = false
+    ) async throws -> URL {
+        if !ignoringCancellation {
+            try Task.checkCancellation()
+        }
+        await beforeDocumentWriteForTesting?(relativePath)
+        let url = fileURL(relativePath: relativePath)
+        let stagedURL = url.deletingLastPathComponent()
+            .appending(path: ".\(url.lastPathComponent).\(UUID().uuidString).staged")
+        try write(document, to: stagedURL)
+        return stagedURL
+    }
+
+    /// Moves a staged document into its place with one rename, replacing
+    /// the document there.
+    nonisolated func placeStagedDocument(at stagedURL: URL, relativePath: String) throws {
+        guard rename(stagedURL.path, fileURL(relativePath: relativePath).path) == 0 else {
+            let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            discardStagedDocument(at: stagedURL)
+            throw error
+        }
+    }
+
+    nonisolated func discardStagedDocument(at stagedURL: URL) {
+        try? removeItemIfPresent(at: stagedURL)
     }
 
     nonisolated func write(_ document: EpisodeTranscriptDocument, relativePath: String) throws {
+        try write(document, to: fileURL(relativePath: relativePath))
+    }
+
+    private nonisolated func write(_ document: EpisodeTranscriptDocument, to url: URL) throws {
         try prepareTranscriptsDirectory()
-        let url = fileURL(relativePath: relativePath)
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -117,6 +154,24 @@ struct EpisodeTranscriptFileStore: Sendable {
 
     nonisolated func deleteTranscripts(forEpisodeID episodeID: String) throws {
         try removeItemIfPresent(at: transcriptsDirectory.appending(path: safeStem(episodeID)))
+    }
+
+    /// Deletes every file in the episode's transcript directory but the
+    /// document at `keptRelativePath`.
+    nonisolated func deleteTranscripts(forEpisodeID episodeID: String, keeping keptRelativePath: String) throws {
+        let keptName = fileURL(relativePath: keptRelativePath).lastPathComponent
+        let fileURLs: [URL]
+        do {
+            fileURLs = try FileManager.default.contentsOfDirectory(
+                at: transcriptsDirectory.appending(path: safeStem(episodeID), directoryHint: .isDirectory),
+                includingPropertiesForKeys: nil
+            )
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return
+        }
+        for fileURL in fileURLs where fileURL.lastPathComponent != keptName {
+            try removeItemIfPresent(at: fileURL)
+        }
     }
 
     /// Renames the per-episode directory when an episode's identity migrates.

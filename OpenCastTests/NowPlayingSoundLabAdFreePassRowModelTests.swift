@@ -99,6 +99,19 @@ struct NowPlayingSoundLabAdFreePassRowModelTests {
         #expect(row.statusText == "Downloading episode...")
     }
 
+    @Test("A detached analysis offers Detect Ads Again, enabled, with the page's caption as its value")
+    func detachedRowOffersDetectAdsAgain() {
+        let row = NowPlayingSoundLabAdFreePassRowModel(presentation: .detached)
+
+        #expect(row.title == "Detect Ads Again")
+        #expect(row.isEnabled)
+        #expect(row.phase == .idle)
+        #expect(row.emphasis == .normal)
+        #expect(row.statusText == "Ad skips unavailable for this audio. Detect Ads Again to restore them.")
+        #expect(row.statusText == EpisodeAdSpanTimelineView.detachedCaption)
+        #expect(NowPlayingSoundLabLayout.fixedActionTitles.contains { $0.title == row.title })
+    }
+
     @Test("Icon-only collapse triggers at tight widths and accessibility sizes")
     func iconOnlyCollapseRule() {
         #expect(NowPlayingSoundLabPanel.collapsesToIconOnly(rowAreaWidth: 120, isAccessibilitySize: false))

@@ -601,19 +601,23 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         var identity: OpenCastRemoteTranscriptionSourceIdentity
     }
 
-    /// A full environment around one completed, hashed download so the
-    /// coordinator can proceed without any downloader. Retry delays default
-    /// to none so unreachable-backend scripts fail fast in tests.
+    /// A full environment around one completed download, hashed unless
+    /// `isDownloadHashed` is false, so the coordinator can proceed without
+    /// downloading. A download it does ask for goes to `downloader`, which
+    /// fails by default, never to the network. Retry delays default to none
+    /// so unreachable-backend scripts fail fast in tests.
     private func makeEnvironment(
         api: FakeRemoteTranscriptionAPI,
         episodeID: String,
         uploadTransport: FakeUploadTransport? = nil,
-        transportRetryDelays: [Duration] = []
+        transportRetryDelays: [Duration] = [],
+        downloader: ScriptedEpisodeAudioDownloader = ScriptedEpisodeAudioDownloader(contents: nil),
+        isDownloadHashed: Bool = true
     ) async throws -> Environment {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let downloadFileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
-        let downloads = DownloadStore(fileStore: downloadFileStore)
+        let downloads = DownloadStore(downloader: downloader, fileStore: downloadFileStore)
         let transcriptions = EpisodeTranscriptionStore(
             fileStore: EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
         )
@@ -635,7 +639,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
             bytesReceived: Int64(data.count),
             bytesExpected: Int64(data.count)
         )
-        record.sourceFileSHA256 = identity.sha256
+        record.sourceFileSHA256 = isDownloadHashed ? identity.sha256 : ""
         record.duration = 120
         context.insert(record)
         try context.save()
@@ -1155,12 +1159,13 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         #expect(api.createRequests.isEmpty)
     }
 
-    @Test("A completed download whose file is gone fails the job and marks the record missing")
+    @Test("A completed download whose file is gone downloads once more, and a failed re-download fails the job")
     func missingDownloadedFileFailsJobAndMarksRecordMissing() async throws {
         let api = FakeRemoteTranscriptionAPI(pollStates: [
             OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .created),
         ])
-        let environment = try await makeEnvironment(api: api, episodeID: "ep-missing-file")
+        let downloader = ScriptedEpisodeAudioDownloader(contents: nil)
+        let environment = try await makeEnvironment(api: api, episodeID: "ep-missing-file", downloader: downloader)
         let record = try #require(environment.downloads.record(for: environment.episode.episodeID))
         let fileURL = try #require(environment.downloads.localFileURL(for: record))
         try FileManager.default.removeItem(at: fileURL)
@@ -1168,10 +1173,135 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         environment.coordinator.start(episode: environment.episode, modelContext: environment.context)
 
         #expect(await waitUntil { environment.store.phase == .failed(.downloadFailed) })
-        #expect(environment.downloads.record(for: environment.episode.episodeID)?.state == .missing)
+        #expect(downloader.requestCount == 1)
+        #expect(environment.downloads.record(for: environment.episode.episodeID)?.state == .failed)
+        #expect(api.reportedIdentities.isEmpty)
         #expect(api.resultCallCount == 0)
         #expect(api.cancelledJobIDs.isEmpty)
         #expect(environment.store.existingReference(for: "ep-missing-file")?.lastExit == .downloadFailed)
+    }
+
+    @Test(
+        "A completed download whose file is gone or drifted downloads once more and the job completes over the new file",
+        arguments: [DownloadFileDefect.missing, .drifted]
+    )
+    func defectiveDownloadedFileDownloadsOnceMoreAndCompletes(defect: DownloadFileDefect) async throws {
+        let episodeID = "ep-recovered-\(defect)"
+        let data = Data("remote audio bytes \(episodeID)".utf8)
+        let identity = RemoteFixtures.identity(for: data, duration: 120)
+        let api = FakeRemoteTranscriptionAPI(
+            pollStates: [OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .resultReady)],
+            resultResponse: OpenCastRemoteTranscriptionResultResponse(
+                schemaVersion: 1,
+                result: RemoteFixtures.result(identity: identity, durationSeconds: 120)
+            )
+        )
+        let downloader = ScriptedEpisodeAudioDownloader(contents: data)
+        let environment = try await makeEnvironment(api: api, episodeID: episodeID, downloader: downloader)
+        let record = try #require(environment.downloads.record(for: episodeID))
+        try defect.apply(to: try #require(environment.downloads.localFileURL(for: record)))
+
+        environment.coordinator.start(episode: environment.episode, modelContext: environment.context)
+
+        #expect(await waitUntil { environment.store.phase == .completed })
+        #expect(downloader.requestCount == 1)
+        // The drifted bytes are never reported: only the re-downloaded file's.
+        #expect(api.reportedIdentities.map(\.sha256) == [identity.sha256])
+        #expect(environment.downloads.completedSourceIdentity(for: episodeID)?.sha256 == identity.sha256)
+        #expect(environment.transcriptions.record(for: episodeID)?.sourceFileSHA256 == identity.sha256)
+    }
+
+    @Test("A download that is untrusted again after its one re-download fails the job without a second one")
+    func untrustedRedownloadFailsJob() async throws {
+        let episodeID = "ep-untrusted-twice"
+        let api = FakeRemoteTranscriptionAPI(pollStates: [
+            OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .created),
+        ])
+        let downloader = ScriptedEpisodeAudioDownloader(contents: Data("remote audio bytes \(episodeID)".utf8))
+        let environment = try await makeEnvironment(api: api, episodeID: episodeID, downloader: downloader)
+        let record = try #require(environment.downloads.record(for: episodeID))
+        let fileURL = try #require(environment.downloads.localFileURL(for: record))
+        try DownloadFileDefect.drifted.apply(to: fileURL)
+        environment.downloads.onDownloadCompleted = { _, _ in
+            try? DownloadFileDefect.drifted.apply(to: fileURL)
+        }
+
+        environment.coordinator.start(episode: environment.episode, modelContext: environment.context)
+
+        #expect(await waitUntil { environment.store.phase == .failed(.downloadFailed) })
+        #expect(downloader.requestCount == 1)
+        #expect(environment.downloads.record(for: episodeID)?.state == .missing)
+        #expect(api.reportedIdentities.isEmpty)
+        #expect(api.resultCallCount == 0)
+        #expect(environment.store.existingReference(for: episodeID)?.lastExit == .downloadFailed)
+    }
+
+    @Test("A download whose file cannot be read fails the job as a local error, without downloading it again")
+    func unreadableDownloadFailsJobWithoutRedownload() async throws {
+        let episodeID = "ep-unreadable"
+        let data = Data("remote audio bytes \(episodeID)".utf8)
+        let identity = RemoteFixtures.identity(for: data, duration: 120)
+        let api = FakeRemoteTranscriptionAPI(
+            pollStates: [OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .resultReady)],
+            resultResponse: OpenCastRemoteTranscriptionResultResponse(
+                schemaVersion: 1,
+                result: RemoteFixtures.result(identity: identity, durationSeconds: 120)
+            )
+        )
+        let downloader = ScriptedEpisodeAudioDownloader(contents: data)
+        let environment = try await makeEnvironment(
+            api: api,
+            episodeID: episodeID,
+            downloader: downloader,
+            isDownloadHashed: false
+        )
+        let record = try #require(environment.downloads.record(for: episodeID))
+        let fileURL = try #require(environment.downloads.localFileURL(for: record))
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        }
+
+        environment.coordinator.start(episode: environment.episode, modelContext: environment.context)
+
+        #expect(await waitUntil { environment.store.phase == .failed(.localRequestFailed) })
+        #expect(downloader.requestCount == 0)
+        #expect(environment.downloads.record(for: episodeID)?.state == .completed)
+        #expect(environment.downloads.record(for: episodeID)?.sourceFileSHA256.isEmpty == true)
+        #expect(api.reportedIdentities.isEmpty)
+        #expect(api.resultCallCount == 0)
+    }
+
+    @Test("A job over an unhashed download adopts the identity it reports, leaving the download hashed and trusted")
+    func unhashedDownloadAdoptsReportedIdentity() async throws {
+        let episodeID = "ep-unhashed"
+        let data = Data("remote audio bytes \(episodeID)".utf8)
+        let identity = RemoteFixtures.identity(for: data, duration: 120)
+        let api = FakeRemoteTranscriptionAPI(
+            pollStates: [OpenCastRemoteTranscriptionJobStatus(jobID: "job-fake-1", state: .resultReady)],
+            resultResponse: OpenCastRemoteTranscriptionResultResponse(
+                schemaVersion: 1,
+                result: RemoteFixtures.result(identity: identity, durationSeconds: 120)
+            )
+        )
+        let downloader = ScriptedEpisodeAudioDownloader(contents: nil)
+        let environment = try await makeEnvironment(
+            api: api,
+            episodeID: episodeID,
+            downloader: downloader,
+            isDownloadHashed: false
+        )
+        #expect(environment.downloads.completedSourceIdentity(for: episodeID) == nil)
+
+        environment.coordinator.start(episode: environment.episode, modelContext: environment.context)
+
+        #expect(await waitUntil { environment.store.phase == .completed })
+        #expect(api.createRequests.map(\.sourceIdentity) == [nil])
+        #expect(api.reportedIdentities.map(\.sha256) == [identity.sha256])
+        #expect(downloader.requestCount == 0)
+        #expect(environment.downloads.record(for: episodeID)?.sourceFileSHA256 == identity.sha256)
+        #expect(environment.downloads.completedSourceIdentity(for: episodeID)?.sha256 == identity.sha256)
+        #expect(environment.transcriptions.record(for: episodeID)?.sourceFileSHA256 == identity.sha256)
     }
 
     @Test("A completed transcript prevents a second remote transcription job")

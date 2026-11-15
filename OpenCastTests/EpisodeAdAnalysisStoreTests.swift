@@ -1869,6 +1869,101 @@ struct EpisodeAdAnalysisStoreTests {
         #expect(store.lastErrorMessage(for: transcript.episodeID) != nil)
     }
 
+    @Test("A completed analysis of a new transcript deletes the document it superseded; a rerun of the same transcript keeps its own")
+    func completedAnalysisDeletesSupersededDocument() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeAdAnalysisFileStore(baseDirectory: try makeTemporaryDirectory())
+        let environment = ScriptedAdAnalysisRunEnvironment()
+        let store = makeStore(fileStore: fileStore, environment: environment)
+        let episodeID = "superseded-analysis"
+        let first = makeTranscriptDocument(episodeID: episodeID)
+        let retranscribed = makeTranscriptDocument(episodeID: episodeID, updatedAt: Date(timeIntervalSince1970: 1_790_000_000))
+
+        await startAndWait(store: store, transcript: first, modelContext: context)
+        let firstPath = try #require(store.record(for: episodeID)?.analysisRelativePath)
+        #expect(fileStore.documentExists(relativePath: firstPath))
+
+        await rerunAndWait(store: store, transcript: retranscribed, environment: environment, modelContext: context)
+        let replacementPath = try #require(store.record(for: episodeID)?.analysisRelativePath)
+        #expect(replacementPath != firstPath)
+        #expect(fileStore.documentExists(relativePath: replacementPath))
+        #expect(!fileStore.documentExists(relativePath: firstPath))
+
+        await rerunAndWait(store: store, transcript: retranscribed, environment: environment, modelContext: context)
+        #expect(store.record(for: episodeID)?.analysisRelativePath == replacementPath)
+        #expect(fileStore.documentExists(relativePath: replacementPath))
+        let rerun = try #require(store.document(for: episodeID))
+        #expect(store.isCurrentAnalysisDocument(rerun, for: retranscribed))
+    }
+
+    @Test("A failed run over a new transcript restores the earlier document and keeps it")
+    func failedRunRestoreKeepsRestoredDocument() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeAdAnalysisFileStore(baseDirectory: try makeTemporaryDirectory())
+        let environment = ScriptedAdAnalysisRunEnvironment()
+        let store = makeStore(fileStore: fileStore, environment: environment)
+        let episodeID = "superseded-analysis-restored"
+        let first = makeTranscriptDocument(episodeID: episodeID)
+        await startAndWait(store: store, transcript: first, modelContext: context)
+        let firstPath = try #require(store.record(for: episodeID)?.analysisRelativePath)
+        let original = try #require(store.document(for: episodeID))
+
+        environment.answer = .unverifiableBreak
+        let sends = environment.sends.count
+        store.startAnalysis(
+            transcript: makeTranscriptDocument(episodeID: episodeID, updatedAt: Date(timeIntervalSince1970: 1_790_000_000)),
+            modelContext: context
+        )
+
+        #expect(await waitUntil { environment.sends.count > sends && !store.isRunning(for: episodeID) })
+        let record = try #require(store.record(for: episodeID))
+        #expect(record.state == .completed)
+        #expect(record.failureKind == .validationExhausted)
+        #expect(record.analysisRelativePath == firstPath)
+        #expect(fileStore.documentExists(relativePath: firstPath))
+        #expect(store.document(for: episodeID) == original)
+    }
+
+    @Test("The legacy cloud import deletes the analysis document it replaced")
+    func cloudImportDeletesSupersededDocument() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeAdAnalysisFileStore(baseDirectory: try makeTemporaryDirectory())
+        let store = makeStore(fileStore: fileStore)
+        let episodeID = "superseded-analysis-imported"
+        await startAndWait(store: store, transcript: makeTranscriptDocument(episodeID: episodeID), modelContext: context)
+        let firstPath = try #require(store.record(for: episodeID)?.analysisRelativePath)
+
+        let retranscribed = makeTranscriptDocument(episodeID: episodeID, updatedAt: Date(timeIntervalSince1970: 1_790_000_000))
+        let imported = try EpisodeRemoteAdAnalysisMapper.document(
+            from: OpenCastRemoteTranscriptionAdAnalysisSuccess(
+                model: "gemini-3.5-flash",
+                policy: EpisodeAdAnalysisContract.expectedPolicy,
+                spans: [OpenCastRemoteTranscriptionAdAnalysisSpan(
+                    kind: "host_read_ad",
+                    label: "Sponsor",
+                    startSegmentID: 1,
+                    endSegmentID: 1,
+                    startTime: 5,
+                    endTime: 12,
+                    confidence: 0.9,
+                    evidenceQuote: "brought to you by"
+                )],
+                warnings: []
+            ),
+            transcript: retranscribed,
+            requestID: "job-superseding-import"
+        )
+        try store.importCompletedAnalysis(imported, modelContext: context)
+
+        let importedPath = try #require(store.record(for: episodeID)?.analysisRelativePath)
+        #expect(importedPath != firstPath)
+        #expect(fileStore.documentExists(relativePath: importedPath))
+        #expect(!fileStore.documentExists(relativePath: firstPath))
+    }
+
     @Test("A successful rerun clears the stored failure kind")
     func successfulRerunClearsFailureKind() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -2413,6 +2508,23 @@ struct EpisodeAdAnalysisStoreTests {
         store.startAnalysis(transcript: transcript, modelContext: modelContext)
         #expect(await waitUntil {
             !store.hasActiveJob
+                && store.record(for: transcript.episodeID)?.state == .completed
+        })
+    }
+
+    /// `startAndWait` for an episode whose record already reads completed:
+    /// waits for the new run's send before its completion counts.
+    private func rerunAndWait(
+        store: EpisodeAdAnalysisStore,
+        transcript: EpisodeTranscriptDocument,
+        environment: ScriptedAdAnalysisRunEnvironment,
+        modelContext: ModelContext
+    ) async {
+        let sends = environment.sends.count
+        store.startAnalysis(transcript: transcript, modelContext: modelContext)
+        #expect(await waitUntil {
+            environment.sends.count > sends
+                && !store.hasActiveJob
                 && store.record(for: transcript.episodeID)?.state == .completed
         })
     }

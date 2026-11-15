@@ -1566,38 +1566,796 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(fixture.coordinator.drainFailedCount == 0)
     }
 
-    @Test("A completed download whose file is gone fails the pass and marks the record missing")
-    func missingDownloadedFileFailsPassAndMarksRecordMissing() async throws {
-        let fixture = try await makeFixture(
-            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
-            loadsStores: false
-        )
-        let episode = makeEpisode(episodeID: "pass-missing-file")
+    @Test(
+        "A completed download whose file is gone or drifted downloads once more and the pass completes over the new file",
+        arguments: DownloadFileDefect.allCases
+    )
+    func defectiveDownloadedFileDownloadsOnceMoreAndCompletes(defect: DownloadFileDefect) async throws {
+        let redownloaded = Data("downloaded audio".utf8)
+        let downloader = ScriptedEpisodeAudioDownloader(contents: redownloaded)
+        let fixture = try await makeFixture(downloader: downloader, loadsStores: false)
+        let episode = makeEpisode(episodeID: "pass-defective-file-\(defect)")
         let record = try insertCompletedDownload(
             for: episode,
             fileStore: fixture.downloadFileStore,
-            context: fixture.context
+            context: fixture.context,
+            isHashed: defect != .driftedUnhashed
         )
         await fixture.loadStores()
-        // After load (reconcile sees the file), the file disappears — the
+        // After load (reconcile sees the file), the file changes — the
         // delete-races-a-job case reconcile cannot catch.
-        let relativePath = try #require(record.localRelativePath)
-        try FileManager.default.removeItem(
-            at: fixture.downloadFileStore.fileURL(relativePath: relativePath)
-        )
+        try defect.apply(to: fixture.downloadFileStore.fileURL(relativePath: try #require(record.localRelativePath)))
 
         fixture.enqueue(episode)
 
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.completed(zoneCount: 1)])
+        #expect(downloader.requestCount == 1)
+        #expect(fixture.downloads.completedSourceIdentity(for: episode.episodeID)?.sha256 == OpenCastSHA256.hash(redownloaded))
+        #expect(fixture.transcriptions.record(for: episode.episodeID)?.sourceFileSHA256 == OpenCastSHA256.hash(redownloaded))
+    }
+
+    @Test("A download that is untrusted again after its one re-download fails the pass and marks the record missing")
+    func untrustedRedownloadFailsPass() async throws {
+        let downloader = ScriptedEpisodeAudioDownloader(contents: Data("downloaded audio".utf8))
+        let fixture = try await makeFixture(downloader: downloader, loadsStores: false)
+        let episode = makeEpisode(episodeID: "pass-untrusted-twice")
+        let record = try insertCompletedDownload(
+            for: episode,
+            fileStore: fixture.downloadFileStore,
+            context: fixture.context,
+            isHashed: true
+        )
+        await fixture.loadStores()
+        let fileURL = fixture.downloadFileStore.fileURL(relativePath: try #require(record.localRelativePath))
+        try DownloadFileDefect.drifted.apply(to: fileURL)
+        fixture.downloads.onDownloadCompleted = { _, _ in
+            try? DownloadFileDefect.drifted.apply(to: fileURL)
+        }
+
+        fixture.enqueue(episode)
+
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [
+            .failed(message: EpisodeDownloadError.missingDownloadedFile.localizedDescription),
+        ])
+        #expect(downloader.requestCount == 1)
+        #expect(fixture.downloads.record(for: episode.episodeID)?.state == .missing)
+        #expect(fixture.transcriptions.record(for: episode.episodeID) == nil)
+    }
+
+    @Test(
+        "An unhashed download of its recorded size adopts its hash, then reuses a transcript of those bytes or transcribes it again",
+        arguments: [true, false]
+    )
+    func unhashedDownloadAdoptsHashThenReusesOrTranscribes(transcriptMatches: Bool) async throws {
+        let transcriber = CompletingEpisodeTranscriber()
+        let downloader = ScriptedEpisodeAudioDownloader(contents: nil)
+        let fixture = try await makeFixture(downloader: downloader, transcriber: transcriber, loadsStores: false)
+        let episode = makeEpisode(episodeID: "pass-adopt-\(transcriptMatches)")
+        let contents = Data("an unhashed download".utf8)
+        try insertCompletedDownload(
+            for: episode,
+            fileStore: fixture.downloadFileStore,
+            context: fixture.context,
+            contents: contents
+        )
+        let priorPath = try insertCompletedTranscript(
+            for: episode,
+            sourceSHA256: transcriptMatches ? OpenCastSHA256.hash(contents) : OpenCastSHA256.hash(Data("other bytes".utf8)),
+            byteCount: Int64(contents.count),
+            fixture: fixture
+        )
+        await fixture.loadStores()
+        #expect(fixture.downloads.completedSourceIdentity(for: episode.episodeID) == nil)
+
+        fixture.enqueue(episode)
+
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.completed(zoneCount: 1)])
+        #expect(downloader.requestCount == 0)
+        #expect(fixture.downloads.record(for: episode.episodeID)?.sourceFileSHA256 == OpenCastSHA256.hash(contents))
+        #expect(fixture.downloads.completedSourceIdentity(for: episode.episodeID)?.sha256 == OpenCastSHA256.hash(contents))
+        #expect(transcriber.requestCount == (transcriptMatches ? 0 : 1))
+        let transcript = try #require(fixture.transcriptions.record(for: episode.episodeID))
+        #expect(transcript.sourceFileSHA256 == OpenCastSHA256.hash(contents))
+        #expect((transcript.transcriptRelativePath == priorPath) == transcriptMatches)
+        #expect(fixture.adAnalyses.record(for: episode.episodeID)?.state == .completed)
+    }
+
+    @Test("A completed transcript of other bytes is transcribed again and replaces the transcript and analysis documents")
+    func detachedTranscriptIsTranscribedAgainAndReplacesDocuments() async throws {
+        let transcriber = CompletingEpisodeTranscriber()
+        let first = Data("the first assembly".utf8)
+        let second = Data("a different assembly".utf8)
+        let downloader = ScriptedEpisodeAudioDownloader(contents: first)
+        let fixture = try await makeFixture(downloader: downloader, transcriber: transcriber)
+        let episode = makeEpisode(episodeID: "pass-retranscribe")
+        let replaced = try await passOverReplacedDownload(
+            episode,
+            fixture: fixture,
+            downloader: downloader,
+            first: first,
+            second: second
+        )
+
+        #expect(transcriber.requestCount == 2)
+        #expect(fixture.analysisEnvironment.resolvedRunIDs.count == 2)
+        #expect(try fixture.transcriptRecordCount(for: episode.episodeID) == 1)
+        let transcript = try #require(fixture.transcriptions.record(for: episode.episodeID))
+        #expect(transcript.state == .completed)
+        #expect(transcript.sourceFileSHA256 == OpenCastSHA256.hash(second))
+        #expect(fixture.downloads.completedSourceIdentity(for: episode.episodeID)?.sha256 == OpenCastSHA256.hash(second))
+        #expect(replaced.after.sourceFileSHA256 == OpenCastSHA256.hash(second))
+        #expect(replaced.before.sourceFileSHA256 == OpenCastSHA256.hash(first))
+        #expect(replaced.transcriptPaths.before != replaced.transcriptPaths.after)
+        #expect(!fixture.transcriptFileStore.documentExists(relativePath: replaced.transcriptPaths.before))
+        #expect(fixture.transcriptFileStore.documentExists(relativePath: replaced.transcriptPaths.after))
+        #expect(replaced.analysisPaths.before != replaced.analysisPaths.after)
+        #expect(!fixture.adAnalysisFileStore.documentExists(relativePath: replaced.analysisPaths.before))
+        #expect(fixture.adAnalysisFileStore.documentExists(relativePath: replaced.analysisPaths.after))
+        #expect(await fixture.adAnalyses.hasCurrentCompletedAnalysis(for: replaced.after))
+    }
+
+    @Test("After a re-transcription the Chapters & Summary document of the old transcript reads stale")
+    func chaptersSummaryReadsStaleAfterRetranscription() async throws {
+        let first = Data("the first assembly".utf8)
+        let downloader = ScriptedEpisodeAudioDownloader(contents: first)
+        let fixture = try await makeFixture(downloader: downloader)
+        let episode = makeEpisode(episodeID: "pass-retranscribe-chapters")
+        let replaced = try await passOverReplacedDownload(
+            episode,
+            fixture: fixture,
+            downloader: downloader,
+            first: first,
+            second: Data("a different assembly".utf8)
+        )
+        let chaptersFileStore = EpisodeTranscriptAnalysisFileStore(baseDirectory: try makeTemporaryDirectory())
+        let chapters = EpisodeTranscriptAnalysisStore(fileStore: chaptersFileStore)
+        let segments = OpenCastTranscriptSegmentNormalizer.normalized(replaced.before.segments)
+        let document = EpisodeTranscriptAnalysisDocument(
+            schemaVersion: 1,
+            episodeID: episode.episodeID,
+            podcastID: episode.podcastID,
+            requestID: "chapters-request",
+            transcriptFingerprint: chaptersFileStore.transcriptFingerprint(for: replaced.before, segments: segments),
+            transcriptUpdatedAt: replaced.before.updatedAt,
+            transcriptSegmentCount: segments.count,
+            transcriptState: .completed,
+            model: "model",
+            policy: EpisodeTranscriptAnalysisContract.expectedPolicy,
+            chapters: [],
+            summary: nil,
+            warnings: [],
+            usage: nil,
+            createdAt: .now,
+            updatedAt: .now
+        )
+
+        #expect(chapters.isCurrentAnalysisDocument(document, for: replaced.before))
+        #expect(!chapters.isCurrentAnalysisDocument(document, for: replaced.after))
+    }
+
+    @Test(
+        "A cancelled or a failed replacement fails the pass and restores the prior transcript",
+        arguments: ReplacementEnding.allCases
+    )
+    func stoppedReplacementRestoresPriorTranscript(ending: ReplacementEnding) async throws {
+        let transcriber = HoldingEpisodeTranscriber()
+        let fixture = try await makeFixture(downloader: ScriptedEpisodeAudioDownloader(contents: nil), transcriber: transcriber, loadsStores: false)
+        let episode = makeEpisode(episodeID: "pass-replacement-\(ending)")
+        let priorPath = try await seedDetachedTranscript(for: episode, contents: Data("current audio".utf8), fixture: fixture)
+        let prior = try #require(fixture.transcriptions.record(for: episode.episodeID)?.sourceFileSHA256)
+
+        fixture.enqueue(episode)
+        #expect(await waitUntil { transcriber.requestCount == 1 })
+        switch ending {
+        case .cancelled:
+            fixture.transcriptions.cancelTranscription(episodeID: episode.episodeID, modelContext: fixture.context)
+        case .failed:
+            transcriber.fail(with: ReplacementEnding.Failure())
+        }
+
+        #expect(await fixture.waitForDrain())
+        let message = ending == .failed
+            ? ReplacementEnding.Failure().localizedDescription
+            : "Transcript cancelled."
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.failed(message: message)])
+        let transcript = try #require(fixture.transcriptions.record(for: episode.episodeID))
+        #expect(transcript.state == .completed)
+        #expect(transcript.sourceFileSHA256 == prior)
+        #expect(transcript.transcriptRelativePath == priorPath)
+        #expect(fixture.transcriptFileStore.documentExists(relativePath: priorPath))
+        #expect(fixture.transcriptions.interruptedReplacement(for: episode.episodeID) == nil)
+    }
+
+    @Test("An interrupted replacement ends its item as interrupted, not failed, and keeps the prior transcript")
+    func interruptedReplacementEndsAsInterrupted() async throws {
+        let transcriber = HoldingEpisodeTranscriber()
+        let fixture = try await makeFixture(downloader: ScriptedEpisodeAudioDownloader(contents: nil), transcriber: transcriber, loadsStores: false)
+        let episode = makeEpisode(episodeID: "pass-replacement-interrupted")
+        let priorPath = try await seedDetachedTranscript(for: episode, contents: Data("current audio".utf8), fixture: fixture)
+        var stages: [EpisodeAdFreePassStage] = []
+        var terminals: [AdFreePassQueueTerminalOutcome] = []
+        fixture.coordinator.onStageChange = { stage, _ in stages.append(stage) }
+        fixture.coordinator.onQueueTerminal = { terminals.append($0) }
+
+        fixture.enqueue(episode)
+        #expect(await waitUntil { transcriber.requestCount == 1 })
+        fixture.transcriptions.interruptActiveJob(modelContext: fixture.context)
+
+        #expect(await waitUntil { !terminals.isEmpty && fixture.coordinator.activeEpisodeID == nil })
+        #expect(terminals == [.interrupted])
+        #expect(stages.last == .interrupted)
+        #expect(fixture.coordinator.drainOutcomes.isEmpty)
+        #expect(fixture.coordinator.lastFailureMessage == nil)
+        // A lifecycle stop drops the item, as for a first transcription.
+        #expect(fixture.coordinator.queueItems.isEmpty)
+        #expect(!fixture.coordinator.isQueuePausedForEnvironmentalInterrupt)
+        // The pass read the note once.
+        #expect(fixture.transcriptions.interruptedReplacement(for: episode.episodeID) == nil)
+        #expect(fixture.transcriptions.record(for: episode.episodeID)?.state == .completed)
+        #expect(fixture.transcriptions.record(for: episode.episodeID)?.transcriptRelativePath == priorPath)
+    }
+
+    @Test("An environmental stop of a replacement pauses the drain with the item held, and the auto-resume completes it")
+    func environmentalReplacementStopPausesAndResumes() async throws {
+        let transcriber = ComputeFailureEpisodeTranscriber(failingRequestCount: 2)
+        let fixture = try await makeFixture(
+            downloader: ScriptedEpisodeAudioDownloader(contents: nil),
+            transcriber: transcriber,
+            failureEnvironment: EpisodeTranscriptionFailureEnvironment(
+                sceneState: .background,
+                isProtectedDataAvailable: true
+            ),
+            loadsStores: false
+        )
+        let episode = makeEpisode(episodeID: "pass-replacement-environmental")
+        let contents = Data("current audio".utf8)
+        let priorPath = try await seedDetachedTranscript(for: episode, contents: contents, fixture: fixture)
+
+        fixture.enqueue(episode)
+
+        #expect(await waitUntil { fixture.coordinator.queueState == .pausedInterrupted })
+        #expect(fixture.coordinator.isQueuePausedForEnvironmentalInterrupt)
+        #expect(fixture.coordinator.queueItems.map(\.episodeID) == [episode.episodeID])
+        #expect(fixture.coordinator.drainOutcomes.isEmpty)
+        #expect(fixture.transcriptions.interruptedReplacement(for: episode.episodeID) == nil)
+        #expect(fixture.transcriptions.record(for: episode.episodeID)?.transcriptRelativePath == priorPath)
+
+        fixture.coordinator.resumeQueueForEnvironmentalAutoResume()
+
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.completed(zoneCount: 1)])
+        #expect(fixture.transcriptions.record(for: episode.episodeID)?.sourceFileSHA256 == OpenCastSHA256.hash(contents))
+        #expect(!fixture.transcriptFileStore.documentExists(relativePath: priorPath))
+        #expect(fixture.adAnalyses.record(for: episode.episodeID)?.state == .completed)
+    }
+
+    @Test("The automatic launch skip holds only while the current analysis is attached to the download")
+    func automaticLaunchSkipHonoursAttachment() async throws {
+        let downloader = ScriptedEpisodeAudioDownloader(contents: Data("downloaded audio".utf8))
+        let fixture = try await makeFixture(downloader: downloader)
+        let episode = makeEpisode(episodeID: "pass-auto-skip-attachment")
+        fixture.enqueue(episode)
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.completed(zoneCount: 1)])
         #expect(await waitUntil {
-            fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 1
+            fixture.coordinator.hasCurrentCompletedAnalysis(
+                for: episode.episodeID,
+                transcriptions: fixture.transcriptions,
+                adAnalyses: fixture.adAnalyses
+            )
         })
-        let outcome = try #require(fixture.coordinator.drainOutcomes.first)
-        guard case .failed(message: let message) = outcome.kind else {
-            Issue.record("Expected the missing-file pass item to fail.")
+
+        // Attached: the automatic item is skipped before it records anything.
+        fixture.enqueue(episode, origin: .auto)
+        #expect(await waitUntil { fixture.coordinator.queueItems.isEmpty && fixture.coordinator.queueState == .idle })
+        #expect(fixture.coordinator.drainOutcomes.isEmpty)
+        #expect(downloader.requestCount == 1)
+
+        // Detached by the download's removal: the same item runs.
+        let download = try #require(fixture.downloads.record(for: episode.episodeID))
+        fixture.downloads.deleteDownload(download, modelContext: fixture.context)
+        fixture.enqueue(episode, origin: .auto)
+
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.completed(zoneCount: 1)])
+        #expect(downloader.requestCount == 2)
+        #expect(fixture.downloads.completedSourceIdentity(for: episode.episodeID) != nil)
+    }
+
+    @Test("A current analysis without its trusted download presents Detect Ads Again, after active work and the download states")
+    func detachedPresentationFollowsActiveWorkAndDownloadStates() async throws {
+        let downloader = GatedEpisodeAudioDownloader()
+        let fixture = try await makeFixture(downloader: downloader)
+        let episode = makeEpisode(episodeID: "presentation-detached")
+        let holder = makeEpisode(episodeID: "presentation-holder")
+        downloader.release(urlContaining: episode.episodeID)
+        fixture.enqueue(episode)
+        #expect(await fixture.waitForDrain())
+        #expect(await waitUntil {
+            fixture.presentation(for: episode).stage == .completed(zoneCount: 0)
+        })
+
+        // The file goes while its record still reads completed.
+        let download = try #require(fixture.downloads.record(for: episode.episodeID))
+        let fileURL = try #require(fixture.downloads.localFileURL(for: download))
+        try FileManager.default.removeItem(at: fileURL)
+        let detached = fixture.presentation(for: episode)
+        #expect(detached == .detached)
+        #expect(detached.primaryActionTitle == "Detect Ads Again")
+        #expect(detached.isPrimaryActionEnabled)
+        #expect(detached.stage == .idle)
+        #expect(detached.statusText == EpisodeAdSpanTimelineView.detachedCaption)
+
+        // A download state comes first.
+        try fixture.downloads.markDownloadedFileMissing(download, modelContext: fixture.context)
+        #expect(fixture.presentation(for: episode).stage
+            == .failed(message: EpisodeDownloadError.missingDownloadedFile.localizedDescription))
+
+        // With no download at all, the analysis presents detached again.
+        fixture.downloads.deleteDownload(download, modelContext: fixture.context)
+        #expect(fixture.presentation(for: episode) == .detached)
+
+        // Active work comes first: the episode waits behind another pass.
+        fixture.enqueue(holder)
+        #expect(await waitUntil { fixture.coordinator.activeEpisodeID == holder.episodeID })
+        fixture.enqueue(episode)
+        #expect(fixture.presentation(for: episode) == .queued(ahead: 1))
+
+        await fixture.coordinator.removePendingItem(episodeID: episode.episodeID, modelContext: fixture.context)?.value
+        #expect(fixture.presentation(for: episode) == .detached)
+        downloader.release(urlContaining: holder.episodeID)
+        #expect(await waitUntil {
+            fixture.coordinator.queueState == .idle && fixture.coordinator.activeEpisodeID == nil
+        })
+    }
+
+    @Test("A retained replay failure blocks an automatic pass over the same transcript, and a transcript of new bytes escapes it")
+    func replaySuppressionHoldsForIdenticalInputsOnly() async throws {
+        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
+        analysisEnvironment.answer = .unverifiableBreak
+        let first = Data("the first assembly".utf8)
+        let downloader = ScriptedEpisodeAudioDownloader(contents: first)
+        let fixture = try await makeFixture(downloader: downloader, analysisEnvironment: analysisEnvironment)
+        let episode = makeEpisode(episodeID: "pass-replay-suppression")
+
+        fixture.enqueue(episode)
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.adAnalyses.record(for: episode.episodeID)?.failureKind == .validationExhausted)
+        let sendsAfterFailure = analysisEnvironment.sends.count
+
+        // Identical transcript, identical inputs: the suppression holds.
+        fixture.enqueue(episode, origin: .auto)
+        #expect(await fixture.waitForDrain())
+        guard case .failed = fixture.coordinator.drainOutcomes.first?.kind else {
+            Issue.record("Expected the suppressed automatic pass to fail.")
             return
         }
-        #expect(message == EpisodeDownloadError.missingDownloadedFile.localizedDescription)
-        #expect(fixture.downloads.record(for: episode.episodeID)?.state == .missing)
+        #expect(analysisEnvironment.sends.count == sendsAfterFailure)
+
+        // New bytes, so a new transcript: the suppression no longer applies.
+        analysisEnvironment.answer = .sponsorRead
+        let download = try #require(fixture.downloads.record(for: episode.episodeID))
+        fixture.downloads.deleteDownload(download, modelContext: fixture.context)
+        downloader.contents = Data("a different assembly".utf8)
+        fixture.enqueue(episode, origin: .auto)
+
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.completed(zoneCount: 1)])
+        #expect(analysisEnvironment.sends.count > sendsAfterFailure)
+        #expect(fixture.adAnalyses.record(for: episode.episodeID)?.state == .completed)
+    }
+
+    @Test(
+        "A cloud pass reuses a completed transcript only over a trusted download of its bytes",
+        arguments: [true, false]
+    )
+    func cloudPassReusesOnlyOverTrustedDownload(hasTrustedDownload: Bool) async throws {
+        let contents = Data("cloud episode audio".utf8)
+        let downloader = ScriptedEpisodeAudioDownloader(contents: contents)
+        let fixture = try await makeFixture(downloader: downloader, loadsStores: false)
+        let episode = makeEpisode(episodeID: "cloud-reuse-\(hasTrustedDownload)")
+        if hasTrustedDownload {
+            try insertCompletedDownload(
+                for: episode,
+                fileStore: fixture.downloadFileStore,
+                context: fixture.context,
+                contents: contents,
+                isHashed: true
+            )
+        }
+        // The same transcript either way: only the download differs.
+        try insertCompletedTranscript(
+            for: episode,
+            sourceSHA256: OpenCastSHA256.hash(contents),
+            byteCount: Int64(contents.count),
+            fixture: fixture
+        )
+        await fixture.loadStores()
+        let rig = try makeCloudRig(for: fixture, delivering: contents)
+
+        fixture.enqueueCloud(episode, rig: rig)
+
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.completed(zoneCount: 0)])
+        #expect(rig.api.createRequests.count == (hasTrustedDownload ? 0 : 1))
+        #expect(downloader.requestCount == (hasTrustedDownload ? 0 : 1))
+        let transcript = try #require(fixture.transcriptions.record(for: episode.episodeID))
+        #expect(transcript.engineProvenance == (hasTrustedDownload ? .localWhisper : .remoteWhisper))
+        #expect(fixture.downloads.completedSourceIdentity(for: episode.episodeID)?.sha256 == transcript.sourceFileSHA256)
+        #expect(fixture.adAnalyses.record(for: episode.episodeID)?.state == .completed)
+    }
+
+    @Test("A cloud job over an unhashed download leaves the download hashed and trusted, attached to the delivered transcript")
+    func cloudJobOverUnhashedDownloadAdoptsHash() async throws {
+        let contents = Data("an unhashed cloud download".utf8)
+        let downloader = ScriptedEpisodeAudioDownloader(contents: nil)
+        let fixture = try await makeFixture(downloader: downloader, loadsStores: false)
+        let episode = makeEpisode(episodeID: "cloud-adopt")
+        try insertCompletedDownload(
+            for: episode,
+            fileStore: fixture.downloadFileStore,
+            context: fixture.context,
+            contents: contents
+        )
+        await fixture.loadStores()
+        let rig = try makeCloudRig(for: fixture, delivering: contents)
+
+        fixture.enqueueCloud(episode, rig: rig)
+
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.completed(zoneCount: 0)])
+        #expect(rig.api.createRequests.map(\.sourceIdentity) == [nil])
+        #expect(rig.api.reportedIdentities.map(\.sha256) == [OpenCastSHA256.hash(contents)])
+        #expect(downloader.requestCount == 0)
+        #expect(fixture.downloads.record(for: episode.episodeID)?.sourceFileSHA256 == OpenCastSHA256.hash(contents))
+        #expect(fixture.downloads.completedSourceIdentity(for: episode.episodeID)?.sha256 == OpenCastSHA256.hash(contents))
+        #expect(fixture.transcriptions.record(for: episode.episodeID)?.sourceFileSHA256 == OpenCastSHA256.hash(contents))
+    }
+
+    @Test(
+        "A download replaced while a pass loads a transcript of its old bytes is transcribed again, not analysed over that transcript",
+        arguments: TranscriptLoadSite.allCases
+    )
+    func downloadReplacedDuringTranscriptLoadIsTranscribedAgain(site: TranscriptLoadSite) async throws {
+        let first = Data("the first assembly".utf8)
+        let second = Data("a different assembly".utf8)
+        let transcriber = CompletingEpisodeTranscriber()
+        let transcriptReads = TranscriptReadInterceptor()
+        let fixture = try await makeFixture(
+            downloader: ScriptedEpisodeAudioDownloader(contents: nil),
+            transcriber: transcriber,
+            loadsStores: false,
+            transcriptReads: transcriptReads
+        )
+        let episode = makeEpisode(episodeID: "pass-replaced-during-load-\(site)")
+        let firstTranscriptPath = try seedAttachedTranscript(for: episode, contents: first, fixture: fixture)
+        await fixture.loadStores()
+        let rig = site == .cloudReuse ? try makeCloudRig(for: fixture, delivering: second) : nil
+        transcriptReads.once { relativePath in
+            guard relativePath == firstTranscriptPath else {
+                return false
+            }
+            replaceDownloadedBytes(for: episode, with: second, fixture: fixture)
+            return true
+        }
+
+        enqueue(episode, at: site, rig: rig, fixture: fixture)
+
+        #expect(await fixture.waitForDrain())
+        #expect(transcriptReads.actionCount == 1)
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.completed(zoneCount: site == .cloudReuse ? 0 : 1)])
+        #expect(transcriber.requestCount == (site == .cloudReuse ? 0 : 1))
+        #expect((rig?.api.createRequests.count ?? 0) == (site == .cloudReuse ? 1 : 0))
+        let transcript = try #require(fixture.transcriptions.document(for: episode.episodeID))
+        #expect(transcript.sourceFileSHA256 == OpenCastSHA256.hash(second))
+        #expect(fixture.downloads.completedSourceIdentity(for: episode.episodeID)?.sha256 == OpenCastSHA256.hash(second))
+        #expect(await fixture.adAnalyses.hasCurrentCompletedAnalysis(for: transcript))
+    }
+
+    @Test(
+        "A download removed while a pass loads a transcript of its bytes never has that transcript analysed",
+        arguments: TranscriptLoadSite.allCases
+    )
+    func downloadRemovedDuringTranscriptLoadIsNotAnalysedOverIt(site: TranscriptLoadSite) async throws {
+        let scanned = Data("the scanned assembly".utf8)
+        let redownloaded = Data("a later assembly".utf8)
+        let transcriber = CompletingEpisodeTranscriber()
+        let transcriptReads = TranscriptReadInterceptor()
+        let downloader = ScriptedEpisodeAudioDownloader(contents: redownloaded)
+        let fixture = try await makeFixture(
+            downloader: downloader,
+            transcriber: transcriber,
+            loadsStores: false,
+            transcriptReads: transcriptReads
+        )
+        let episode = makeEpisode(episodeID: "pass-removed-during-load-\(site)")
+        let scannedTranscriptPath = try seedAttachedTranscript(for: episode, contents: scanned, fixture: fixture)
+        await fixture.loadStores()
+        let rig = site == .cloudReuse ? try makeCloudRig(for: fixture, delivering: redownloaded) : nil
+        transcriptReads.once { relativePath in
+            guard relativePath == scannedTranscriptPath,
+                  let download = fixture.downloads.record(for: episode.episodeID)
+            else {
+                return false
+            }
+            fixture.downloads.deleteDownload(download, modelContext: fixture.context)
+            return true
+        }
+
+        enqueue(episode, at: site, rig: rig, fixture: fixture)
+
+        #expect(await fixture.waitForDrain())
+        #expect(transcriptReads.actionCount == 1)
+        switch site {
+        case .reuse, .jobState:
+            // The download the pass had is gone; it never analyses the
+            // transcript of those bytes.
+            #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [
+                .failed(message: EpisodeTranscriptionError.downloadNotComplete.localizedDescription),
+            ])
+            #expect(transcriber.requestCount == 0)
+            #expect(downloader.requestCount == 0)
+            #expect(fixture.adAnalyses.record(for: episode.episodeID) == nil)
+        case .cloudReuse:
+            // The job downloads the episode again and transcribes those bytes.
+            #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.completed(zoneCount: 0)])
+            #expect(downloader.requestCount == 1)
+            #expect(rig?.api.createRequests.count == 1)
+            #expect(fixture.transcriptions.record(for: episode.episodeID)?.sourceFileSHA256 == OpenCastSHA256.hash(redownloaded))
+        }
+    }
+
+    @Test("A download replaced while a pass loads the transcript it just made ends the pass instead of transcribing again")
+    func downloadReplacedDuringOwnTranscriptLoadEndsThePass() async throws {
+        let first = Data("the first assembly".utf8)
+        let transcriber = CompletingEpisodeTranscriber()
+        let transcriptReads = TranscriptReadInterceptor()
+        let fixture = try await makeFixture(
+            downloader: ScriptedEpisodeAudioDownloader(contents: nil),
+            transcriber: transcriber,
+            loadsStores: false,
+            transcriptReads: transcriptReads
+        )
+        let episode = makeEpisode(episodeID: "pass-replaced-during-own-load")
+        try insertCompletedDownload(
+            for: episode,
+            fileStore: fixture.downloadFileStore,
+            context: fixture.context,
+            contents: first,
+            isHashed: true
+        )
+        await fixture.loadStores()
+        transcriptReads.once { _ in
+            // The pass's own transcript has committed and is being read.
+            guard fixture.transcriptions.record(for: episode.episodeID)?.state == .completed else {
+                return false
+            }
+            replaceDownloadedBytes(for: episode, with: Data("a different assembly".utf8), fixture: fixture)
+            return true
+        }
+
+        fixture.enqueue(episode)
+
+        #expect(await fixture.waitForDrain())
+        #expect(transcriptReads.actionCount == 1)
+        // A pass transcribes once: the second time it finds the episode
+        // still to transcribe, it ends.
+        #expect(transcriber.requestCount == 1)
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.failed(message: "Transcript failed.")])
+        #expect(fixture.adAnalyses.record(for: episode.episodeID) == nil)
+    }
+
+    @Test(
+        "A transcript document of other bytes than its record, over a download that holds still, fails the pass instead of going round",
+        arguments: [TranscriptLoadSite.reuse, .jobState]
+    )
+    func documentDisagreeingWithItsRecordFailsThePass(site: TranscriptLoadSite) async throws {
+        let contents = Data("the scanned assembly".utf8)
+        let transcriber = CompletingEpisodeTranscriber()
+        let fixture = try await makeFixture(
+            downloader: ScriptedEpisodeAudioDownloader(contents: nil),
+            transcriber: transcriber,
+            loadsStores: false
+        )
+        let episode = makeEpisode(episodeID: "pass-document-disagrees-\(site)")
+        let transcriptPath = try seedAttachedTranscript(for: episode, contents: contents, fixture: fixture)
+        await fixture.loadStores()
+        // The record still names the download's bytes; its document names
+        // others.
+        var document = try fixture.transcriptFileStore.read(relativePath: transcriptPath)
+        document.sourceFileSHA256 = OpenCastSHA256.hash(Data("other bytes".utf8))
+        try fixture.transcriptFileStore.write(document, relativePath: transcriptPath)
+
+        enqueue(episode, at: site, rig: nil, fixture: fixture)
+
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [
+            .failed(message: EpisodeTranscriptionError.transcriptDocumentMissing.localizedDescription),
+        ])
+        #expect(transcriber.requestCount == 0)
+        #expect(fixture.adAnalyses.record(for: episode.episodeID) == nil)
+    }
+
+    @Test("A download whose file cannot be read fails the pass with the read error, without downloading it again")
+    func unreadableDownloadFailsPassWithoutRedownload() async throws {
+        let contents = Data("an unreadable download".utf8)
+        let downloader = ScriptedEpisodeAudioDownloader(contents: contents)
+        let fixture = try await makeFixture(downloader: downloader, loadsStores: false)
+        let episode = makeEpisode(episodeID: "pass-unreadable-download")
+        let record = try insertCompletedDownload(
+            for: episode,
+            fileStore: fixture.downloadFileStore,
+            context: fixture.context,
+            contents: contents
+        )
+        await fixture.loadStores()
+        let fileURL = fixture.downloadFileStore.fileURL(relativePath: try #require(record.localRelativePath))
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        }
+        // The file is there, at its recorded size, and cannot be read.
+        let readError = #expect(throws: (any Error).self) {
+            _ = try FileHandle(forReadingFrom: fileURL)
+        }
+        let readFailure = try #require(readError).localizedDescription
+
+        fixture.enqueue(episode)
+
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.failed(message: readFailure)])
+        #expect(downloader.requestCount == 0)
+        let download = try #require(fixture.downloads.record(for: episode.episodeID))
+        #expect(download.state == .completed)
+        #expect(download.sourceFileSHA256.isEmpty)
+        #expect(fixture.transcriptions.record(for: episode.episodeID) == nil)
+    }
+
+    @Test(
+        "A user cancel of a replacement ends the pass as a user cancel of a first transcription does",
+        arguments: CancelledTranscription.allCases
+    )
+    func userCancelEndsThePassAsCancelled(transcription: CancelledTranscription) async throws {
+        let transcriber = HoldingEpisodeTranscriber()
+        let fixture = try await makeFixture(
+            downloader: ScriptedEpisodeAudioDownloader(contents: nil),
+            transcriber: transcriber,
+            loadsStores: false
+        )
+        let episode = makeEpisode(episodeID: "pass-user-cancel-\(transcription)")
+        let contents = Data("current audio".utf8)
+        switch transcription {
+        case .first:
+            try insertCompletedDownload(
+                for: episode,
+                fileStore: fixture.downloadFileStore,
+                context: fixture.context,
+                contents: contents,
+                isHashed: true
+            )
+            await fixture.loadStores()
+        case .replacement:
+            _ = try await seedDetachedTranscript(for: episode, contents: contents, fixture: fixture)
+        }
+
+        fixture.enqueue(episode)
+        #expect(await waitUntil { transcriber.requestCount == 1 })
+        fixture.transcriptions.cancelTranscription(episodeID: episode.episodeID, modelContext: fixture.context)
+
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.failed(message: "Transcript cancelled.")])
+        #expect(fixture.coordinator.lastFailureMessage == "Transcript cancelled.")
+    }
+
+    private func enqueue(
+        _ episode: EpisodeListItemSnapshot,
+        at site: TranscriptLoadSite,
+        rig: CloudRig?,
+        fixture: QueueFixture
+    ) {
+        switch site {
+        case .reuse:
+            fixture.enqueue(episode)
+        case .jobState:
+            fixture.enqueue(episode, engine: .whisperTiny)
+        case .cloudReuse:
+            guard let rig else {
+                Issue.record("A cloud pass needs a rig.")
+                return
+            }
+            fixture.enqueueCloud(episode, rig: rig)
+        }
+    }
+
+    /// A hashed download of `contents` and a completed transcript of those
+    /// bytes, made by the installed model; returns the transcript's path.
+    private func seedAttachedTranscript(
+        for episode: EpisodeListItemSnapshot,
+        contents: Data,
+        fixture: QueueFixture
+    ) throws -> String {
+        try insertCompletedDownload(
+            for: episode,
+            fileStore: fixture.downloadFileStore,
+            context: fixture.context,
+            contents: contents,
+            isHashed: true
+        )
+        return try insertCompletedTranscript(
+            for: episode,
+            sourceSHA256: OpenCastSHA256.hash(contents),
+            byteCount: Int64(contents.count),
+            fixture: fixture
+        )
+    }
+
+    /// A re-download of the episode that landed other bytes: its record and
+    /// file now hold `contents`, hashed as a completed download is.
+    private func replaceDownloadedBytes(
+        for episode: EpisodeListItemSnapshot,
+        with contents: Data,
+        fixture: QueueFixture
+    ) {
+        guard let record = fixture.downloads.record(for: episode.episodeID),
+              let fileURL = fixture.downloads.localFileURL(for: record)
+        else {
+            Issue.record("Expected a completed download to replace.")
+            return
+        }
+        do {
+            try contents.write(to: fileURL, options: .atomic)
+            record.bytesReceived = Int64(contents.count)
+            record.bytesExpected = Int64(contents.count)
+            record.sourceFileSHA256 = OpenCastSHA256.hash(contents)
+            try fixture.context.save()
+        } catch {
+            Issue.record(error)
+        }
+    }
+
+    /// One pass over `first`, then the download's removal and a pass over
+    /// `second`; the transcripts and document paths before and after.
+    private func passOverReplacedDownload(
+        _ episode: EpisodeListItemSnapshot,
+        fixture: QueueFixture,
+        downloader: ScriptedEpisodeAudioDownloader,
+        first: Data,
+        second: Data
+    ) async throws -> ReplacedTranscript {
+        fixture.enqueue(episode)
+        #expect(await fixture.waitForDrain())
+        let before = try #require(fixture.transcriptions.document(for: episode.episodeID))
+        #expect(before.sourceFileSHA256 == OpenCastSHA256.hash(first))
+        let transcriptBefore = try #require(fixture.transcriptions.record(for: episode.episodeID)?.transcriptRelativePath)
+        let analysisBefore = try #require(fixture.adAnalyses.record(for: episode.episodeID)?.analysisRelativePath)
+        #expect(fixture.adAnalysisFileStore.documentExists(relativePath: analysisBefore))
+
+        let download = try #require(fixture.downloads.record(for: episode.episodeID))
+        fixture.downloads.deleteDownload(download, modelContext: fixture.context)
+        downloader.contents = second
+        fixture.enqueue(episode)
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.completed(zoneCount: 1)])
+
+        let after = try #require(fixture.transcriptions.document(for: episode.episodeID))
+        let transcriptAfter = try #require(fixture.transcriptions.record(for: episode.episodeID)?.transcriptRelativePath)
+        let analysisAfter = try #require(fixture.adAnalyses.record(for: episode.episodeID)?.analysisRelativePath)
+        return ReplacedTranscript(
+            before: before,
+            after: after,
+            transcriptPaths: (transcriptBefore, transcriptAfter),
+            analysisPaths: (analysisBefore, analysisAfter)
+        )
+    }
+
+    private struct ReplacedTranscript {
+        let before: EpisodeTranscriptDocument
+        let after: EpisodeTranscriptDocument
+        let transcriptPaths: (before: String, after: String)
+        let analysisPaths: (before: String, after: String)
     }
 
     @Test("Pausing again while a pass waits fails that item and drains the queue")
@@ -1702,6 +2460,7 @@ struct EpisodeAdFreePassCoordinatorTests {
         let context: ModelContext
         let downloadFileStore: EpisodeDownloadFileStore
         let transcriptFileStore: EpisodeTranscriptFileStore
+        let adAnalysisFileStore: EpisodeAdAnalysisFileStore
         let downloads: DownloadStore
         let transcriptionModels: TranscriptionModelStore
         let appleSpeechAssets: AppleSpeechAssetStore
@@ -1740,6 +2499,38 @@ struct EpisodeAdFreePassCoordinatorTests {
             )
         }
 
+        func enqueueCloud(_ episode: EpisodeListItemSnapshot, rig: CloudRig) {
+            coordinator.enqueue(
+                episode: episode,
+                origin: .manual,
+                downloads: downloads,
+                transcriptionModels: transcriptionModels,
+                appleSpeechAssets: appleSpeechAssets,
+                transcriptions: transcriptions,
+                adAnalyses: adAnalyses,
+                modelContext: context,
+                mode: .cloud,
+                remoteRunner: rig.runner,
+                remoteJobStore: rig.store,
+                remotePurchases: rig.purchases,
+                refreshSkipZones: { 0 }
+            )
+        }
+
+        func waitForDrain(outcomeCount: Int = 1) async -> Bool {
+            await waitUntil {
+                coordinator.queueState == .idle
+                    && coordinator.activeEpisodeID == nil
+                    && coordinator.drainOutcomes.count == outcomeCount
+            }
+        }
+
+        func transcriptRecordCount(for episodeID: String) throws -> Int {
+            try context.fetch(FetchDescriptor<EpisodeTranscriptRecord>(
+                predicate: #Predicate { $0.episodeID == episodeID }
+            )).count
+        }
+
         func presentation(
             for episode: EpisodeListItemSnapshot,
             currentZoneCount: Int = 0
@@ -1767,18 +2558,24 @@ struct EpisodeAdFreePassCoordinatorTests {
         context: ModelContext? = nil,
         temporaryDirectory: URL? = nil,
         loadsStores: Bool = true,
-        launchPreparationGate: @escaping @Sendable () async -> Void = {}
+        launchPreparationGate: @escaping @Sendable () async -> Void = {},
+        transcriptReads: TranscriptReadInterceptor? = nil
     ) async throws -> QueueFixture {
         let resolvedContainer = try container ?? OpenCastModelContainerFactory.make(inMemory: true)
         let resolvedContext = context ?? ModelContext(resolvedContainer)
         let directory = try temporaryDirectory ?? makeTemporaryDirectory()
         let downloadFileStore = EpisodeDownloadFileStore(baseDirectory: directory)
-        let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: directory)
+        let transcriptFileStore = EpisodeTranscriptFileStore(
+            baseDirectory: directory,
+            beforeDocumentReadForTesting: transcriptReads?.hook
+        )
+        let adAnalysisFileStore = EpisodeAdAnalysisFileStore(baseDirectory: directory)
         let modelInstaller = AdFreePassTranscriptionModelInstaller(isInstalled: modelInstalled)
         let fixture = QueueFixture(
             context: resolvedContext,
             downloadFileStore: downloadFileStore,
             transcriptFileStore: transcriptFileStore,
+            adAnalysisFileStore: adAnalysisFileStore,
             downloads: DownloadStore(downloader: downloader, fileStore: downloadFileStore),
             transcriptionModels: TranscriptionModelStore(installer: modelInstaller),
             appleSpeechAssets: AppleSpeechAssetStore(
@@ -1792,7 +2589,7 @@ struct EpisodeAdFreePassCoordinatorTests {
             ),
             adAnalyses: EpisodeAdAnalysisStore(
                 client: UnpolledAdAnalysisClient(),
-                fileStore: EpisodeAdAnalysisFileStore(baseDirectory: directory),
+                fileStore: adAnalysisFileStore,
                 runEnvironment: analysisEnvironment
             ),
             coordinator: EpisodeAdFreePassCoordinator(
@@ -1816,16 +2613,20 @@ struct EpisodeAdFreePassCoordinatorTests {
         )
     }
 
+    /// Unhashed unless `isHashed`, as a download a pause or a launch
+    /// finalize completed is.
     @discardableResult
     private func insertCompletedDownload(
         for episode: EpisodeListItemSnapshot,
         fileStore: EpisodeDownloadFileStore,
-        context: ModelContext
+        context: ModelContext,
+        contents: Data? = nil,
+        isHashed: Bool = false
     ) throws -> EpisodeDownloadRecord {
         let sourceURL = URL(string: episode.audioURL ?? "https://example.com/audio.mp3")!
         let relativePath = fileStore.relativePath(episodeID: episode.episodeID, sourceAudioURL: sourceURL)
         try fileStore.prepareDownloadsDirectory()
-        let data = Data("downloaded \(episode.episodeID)".utf8)
+        let data = contents ?? Data("downloaded \(episode.episodeID)".utf8)
         try data.write(to: fileStore.fileURL(relativePath: relativePath), options: .atomic)
         let record = EpisodeDownloadRecord(
             episodeID: episode.episodeID,
@@ -1836,9 +2637,164 @@ struct EpisodeAdFreePassCoordinatorTests {
             bytesReceived: Int64(data.count),
             bytesExpected: Int64(data.count)
         )
+        if isHashed {
+            record.sourceFileSHA256 = OpenCastSHA256.hash(data)
+        }
         context.insert(record)
         try context.save()
         return record
+    }
+
+    /// A completed transcript, with its document, made from bytes whose
+    /// hash is `sourceSHA256`; returns the document's path.
+    @discardableResult
+    private func insertCompletedTranscript(
+        for episode: EpisodeListItemSnapshot,
+        sourceSHA256: String,
+        byteCount: Int64,
+        fixture: QueueFixture
+    ) throws -> String {
+        let summary = fixture.modelInstaller.summary
+        let fingerprint = fixture.transcriptFileStore.fingerprint(
+            sourceFileSHA256: sourceSHA256,
+            modelIdentifier: summary.modelIdentifier,
+            modelVersion: summary.version,
+            modelTreeSHA256: summary.treeSHA256
+        )
+        let relativePath = fixture.transcriptFileStore.relativePath(episodeID: episode.episodeID, fingerprint: fingerprint)
+        let segment = OpenCastTranscriptSegment(
+            id: 0,
+            start: 0,
+            end: 4,
+            text: "prior transcript of other bytes",
+            avgLogProbability: -0.1,
+            noSpeechProbability: 0.01
+        )
+        let createdAt = Date(timeIntervalSince1970: 1_780_000_000)
+        try fixture.transcriptFileStore.write(EpisodeTranscriptDocument(
+            schemaVersion: 1,
+            episodeID: episode.episodeID,
+            podcastID: episode.podcastID,
+            sourceAudioURL: episode.audioURL ?? "",
+            sourceFileByteCount: byteCount,
+            sourceFileSHA256: sourceSHA256,
+            modelIdentifier: summary.modelIdentifier,
+            modelVersion: summary.version,
+            modelTreeSHA256: summary.treeSHA256,
+            languageCode: "en",
+            audioDuration: 60,
+            checkpoints: [],
+            segments: [segment],
+            text: segment.text,
+            timings: EpisodeTranscriptTimings(),
+            createdAt: createdAt,
+            updatedAt: createdAt
+        ), relativePath: relativePath)
+        fixture.context.insert(EpisodeTranscriptRecord(
+            episodeID: episode.episodeID,
+            podcastID: episode.podcastID,
+            sourceAudioURL: episode.audioURL ?? "",
+            sourceFileByteCount: byteCount,
+            sourceFileSHA256: sourceSHA256,
+            modelIdentifier: summary.modelIdentifier,
+            modelVersion: summary.version,
+            modelTreeSHA256: summary.treeSHA256,
+            state: .completed,
+            audioDuration: 60,
+            completedDuration: 60,
+            checkpointCount: 0,
+            transcriptRelativePath: relativePath,
+            createdAt: createdAt,
+            updatedAt: createdAt
+        ))
+        try fixture.context.save()
+        return relativePath
+    }
+
+    /// A hashed download of `contents` and a completed transcript of other
+    /// bytes: the episode a pass must transcribe again.
+    private func seedDetachedTranscript(
+        for episode: EpisodeListItemSnapshot,
+        contents: Data,
+        fixture: QueueFixture
+    ) async throws -> String {
+        try insertCompletedDownload(
+            for: episode,
+            fileStore: fixture.downloadFileStore,
+            context: fixture.context,
+            contents: contents,
+            isHashed: true
+        )
+        let priorPath = try insertCompletedTranscript(
+            for: episode,
+            sourceSHA256: OpenCastSHA256.hash(Data("an earlier assembly".utf8)),
+            byteCount: 19,
+            fixture: fixture
+        )
+        await fixture.loadStores()
+        return priorPath
+    }
+
+    @MainActor
+    private struct CloudRig {
+        let api: RemoteJobFaultInjectingAPI
+        let store: RemoteTranscriptionJobStore
+        let runner: RemoteTranscriptionJobRunner
+        let purchases: RemoteTranscriptionPurchaseStore
+    }
+
+    /// A server that delivers a transcript of `contents`, the bytes the
+    /// episode's download holds or will hold.
+    private func makeCloudRig(for fixture: QueueFixture, delivering contents: Data) throws -> CloudRig {
+        let identity = OpenCastRemoteTranscriptionSourceIdentity(
+            sha256: OpenCastSHA256.hash(contents),
+            byteCount: Int64(contents.count)
+        )
+        let words = [
+            OpenCastRemoteTranscriptWord(start: 0, end: 1, text: "Delivered"),
+            OpenCastRemoteTranscriptWord(start: 1, end: 2, text: "remotely."),
+        ]
+        let text = words.map(\.text).joined(separator: " ")
+        let result = OpenCastRemoteTranscriptionResult(
+            schemaVersion: 1,
+            sourceIdentity: identity,
+            languageCode: "en",
+            durationSeconds: 60,
+            text: text,
+            segments: [OpenCastRemoteTranscriptSegment(id: 0, start: 0, end: 2, text: text, words: words)],
+            provenance: OpenCastRemoteTranscriptionModelProvenance(
+                provider: "cloudflare-workers-ai",
+                modelIdentifier: "@cf/openai/whisper-large-v3-turbo",
+                modelRevision: nil,
+                servingContractVersion: "1",
+                requestSettingsSHA256: String(repeating: "a", count: 64),
+                chunkManifestSHA256: String(repeating: "b", count: 64),
+                normalizedTranscriptSHA256: OpenCastRemoteTranscriptNormalization.normalizedTranscriptSHA256(text),
+                pipelineVersion: "stitch-v3"
+            ),
+            warnings: []
+        )
+        let api = RemoteJobFaultInjectingAPI(
+            pollScript: [OpenCastRemoteTranscriptionJobStatus(jobID: "", state: .resultReady)],
+            resultResponse: OpenCastRemoteTranscriptionResultResponse(schemaVersion: 1, result: result)
+        )
+        let suiteName = "adfreepass-coordinator-cloud-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        let store = RemoteTranscriptionJobStore(defaults: defaults, diagnostics: RecordingRemoteJobDiagnosticSink())
+        return CloudRig(
+            api: api,
+            store: store,
+            runner: RemoteTranscriptionJobRunner(
+                api: api,
+                downloads: fixture.downloads,
+                transcriptions: fixture.transcriptions,
+                store: store,
+                transportRetryDelays: [],
+                localRetryDelays: []
+            ),
+            purchases: RemoteTranscriptionPurchaseStore(api: api, storeKit: LiveRemoteTranscriptionStoreKitClient())
+        )
     }
 
     private func insertPausedDownload(
@@ -1945,6 +2901,93 @@ struct EpisodeAdFreePassCoordinatorTests {
             .appending(path: "OpenCastAdFreePassTests-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+}
+
+enum ReplacementEnding: CaseIterable, Sendable {
+    case cancelled
+    case failed
+
+    struct Failure: LocalizedError {
+        var errorDescription: String? {
+            "Deterministic replacement failure"
+        }
+    }
+}
+
+/// Where a pass loads a completed transcript and then trusts it.
+enum TranscriptLoadSite: CaseIterable, Sendable {
+    /// The default path's reuse of a completed transcript.
+    case reuse
+    /// The transcript job state's completed arm, which an explicit engine
+    /// reaches past the reuse.
+    case jobState
+    /// The cloud pass's reuse, before any job.
+    case cloudReuse
+}
+
+/// What a user cancel stops: the episode's first transcription, or the
+/// replacement of a completed transcript of other bytes.
+enum CancelledTranscription: CaseIterable, Sendable {
+    case first
+    case replacement
+}
+
+/// Runs an action, once, at the transcript document read it accepts: the
+/// reader is suspended in the read meanwhile, as at any document load.
+@MainActor
+final class TranscriptReadInterceptor {
+    private var pending: ((_ relativePath: String) -> Bool)?
+    private(set) var actionCount = 0
+
+    /// `action` returns whether it acted on this read; until it does, it
+    /// stays armed for the next one.
+    func once(_ action: @escaping (_ relativePath: String) -> Bool) {
+        pending = action
+    }
+
+    nonisolated var hook: @Sendable (_ relativePath: String) async -> Void {
+        { [self] relativePath in
+            await self.handle(relativePath)
+        }
+    }
+
+    private func handle(_ relativePath: String) {
+        guard let action = pending, action(relativePath) else {
+            return
+        }
+        pending = nil
+        actionCount += 1
+    }
+}
+
+/// Holds each run open until the test ends it, so a replacement can be
+/// cancelled, interrupted or failed while the pass waits on it.
+private final class HoldingEpisodeTranscriber: EpisodeTranscribing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: AsyncThrowingStream<EpisodeTranscriptionRunEvent, Error>.Continuation?
+    private var storedRequestCount = 0
+
+    var requestCount: Int {
+        lock.withLock { storedRequestCount }
+    }
+
+    func transcribe(
+        _ request: EpisodeTranscriptionRunRequest
+    ) -> AsyncThrowingStream<EpisodeTranscriptionRunEvent, Error> {
+        AsyncThrowingStream { continuation in
+            lock.withLock {
+                storedRequestCount += 1
+                self.continuation = continuation
+            }
+        }
+    }
+
+    func fail(with error: any Error) {
+        lock.withLock { continuation }?.finish(throwing: error)
+    }
+
+    func unload() async {
     }
 }
 

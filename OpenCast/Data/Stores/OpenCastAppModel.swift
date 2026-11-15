@@ -2268,14 +2268,15 @@ final class OpenCastAppModel {
         )
     }
 
-    /// Decision table for a manual Detect Ads tap: a current completed
-    /// transcript always runs the free on-device analysis, a stored mode
-    /// runs directly, and only an unset mode with the remote surface visible
-    /// prompts.
+    /// Decision table for a manual Detect Ads tap: a completed transcript of
+    /// the trusted download always runs the free on-device analysis, a
+    /// stored mode runs directly, and only an unset mode with the remote
+    /// surface visible prompts.
     func detectAdsTapDecision(for episode: EpisodeListItemSnapshot) -> AdDetectionModePromptPolicy.Decision {
-        return AdDetectionModePromptPolicy(
+        AdDetectionModePromptPolicy(
             storedMode: adDetectionSettings.mode,
-            hasCurrentCompletedTranscript: transcriptions.hasCompletedDocument(for: episode.episodeID),
+            hasAttachedCompletedTranscript: transcriptions.hasCompletedDocument(for: episode.episodeID)
+                && isAdAnalysisAttached(for: episode.episodeID),
             isRemoteSurfaceVisible: remoteTranscriptionPurchases.isSurfaceVisible
         ).decision
     }
@@ -2411,7 +2412,8 @@ final class OpenCastAppModel {
                 for: episode.episodeID,
                 transcriptions: transcriptions,
                 adAnalyses: adAnalyses
-            )
+            ),
+            isAnalysisAttached: isAdAnalysisAttached(for: episode.episodeID)
         )
     }
 
@@ -3503,7 +3505,7 @@ final class OpenCastAppModel {
         modelContext: ModelContext
     ) {
         guard library.isAdAutoDetectEnabled(forPodcastID: episode.podcastID),
-              adFreePass.queueStatus(for: episode.episodeID) == .notQueued
+              AdAutoDetectPlayPolicy.admitsPlay(with: adFreePass.queueStatus(for: episode.episodeID))
         else {
             return
         }
@@ -3525,14 +3527,19 @@ final class OpenCastAppModel {
             transcriptions: transcriptions,
             adAnalyses: adAnalyses
         )
+        // A detached transcript is not the one the pass will analyse: it
+        // transcribes the download again and checks the retained replay
+        // failure over that new transcript instead.
         var isReplaySuppressed = false
-        if let transcript = try? await transcriptions.loadDocument(for: episode.episodeID) {
+        if isAdAnalysisAttached(for: episode.episodeID),
+           let transcript = try? await transcriptions.loadDocument(for: episode.episodeID) {
             do { isReplaySuppressed = try await adAnalyses.automaticReplayError(for: transcript) != nil }
             catch { isReplaySuppressed = true }
         }
         let policy = AdAutoDetectPlayPolicy(
             isAutoDetectEnabled: library.isAdAutoDetectEnabled(forPodcastID: episode.podcastID),
             hasCurrentCompletedAnalysis: hasCurrentCompletedAnalysis,
+            isAnalysisAttached: isAdAnalysisAttached(for: episode.episodeID),
             queueStatus: adFreePass.queueStatus(for: episode.episodeID),
             isReplaySuppressed: isReplaySuppressed
         )

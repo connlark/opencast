@@ -2123,6 +2123,340 @@ struct DownloadStoreTests {
         #expect(store.completedSourceIdentity(for: "identity-legacy") == nil)
     }
 
+    @Test("Launch reconciliation drops the hash of a completed download whose size drifted and keeps an unchanged one")
+    func reconcileDropsHashWhenCompletedSizeDrifts() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let drifted = try insertCompletedDownload(
+            episodeID: "size-drifted",
+            podcastID: "https://example.com/feed.xml",
+            sourceAudioURL: try #require(URL(string: "https://example.com/size-drifted.mp3")),
+            data: Data("abcdef".utf8),
+            fileStore: fileStore,
+            context: context
+        )
+        let unchanged = try insertCompletedDownload(
+            episodeID: "size-unchanged",
+            podcastID: "https://example.com/feed.xml",
+            sourceAudioURL: try #require(URL(string: "https://example.com/size-unchanged.mp3")),
+            data: Data("abcdef".utf8),
+            fileStore: fileStore,
+            context: context
+        )
+        try context.save()
+        // The file changed after it was hashed.
+        try Data("abcdefgh".utf8).write(
+            to: fileStore.fileURL(relativePath: try #require(drifted.localRelativePath)),
+            options: .atomic
+        )
+
+        let store = DownloadStore(fileStore: fileStore)
+        await store.load(modelContext: context)
+
+        let driftedRecord = try #require(store.record(for: "size-drifted"))
+        #expect(driftedRecord.state == .completed)
+        #expect(driftedRecord.bytesReceived == 8)
+        #expect(driftedRecord.sourceFileSHA256.isEmpty)
+        #expect(store.completedSourceIdentity(for: "size-drifted") == nil)
+        let unchangedRecord = try #require(store.record(for: "size-unchanged"))
+        #expect(unchangedRecord.sourceFileSHA256 == OpenCastSHA256.hash(Data("abcdef".utf8)))
+        #expect(store.completedSourceIdentity(for: "size-unchanged")?.sha256 == unchanged.sourceFileSHA256)
+    }
+
+    @Test("Launch reconciliation's extension repair drops the hash when it corrects the size")
+    func reconcileExtensionRepairDropsHashOnSizeDrift() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let audio = EpisodeDownloadAudioFixtures.taggedMP3
+        let inserted = try insertCompletedDownload(
+            episodeID: "repair-drifted",
+            podcastID: "https://example.com/feed.xml",
+            sourceAudioURL: try #require(URL(string: Self.extensionlessAudioURL)),
+            data: audio,
+            fileStore: fileStore,
+            context: context
+        )
+        let storedPath = try #require(inserted.localRelativePath)
+        try #require(storedPath.hasSuffix(".audio"))
+        try context.save()
+        // Still sniffs as MP3, so the repair renames it, at its new size.
+        let driftedAudio = audio + Data("trailing bytes".utf8)
+        try driftedAudio.write(to: fileStore.fileURL(relativePath: storedPath), options: .atomic)
+
+        let store = DownloadStore(fileStore: fileStore)
+        await store.load(modelContext: context)
+
+        let record = try #require(store.record(for: "repair-drifted"))
+        let repairedPath = try #require(record.localRelativePath)
+        #expect(store.lastErrorMessage == nil)
+        #expect(record.state == .completed)
+        #expect(repairedPath.hasSuffix(".mp3"))
+        #expect(record.bytesReceived == Int64(driftedAudio.count))
+        #expect(record.sourceFileSHA256.isEmpty)
+        #expect(store.completedSourceIdentity(for: "repair-drifted") == nil)
+    }
+
+    @Test("Launch reconciliation drops the hash of a completed download whose file is gone")
+    func reconcileDropsHashWhenMarkingMissing() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let inserted = try insertCompletedDownload(
+            episodeID: "hashed-missing",
+            podcastID: "https://example.com/feed.xml",
+            sourceAudioURL: try #require(URL(string: "https://example.com/hashed-missing.mp3")),
+            fileStore: fileStore,
+            context: context
+        )
+        try #require(!inserted.sourceFileSHA256.isEmpty)
+        try context.save()
+        try FileManager.default.removeItem(
+            at: fileStore.fileURL(relativePath: try #require(inserted.localRelativePath))
+        )
+
+        let store = DownloadStore(fileStore: fileStore)
+        await store.load(modelContext: context)
+
+        let record = try #require(store.record(for: "hashed-missing"))
+        #expect(record.state == .missing)
+        #expect(record.sourceFileSHA256.isEmpty)
+    }
+
+    @Test("Adopting a hash trusts a completed download a pause left unhashed at full size")
+    func adoptSourceHashTrustsUnhashedCompletedDownload() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let audio = Data("complete".utf8)
+        let store = DownloadStore(
+            downloader: CompletedBytesHangingEpisodeAudioDownloader(data: audio),
+            fileStore: fileStore
+        )
+        let episode = makeEpisode(episodeID: "adopt-paused-complete")
+        store.startDownload(for: episode, modelContext: context)
+        #expect(await waitUntil {
+            store.record(for: episode.episodeID)?.state == .downloading
+                && store.byteProgress(for: episode.episodeID)?.bytesReceived == Int64(audio.count)
+        })
+        store.pauseDownload(episodeID: episode.episodeID, modelContext: context)
+        try await store.waitForDownload(episodeID: episode.episodeID)
+        let record = try #require(store.record(for: episode.episodeID))
+        try #require(record.state == .completed)
+        try #require(record.sourceFileSHA256.isEmpty)
+        #expect(store.completedSourceIdentity(for: episode.episodeID) == nil)
+
+        let sha256 = OpenCastSHA256.hash(audio)
+        let measuredFile = try #require(store.completedFileStamp(of: record))
+        #expect(try store.adoptSourceHash(
+            sha256,
+            byteCount: Int64(audio.count),
+            measuredFile: measuredFile,
+            for: episode.episodeID,
+            modelContext: context
+        ))
+
+        #expect(record.sourceFileSHA256 == sha256)
+        #expect(store.completedSourceIdentity(for: episode.episodeID)?.sha256 == sha256)
+        let stored = try #require(try context.fetch(FetchDescriptor<EpisodeDownloadRecord>()).first)
+        #expect(stored.sourceFileSHA256 == sha256)
+    }
+
+    @Test("Adopting a hash refuses a hashed, a non-completed and a differently sized download, and a file stamped before a replacement")
+    func adoptSourceHashRefusesRecordsItCannotVouchFor() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let data = Data("downloaded bytes".utf8)
+        let hashed = try insertCompletedDownload(
+            episodeID: "adopt-hashed",
+            podcastID: "https://example.com/feed.xml",
+            sourceAudioURL: try #require(URL(string: "https://example.com/adopt-hashed.mp3")),
+            data: data,
+            fileStore: fileStore,
+            context: context
+        )
+        let unhashed = try insertCompletedDownload(
+            episodeID: "adopt-unhashed",
+            podcastID: "https://example.com/feed.xml",
+            sourceAudioURL: try #require(URL(string: "https://example.com/adopt-unhashed.mp3")),
+            data: data,
+            fileStore: fileStore,
+            context: context
+        )
+        unhashed.sourceFileSHA256 = ""
+        context.insert(
+            EpisodeDownloadRecord(
+                episodeID: "adopt-missing",
+                podcastID: "https://example.com/feed.xml",
+                sourceAudioURL: "https://example.com/adopt-missing.mp3",
+                state: .missing,
+                bytesReceived: Int64(data.count),
+                bytesExpected: Int64(data.count)
+            )
+        )
+        try context.save()
+        let store = DownloadStore(fileStore: fileStore)
+        await store.load(modelContext: context)
+        let adopted = OpenCastSHA256.hash(Data("other bytes".utf8))
+        let byteCount = Int64(data.count)
+        let hashedRecord = try #require(store.record(for: "adopt-hashed"))
+        let unhashedRecord = try #require(store.record(for: "adopt-unhashed"))
+        let hashedFile = try #require(store.completedFileStamp(of: hashedRecord))
+        let unhashedFile = try #require(store.completedFileStamp(of: unhashedRecord))
+
+        #expect(try !store.adoptSourceHash(adopted, byteCount: byteCount, measuredFile: hashedFile, for: "adopt-hashed", modelContext: context))
+        #expect(store.record(for: "adopt-hashed")?.sourceFileSHA256 == hashed.sourceFileSHA256)
+
+        #expect(try !store.adoptSourceHash(adopted, byteCount: byteCount, measuredFile: unhashedFile, for: "adopt-missing", modelContext: context))
+        #expect(store.record(for: "adopt-missing")?.sourceFileSHA256.isEmpty == true)
+
+        #expect(try !store.adoptSourceHash(adopted, byteCount: byteCount + 1, measuredFile: unhashedFile, for: "adopt-unhashed", modelContext: context))
+        #expect(store.record(for: "adopt-unhashed")?.sourceFileSHA256.isEmpty == true)
+        #expect(store.completedSourceIdentity(for: "adopt-unhashed") == nil)
+
+        // Measured before a replacement completed the download again.
+        let earlierFile = EpisodeDownloadFileStamp(
+            localRelativePath: unhashedFile.localRelativePath,
+            completedAt: (unhashedFile.completedAt ?? .now).addingTimeInterval(-60),
+            byteCount: unhashedFile.byteCount,
+            modificationDate: unhashedFile.modificationDate
+        )
+        #expect(try !store.adoptSourceHash(adopted, byteCount: byteCount, measuredFile: earlierFile, for: "adopt-unhashed", modelContext: context))
+        #expect(store.record(for: "adopt-unhashed")?.sourceFileSHA256.isEmpty == true)
+
+        // The same unhashed record with its real byte count and its current
+        // file is adoptable, so each refusal above is its own argument's doing.
+        #expect(try store.adoptSourceHash(adopted, byteCount: byteCount, measuredFile: unhashedFile, for: "adopt-unhashed", modelContext: context))
+    }
+
+    @Test("A download replaced by other bytes of its size while its hash is computed is never trusted with that hash")
+    func downloadReplacedWhileHashedIsNotTrustedWithTheEarlierHash() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let first = Data("the first assembly".utf8)
+        let replacement = Data("THE FIRST ASSEMBLY".utf8)
+        let third = Data("a third assembly, downloaded in full".utf8)
+        let downloader = SequencedEpisodeAudioDownloader(steps: [
+            .holdAtFullSize(first),
+            .holdAtFullSize(replacement),
+            .complete(third),
+        ])
+        let store = DownloadStore(downloader: downloader, fileStore: fileStore)
+        let episode = makeEpisode(episodeID: "adopt-replaced-while-hashed")
+        try await completeUnhashedByPausingAtFullSize(episode, byteCount: first.count, store: store, context: context)
+
+        var didReplace = false
+        let trusted = try await TrustedCompletedDownload.ensure(
+            for: episode,
+            downloads: store,
+            modelContext: context,
+            onWaitStarted: {},
+            measure: { fileURL in
+                let measured = try await EpisodeTranscriptionSourceIdentity.load(from: fileURL)
+                if !didReplace {
+                    didReplace = true
+                    // The hash of the first bytes is in hand; before it is
+                    // adopted the download is replaced by other bytes of the
+                    // same size, again left unhashed by a pause.
+                    try await completeUnhashedByPausingAtFullSize(
+                        episode,
+                        byteCount: replacement.count,
+                        store: store,
+                        context: context
+                    )
+                }
+                return measured
+            }
+        )
+
+        let trustedBytes = try Data(contentsOf: trusted.fileURL)
+        #expect(trusted.identity.sha256 == OpenCastSHA256.hash(trustedBytes))
+        #expect(store.record(for: episode.episodeID)?.sourceFileSHA256 != OpenCastSHA256.hash(first))
+        // The refused adoption downloads once more, and the full download is
+        // hashed as it completes.
+        #expect(downloader.requestCount == 3)
+        #expect(trustedBytes == third)
+        #expect(store.completedSourceIdentity(for: episode.episodeID)?.sha256 == OpenCastSHA256.hash(third))
+    }
+
+    @Test(
+        "A hashing failure over a download of its recorded size is thrown without a re-download; a file gone while it was hashed downloads once more",
+        arguments: DownloadHashFailure.allCases
+    )
+    func hashingFailureDownloadsAgainOnlyForAGoneFile(failure: DownloadHashFailure) async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
+        let unhashed = Data("an unhashed assembly".utf8)
+        let redownloaded = Data("a full re-download of the episode".utf8)
+        let downloader = SequencedEpisodeAudioDownloader(steps: [
+            .holdAtFullSize(unhashed),
+            .complete(redownloaded),
+        ])
+        let store = DownloadStore(downloader: downloader, fileStore: fileStore)
+        let episode = makeEpisode(episodeID: "hash-failure-\(failure)")
+        try await completeUnhashedByPausingAtFullSize(episode, byteCount: unhashed.count, store: store, context: context)
+
+        var trusted: TrustedCompletedDownload?
+        var thrown: (any Error)?
+        do {
+            trusted = try await TrustedCompletedDownload.ensure(
+                for: episode,
+                downloads: store,
+                modelContext: context,
+                onWaitStarted: {},
+                measure: { fileURL in
+                    if failure == .fileGone {
+                        try FileManager.default.removeItem(at: fileURL)
+                    }
+                    throw CocoaError(.fileReadUnknown)
+                }
+            )
+        } catch {
+            thrown = error
+        }
+
+        switch failure {
+        case .readError:
+            // The file is still there at its recorded size: the failure is
+            // the hash's own and says nothing about the bytes.
+            #expect((thrown as? CocoaError)?.code == .fileReadUnknown)
+            #expect(trusted == nil)
+            #expect(downloader.requestCount == 1)
+            let record = try #require(store.record(for: episode.episodeID))
+            #expect(record.state == .completed)
+            #expect(record.sourceFileSHA256.isEmpty)
+        case .fileGone:
+            #expect(thrown == nil)
+            #expect(downloader.requestCount == 2)
+            #expect(try trusted.map { try Data(contentsOf: $0.fileURL) } == redownloaded)
+            #expect(store.completedSourceIdentity(for: episode.episodeID)?.sha256 == OpenCastSHA256.hash(redownloaded))
+        }
+    }
+
+    /// Downloads the episode and pauses it once all its bytes are in, which
+    /// completes it without a hash (R9).
+    private func completeUnhashedByPausingAtFullSize(
+        _ episode: EpisodeListItemSnapshot,
+        byteCount: Int,
+        store: DownloadStore,
+        context: ModelContext
+    ) async throws {
+        store.startDownload(for: episode, modelContext: context)
+        #expect(await waitUntil {
+            store.record(for: episode.episodeID)?.state == .downloading
+                && store.byteProgress(for: episode.episodeID)?.bytesReceived == Int64(byteCount)
+        })
+        store.pauseDownload(episodeID: episode.episodeID, modelContext: context)
+        try await store.waitForDownload(episodeID: episode.episodeID)
+        let record = try #require(store.record(for: episode.episodeID))
+        try #require(record.state == .completed)
+        try #require(record.sourceFileSHA256.isEmpty)
+    }
+
     @Test("An extension-less enclosure completes under the extension its bytes prove")
     func extensionlessEnclosureCompletesUnderSniffedExtension() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -2664,6 +2998,13 @@ struct DownloadStoreTests {
     }
 }
 
+/// How hashing an unhashed download fails: a read error over a file that
+/// is still there, or the file gone while it was hashed.
+enum DownloadHashFailure: CaseIterable, Sendable {
+    case readError
+    case fileGone
+}
+
 private struct ChunkedEpisodeAudioDownloader: EpisodeAudioDownloading {
     let chunks: [Data]
     var metadata = EpisodeDownloadResponseMetadata(entityTag: nil, lastModified: nil)
@@ -2732,6 +3073,59 @@ private struct CompletedBytesHangingEpisodeAudioDownloader: EpisodeAudioDownload
         while true {
             try Task.checkCancellation()
             try await Task.sleep(for: .seconds(1))
+        }
+    }
+}
+
+/// Serves one scripted step per download: the bytes, then either a hang that
+/// only a pause or cancel ends, or a normal completion.
+nonisolated private final class SequencedEpisodeAudioDownloader: EpisodeAudioDownloading, @unchecked Sendable {
+    enum Step: Sendable {
+        case holdAtFullSize(Data)
+        case complete(Data)
+    }
+
+    struct Exhausted: Error {}
+
+    private let lock = NSLock()
+    private var remainingSteps: [Step]
+    private var storedRequestCount = 0
+
+    init(steps: [Step]) {
+        remainingSteps = steps
+    }
+
+    var requestCount: Int {
+        lock.withLock { storedRequestCount }
+    }
+
+    @concurrent
+    func download(
+        from sourceURL: URL,
+        to temporaryURL: URL,
+        resume: EpisodeDownloadResumeContext?,
+        onResponseMetadata: @escaping @MainActor @Sendable (EpisodeDownloadResponseMetadata) -> Void,
+        progress: @escaping @MainActor @Sendable (_ bytesReceived: Int64, _ bytesExpected: Int64?) -> Void
+    ) async throws {
+        let step = lock.withLock { () -> Step? in
+            storedRequestCount += 1
+            return remainingSteps.isEmpty ? nil : remainingSteps.removeFirst()
+        }
+        guard let step else {
+            throw Exhausted()
+        }
+        await onResponseMetadata(EpisodeDownloadResponseMetadata(entityTag: nil, lastModified: nil))
+        switch step {
+        case .complete(let data):
+            try data.write(to: temporaryURL, options: .atomic)
+            await progress(Int64(data.count), Int64(data.count))
+        case .holdAtFullSize(let data):
+            try data.write(to: temporaryURL, options: .atomic)
+            await progress(Int64(data.count), Int64(data.count))
+            while true {
+                try Task.checkCancellation()
+                try await Task.sleep(for: .seconds(1))
+            }
         }
     }
 }

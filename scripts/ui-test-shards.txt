@@ -9,7 +9,7 @@
 # Balanced by measured per-test wall-clock (log 'passed (N seconds)' lines), NOT the
 # .xcresult duration field — that reports 0.0s for screenshot-matrix tests. Regenerate
 # with scripts/gen-ui-test-shards.py <run-dir> after a fresh run.
-# Current assignments: shard1 84 tests | shard2 84 tests | serial 6 tests | exclude 15 tests
+# Current assignments: shard1 85 tests | shard2 85 tests | serial 6 tests | exclude 15 tests
 # Timing estimates are omitted until these scenarios are remeasured.
 
 # --- shard1 ---
@@ -104,6 +104,7 @@ shard2 OpenCastUITests/OpenCastUITests/testPrivateNotesLibraryFollowsToggleAndSe
 shard2 OpenCastUITests/OpenCastUITests/testCompletedOnboardingEmptyLaunchShowsInboxLoadingThenEmpty
 shard2 OpenCastUITests/OpenCastUITests/testEmptyLibraryNamesTheICloudAccountCheckWhileItIsPending
 shard1 OpenCastUITests/OpenCastUITests/testEmptyLibraryStopsWaitingForAnICloudAccountCheckThatDoesNotAnswer
+shard1 OpenCastUITests/OpenCastUITests/testSeededDetachedAdAnalysisOffersDetectAdsAgainScreenshots
 shard2 OpenCastUITests/OpenCastUITests/testDetectAdsFirstTapPromptsForModeAndRemembersOnDeviceChoice
 shard2 OpenCastUITests/OpenCastUITests/testEpisodeActionsMarkPlayedAndClearProgress
 shard2 OpenCastUITests/OpenCastUITests/testEpisodeDetailSupportsAccessibilityDynamicType
@@ -183,6 +184,7 @@ shard2 OpenCastUITests/OpenCastUITests/testSeededSmartPlaylistShowsPickerKeepsIt
 shard2 OpenCastUITests/OpenCastUITests/testSeededSmartPlaylistPriorityChipRanksShowsFirst
 shard2 OpenCastUITests/OpenCastUITests/testSeededDownloadSettingsScreensAndPodcastMenuEntry
 shard2 OpenCastUITests/OpenCastUITests/testSeededDownloadsGroupByShowSectionShowsCountSizeAndLimitChip
+shard2 OpenCastUITests/OpenCastUITests/testSeededRemovePlayedConfirmationSaysScannedEpisodesLoseSkips
 
 # --- serial tail (timing-sensitive; runs alone) ---
 serial OpenCastUITests/OpenCastUITests/testNowPlayingFramePacing

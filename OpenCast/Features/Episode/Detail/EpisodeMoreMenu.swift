@@ -19,6 +19,9 @@ struct EpisodeMoreMenu: View {
     /// leaves through Unarchive instead.
     let offersClearProgress: Bool
     let onClearProgress: () -> Void
+    /// The page's Make Ad-Free route, offered by name when the page's
+    /// caption says the skips need it.
+    let onDetectAdsAgain: () -> Void
     let onShowEpisodeDiagnostics: () -> Void
     let onActionError: (String) -> Void
 
@@ -147,9 +150,13 @@ struct EpisodeMoreMenu: View {
 
     @ViewBuilder
     private var adAnalysisActions: some View {
+        let detectAdsState = appModel.detectAdsMenuState(for: episode)
+        if detectAdsState.offersDetectAgain {
+            Button(detectAdsState.title, systemImage: "megaphone", action: onDetectAdsAgain)
+        }
         if appModel.transcriptions.record(for: episode.episodeID)?.state == .completed {
             Button("Detect Ads Only", systemImage: "megaphone", action: detectAdsOnly)
-                .disabled(!appModel.detectAdsMenuState(for: episode).isEnabled)
+                .disabled(!detectAdsState.enablesAnalysisOnly)
         }
         if appModel.adAnalyses.record(for: episode.episodeID) != nil {
             Button("Delete Ad Analysis", systemImage: "trash", role: .destructive, action: deleteAdAnalysis)
@@ -258,6 +265,7 @@ struct EpisodeMoreMenu: View {
                         isArchived: false,
                         offersClearProgress: true,
                         onClearProgress: {},
+                        onDetectAdsAgain: {},
                         onShowEpisodeDiagnostics: {},
                         onActionError: { _ in }
                     )
@@ -279,6 +287,7 @@ struct EpisodeMoreMenu: View {
                         isArchived: true,
                         offersClearProgress: false,
                         onClearProgress: {},
+                        onDetectAdsAgain: {},
                         onShowEpisodeDiagnostics: {},
                         onActionError: { _ in }
                     )

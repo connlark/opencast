@@ -210,6 +210,75 @@ struct AdFreePassAppModelEntryTests {
         #expect(downloadedFixture.appModel.downloadMenuState(for: episode) == .downloaded)
     }
 
+    @Test("A play after Remove Played in the same session enqueues an automatic pass over a retained completed outcome")
+    func playAfterRemovePlayedEnqueuesOverRetainedCompletion() async throws {
+        let fixture = try await makeFixture()
+        let episode = makeEpisode(episodeID: "app-entry-replay-completed")
+        try await seedSubscription(feedURL: episode.podcastID, isAdAutoDetectEnabled: true, fixture: fixture)
+        try await seedAttachedAnalysis(for: episode, fixture: fixture)
+
+        // A pass over the attached analysis completes without a run.
+        fixture.appModel.startAdFreePass(for: episode, modelContext: fixture.context)
+        guard case .completed = await waitForRetainedOutcome(of: episode, fixture: fixture) else {
+            Issue.record("Expected the pass over the attached analysis to complete.")
+            return
+        }
+
+        _ = fixture.appModel.markEpisodePlayed(episode, modelContext: fixture.context)
+        fixture.appModel.deletePlayedDownloads(modelContext: fixture.context)
+        #expect(fixture.appModel.downloads.record(for: episode.episodeID) == nil)
+        guard case .completed = fixture.appModel.adFreePass.queueStatus(for: episode.episodeID) else {
+            Issue.record("Expected the session to retain the completed outcome.")
+            return
+        }
+
+        try fixture.appModel.playEpisode(episode, modelContext: fixture.context)
+
+        // The automatic pass downloads the audio again (the fixture's
+        // download hangs, holding it active).
+        #expect(await waitUntil {
+            fixture.appModel.adFreePass.activeItem?.episodeID == episode.episodeID
+        })
+        #expect(fixture.appModel.adFreePass.activeItem?.origin == .auto)
+        #expect(fixture.scheduler.submitCallCount == 1)
+    }
+
+    @Test("A play after the download's removal does not retry a pass that failed this session")
+    func playAfterRemovalDoesNotRetryRetainedFailure() async throws {
+        let fixture = try await makeFixture(downloader: ScriptedEpisodeAudioDownloader(contents: nil))
+        let failed = makeEpisode(episodeID: "app-entry-replay-failed")
+        let control = makeEpisode(episodeID: "app-entry-replay-control")
+        try await seedSubscription(feedURL: failed.podcastID, isAdAutoDetectEnabled: true, fixture: fixture)
+        try await seedAttachedAnalysis(for: failed, fixture: fixture)
+        let download = try #require(fixture.appModel.downloads.record(for: failed.episodeID))
+        fixture.appModel.deleteDownload(download, modelContext: fixture.context)
+
+        // Detect Ads Again by hand: the download it needs fails.
+        fixture.appModel.startAdFreePass(for: failed, modelContext: fixture.context)
+        guard case .failed = await waitForRetainedOutcome(of: failed, fixture: fixture) else {
+            Issue.record("Expected the manual pass to fail at its download.")
+            return
+        }
+        // Cached, so a play that reached the policy would enqueue within its
+        // first turn, before the control's play below.
+        #expect(await fixture.appModel.adFreePass.currentCompletedAnalysisVerdict(
+            for: failed.episodeID,
+            transcriptions: fixture.appModel.transcriptions,
+            adAnalyses: fixture.appModel.adAnalyses
+        ))
+
+        try fixture.appModel.playEpisode(failed, modelContext: fixture.context)
+        try fixture.appModel.playEpisode(control, modelContext: fixture.context)
+
+        // The never-scanned control is admitted, and its drain ran nothing
+        // else.
+        guard case .failed = await waitForRetainedOutcome(of: control, fixture: fixture) else {
+            Issue.record("Expected the control's automatic pass to run and fail at its download.")
+            return
+        }
+        #expect(fixture.appModel.adFreePass.drainOutcomes.map(\.episodeID) == [control.episodeID])
+    }
+
     // MARK: - Fixture
 
     @MainActor
@@ -218,16 +287,22 @@ struct AdFreePassAppModelEntryTests {
         let context: ModelContext
         let scheduler: EntryFakeScheduler
         let downloadFileStore: EpisodeDownloadFileStore
+        let transcriptFileStore: EpisodeTranscriptFileStore
+        let adAnalysisFileStore: EpisodeAdAnalysisFileStore
         let notificationCenter: FakeAdFreePassNotificationCenter
     }
 
-    private func makeFixture() async throws -> EntryFixture {
+    private func makeFixture(
+        downloader: any EpisodeAudioDownloading = HangingEntryAudioDownloader()
+    ) async throws -> EntryFixture {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
         let downloadFileStore = EpisodeDownloadFileStore(baseDirectory: temporaryDirectory)
+        let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory)
+        let adAnalysisFileStore = EpisodeAdAnalysisFileStore(baseDirectory: temporaryDirectory)
         let downloads = DownloadStore(
-            downloader: HangingEntryAudioDownloader(),
+            downloader: downloader,
             fileStore: downloadFileStore
         )
         let scheduler = EntryFakeScheduler()
@@ -235,12 +310,8 @@ struct AdFreePassAppModelEntryTests {
         let appModel = OpenCastAppModel(
             library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
             downloads: downloads,
-            transcriptions: EpisodeTranscriptionStore(
-                fileStore: EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory)
-            ),
-            adAnalyses: EpisodeAdAnalysisStore(
-                fileStore: EpisodeAdAnalysisFileStore(baseDirectory: temporaryDirectory)
-            ),
+            transcriptions: EpisodeTranscriptionStore(fileStore: transcriptFileStore),
+            adAnalyses: EpisodeAdAnalysisStore(fileStore: adAnalysisFileStore),
             adFreePassBackgroundSession: EpisodeAdFreePassBackgroundSession(scheduler: scheduler),
             allowsAutomaticFeedRefresh: false,
             adFreePassNotificationCenter: notificationCenter
@@ -251,8 +322,148 @@ struct AdFreePassAppModelEntryTests {
             context: context,
             scheduler: scheduler,
             downloadFileStore: downloadFileStore,
+            transcriptFileStore: transcriptFileStore,
+            adAnalysisFileStore: adAnalysisFileStore,
             notificationCenter: notificationCenter
         )
+    }
+
+    /// A hashed completed download, a completed transcript of its bytes and
+    /// a current analysis of that transcript, loaded as at launch: an
+    /// episode whose analysis is attached.
+    private func seedAttachedAnalysis(for episode: EpisodeListItemSnapshot, fixture: EntryFixture) async throws {
+        let sourceURL = URL(string: episode.audioURL ?? "https://example.com/audio.mp3")!
+        let contents = Data("downloaded \(episode.episodeID)".utf8)
+        let sourceSHA256 = OpenCastSHA256.hash(contents)
+        let downloadPath = fixture.downloadFileStore.relativePath(episodeID: episode.episodeID, sourceAudioURL: sourceURL)
+        try fixture.downloadFileStore.prepareDownloadsDirectory()
+        try contents.write(to: fixture.downloadFileStore.fileURL(relativePath: downloadPath), options: .atomic)
+        let download = EpisodeDownloadRecord(
+            episodeID: episode.episodeID,
+            podcastID: episode.podcastID,
+            sourceAudioURL: sourceURL.absoluteString,
+            localRelativePath: downloadPath,
+            state: .completed,
+            bytesReceived: Int64(contents.count),
+            bytesExpected: Int64(contents.count)
+        )
+        download.sourceFileSHA256 = sourceSHA256
+        fixture.context.insert(download)
+
+        let createdAt = Date(timeIntervalSince1970: 1_780_000_000)
+        let segment = OpenCastTranscriptSegment(
+            id: 0,
+            start: 0,
+            end: 4,
+            text: "This episode is brought to you by Example.",
+            avgLogProbability: -0.1,
+            noSpeechProbability: 0.01
+        )
+        let transcript = EpisodeTranscriptDocument(
+            schemaVersion: 1,
+            episodeID: episode.episodeID,
+            podcastID: episode.podcastID,
+            sourceAudioURL: sourceURL.absoluteString,
+            sourceFileByteCount: Int64(contents.count),
+            sourceFileSHA256: sourceSHA256,
+            modelIdentifier: "model",
+            modelVersion: "v1",
+            modelTreeSHA256: "tree",
+            languageCode: "en",
+            audioDuration: 30,
+            checkpoints: [],
+            segments: [segment],
+            text: segment.text,
+            timings: EpisodeTranscriptTimings(),
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+        let transcriptPath = fixture.transcriptFileStore.relativePath(episodeID: episode.episodeID, fingerprint: "transcript")
+        try fixture.transcriptFileStore.write(transcript, relativePath: transcriptPath)
+        fixture.context.insert(EpisodeTranscriptRecord(
+            episodeID: episode.episodeID,
+            podcastID: episode.podcastID,
+            sourceAudioURL: transcript.sourceAudioURL,
+            sourceFileByteCount: transcript.sourceFileByteCount,
+            sourceFileSHA256: sourceSHA256,
+            modelIdentifier: transcript.modelIdentifier,
+            modelVersion: transcript.modelVersion,
+            modelTreeSHA256: transcript.modelTreeSHA256,
+            languageCode: transcript.languageCode,
+            state: .completed,
+            audioDuration: transcript.audioDuration,
+            completedDuration: transcript.audioDuration,
+            checkpointCount: 0,
+            transcriptRelativePath: transcriptPath,
+            createdAt: createdAt,
+            updatedAt: createdAt
+        ))
+
+        let fingerprint = fixture.adAnalysisFileStore.transcriptFingerprint(for: transcript)
+        let analysis = EpisodeAdAnalysisDocument(
+            schemaVersion: EpisodeAdAnalysisContract.schemaVersion,
+            episodeID: episode.episodeID,
+            podcastID: episode.podcastID,
+            requestID: "request",
+            transcriptFingerprint: fingerprint,
+            transcriptUpdatedAt: transcript.updatedAt,
+            transcriptSegmentCount: transcript.segments.count,
+            model: "gemini-test",
+            policy: EpisodeAdAnalysisContract.expectedPolicy,
+            spans: [EpisodeAdAnalysisSpan(
+                id: 0,
+                kind: .hostReadAd,
+                label: "Sponsor",
+                startSegmentID: 0,
+                endSegmentID: 0,
+                startTime: 0,
+                endTime: 4,
+                confidence: 0.9,
+                evidenceQuote: "brought to you"
+            )],
+            warnings: [],
+            usage: nil,
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+        let analysisPath = fixture.adAnalysisFileStore.relativePath(
+            episodeID: episode.episodeID,
+            transcriptFingerprint: fingerprint
+        )
+        try fixture.adAnalysisFileStore.write(analysis, relativePath: analysisPath)
+        fixture.context.insert(EpisodeAdAnalysisRecord(
+            episodeID: episode.episodeID,
+            podcastID: episode.podcastID,
+            transcriptFingerprint: fingerprint,
+            transcriptUpdatedAt: transcript.updatedAt,
+            transcriptSegmentCount: transcript.segments.count,
+            transcriptState: .completed,
+            state: .completed,
+            analysisRelativePath: analysisPath,
+            model: analysis.model,
+            policy: analysis.policy,
+            spanCount: analysis.spans.count,
+            warningCount: 0,
+            createdAt: createdAt,
+            updatedAt: createdAt
+        ))
+        try fixture.context.save()
+        await fixture.appModel.downloads.load(modelContext: fixture.context)
+        fixture.appModel.loadLocalTranscriptionState(modelContext: fixture.context)
+    }
+
+    /// The session's retained outcome for `episode` once its drain is over.
+    private func waitForRetainedOutcome(
+        of episode: EpisodeListItemSnapshot,
+        fixture: EntryFixture
+    ) async -> AdFreePassQueueEpisodeStatus? {
+        let coordinator = fixture.appModel.adFreePass
+        let settled = await waitUntil {
+            coordinator.queueState == .idle
+                && coordinator.activeEpisodeID == nil
+                && coordinator.drainOutcomes.contains { $0.episodeID == episode.episodeID }
+        }
+        return settled ? coordinator.queueStatus(for: episode.episodeID) : nil
     }
 
     private func seedSubscription(

@@ -175,6 +175,16 @@ struct EpisodeAdFreePassPresentation: Equatable {
         )
     }
 
+    /// A current analysis whose trusted download is gone: nothing is marked
+    /// for this audio, and a new pass restores the skips.
+    static let detached = EpisodeAdFreePassPresentation(
+        stage: .idle,
+        phase: .idle,
+        statusText: EpisodeAdSpanTimelineView.detachedCaption,
+        primaryActionTitle: EpisodeDetectAdsMenuState.detectAgain.title,
+        isPrimaryActionEnabled: true
+    )
+
     static func queued(ahead: Int) -> EpisodeAdFreePassPresentation {
         EpisodeAdFreePassPresentation(
             stage: .idle,

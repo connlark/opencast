@@ -12,16 +12,22 @@ final class EpisodeAdAnalysisSectionModel {
     private(set) var analysisDocument: EpisodeAdAnalysisDocument?
     private(set) var jobState: EpisodeAdAnalysisJobState = placeholderState
     private(set) var hasCurrentCompletedAnalysis = false
+    /// The display form: the download record's state and stored hash, no
+    /// file I/O, so a file lost mid-session still reads attached here until
+    /// the next launch's reconciliation.
+    private(set) var isAnalysisAttached = false
     private(set) var zoneTiers: EpisodeAdAnalysisZoneTiers = .empty
     private(set) var loadedKey: String?
 
-    /// The `.task(id:)` key: per-episode transcript and analysis record
-    /// stamps plus the store's tracked running flag. isRunning is the only
-    /// Observation-tracked store read here (record lookups go through the
-    /// store's index), so run start/end are what invalidate the view; the
-    /// store-global changeSequence stays out because it would re-run this
-    /// load — a document read plus an off-main SHA-256 — on every OTHER
-    /// episode's analysis events.
+    /// The `.task(id:)` key: per-episode transcript, analysis and download
+    /// record stamps plus the store's tracked running flag. isRunning is the
+    /// only Observation-tracked analysis store read here (record lookups go
+    /// through the store's index), so run start/end are what invalidate the
+    /// view; the store-global changeSequence stays out because it would
+    /// re-run this load — a document read plus an off-main SHA-256 — on
+    /// every OTHER episode's analysis events. The download stamp re-keys a
+    /// deletion, a repair or a completion, which attach or detach the
+    /// analysis.
     func loadKey(appModel: OpenCastAppModel, episodeID: String?) -> String {
         guard let episodeID else {
             return "missing"
@@ -38,7 +44,9 @@ final class EpisodeAdAnalysisSectionModel {
             analysisStamp = "missing"
         }
         let runningStamp = appModel.adAnalyses.isRunning(for: episodeID) ? "active" : "idle"
-        return "\(episodeID)|\(transcriptStamp)|\(analysisStamp)|\(runningStamp)"
+        let downloadStamp = appModel.downloads.record(for: episodeID)
+            .map { "\($0.state.rawValue):\($0.sourceFileSHA256)" } ?? "none"
+        return "\(episodeID)|\(transcriptStamp)|\(analysisStamp)|\(runningStamp)|\(downloadStamp)"
     }
 
     /// The loaded job state while it still belongs to `key`; a re-keyed task
@@ -51,6 +59,12 @@ final class EpisodeAdAnalysisSectionModel {
         loadedKey == key
             && hasCurrentCompletedAnalysis
             && analysisDocument?.episodeID == episodeID
+    }
+
+    func isAnalysisAttached(forKey key: String, episodeID: String) -> Bool {
+        loadedKey == key
+            && isAnalysisAttached
+            && transcriptDocument?.episodeID == episodeID
     }
 
     func zoneTiers(forKey key: String, episodeID: String) -> EpisodeAdAnalysisZoneTiers {
@@ -84,6 +98,7 @@ final class EpisodeAdAnalysisSectionModel {
         analysisDocument = nil
         jobState = Self.placeholderState
         hasCurrentCompletedAnalysis = false
+        isAnalysisAttached = false
         zoneTiers = .empty
 
         guard let episode,
@@ -139,6 +154,7 @@ final class EpisodeAdAnalysisSectionModel {
         self.analysisDocument = analysisDocument
         jobState = state.jobState
         hasCurrentCompletedAnalysis = state.hasCurrentCompletedAnalysis
+        isAnalysisAttached = appModel.isAdAnalysisAttachedByRecord(for: episode.episodeID)
         if state.hasCurrentCompletedAnalysis, let analysisDocument {
             zoneTiers = EpisodeAdAnalysisZoneMapper.zoneTiers(
                 for: analysisDocument,

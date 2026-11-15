@@ -470,12 +470,28 @@ final class EpisodeAdAnalysisStore {
 
     /// Durable import of a server-produced completed analysis (cloud detect
     /// pass): writes the document and upserts a completed record through the
-    /// same path a device analysis uses. Mirror of
-    /// `EpisodeTranscriptionStore.importRemoteTranscript`.
+    /// same path a device analysis uses, then deletes the analysis it
+    /// replaced. Mirror of `EpisodeTranscriptionStore.importRemoteTranscript`.
     func importCompletedAnalysis(
         _ document: EpisodeAdAnalysisDocument,
         modelContext: ModelContext
     ) throws {
+        let supersededPath = lastCompletedAnalysisPath(episodeID: document.episodeID)
+        let relativePath = try installCompletedAnalysis(document, modelContext: modelContext)
+        deleteSupersededAnalysisDocument(
+            at: supersededPath,
+            keeping: relativePath,
+            episodeID: document.episodeID
+        )
+    }
+
+    /// Writes a completed analysis and its record without touching any other
+    /// document, so a failed run's restore can reinstall the one it kept.
+    @discardableResult
+    private func installCompletedAnalysis(
+        _ document: EpisodeAdAnalysisDocument,
+        modelContext: ModelContext
+    ) throws -> String {
         let relativePath = fileStore.relativePath(
             episodeID: document.episodeID,
             transcriptFingerprint: document.transcriptFingerprint
@@ -500,6 +516,37 @@ final class EpisodeAdAnalysisStore {
         try commit(episodeID: document.episodeID, modelContext: modelContext, resort: true)
         try fileStore.writeRunState(.init(transcriptFingerprint: document.transcriptFingerprint), episodeID: document.episodeID)
         failures.clear(episodeID: document.episodeID)
+        return relativePath
+    }
+
+    /// The document a new analysis of the episode replaces: the completed
+    /// record's, or, while a run holds the record, the one its run state
+    /// keeps to restore.
+    private func lastCompletedAnalysisPath(episodeID: String) -> String? {
+        record(for: episodeID).flatMap { $0.state == .completed ? $0.analysisRelativePath : nil }
+            ?? (try? fileStore.readRunState(episodeID: episodeID))?.previousAnalysisPath
+    }
+
+    /// Called once the new analysis's record and its cleared run state are
+    /// both written, so nothing refers to the superseded document. A rerun
+    /// of the same transcript writes over the same path, which stays. A
+    /// failed delete only leaves a stray file behind; it never undoes the
+    /// committed analysis.
+    private func deleteSupersededAnalysisDocument(
+        at supersededPath: String?,
+        keeping currentPath: String,
+        episodeID: String
+    ) {
+        guard let supersededPath, supersededPath != currentPath else {
+            return
+        }
+        do {
+            try fileStore.delete(relativePath: supersededPath)
+        } catch {
+            AdFreePassBackgroundRunLog.record(
+                "analysis superseded document delete failed episodeID=\(episodeID) error=\(error.localizedDescription)"
+            )
+        }
     }
 
     func deleteAnalysis(episodeID: String, modelContext: ModelContext) {
@@ -1371,8 +1418,7 @@ final class EpisodeAdAnalysisStore {
         preparation: EpisodeAdAnalysisPreparation,
         modelContext: ModelContext
     ) throws {
-        let previous = record(for: document.episodeID).flatMap { $0.state == .completed ? $0.analysisRelativePath : nil }
-            ?? (try? fileStore.readRunState(episodeID: document.episodeID))?.previousAnalysisPath
+        let previous = lastCompletedAnalysisPath(episodeID: document.episodeID)
         try fileStore.writeRunState(.init(transcriptFingerprint: preparation.fingerprint, previousAnalysisPath: previous), episodeID: document.episodeID)
         try upsertRecord(
             episodeID: document.episodeID,
@@ -1680,6 +1726,9 @@ final class EpisodeAdAnalysisStore {
             throw EpisodeAdAnalysisError.unrecognizedSpanKind
         }
 
+        // Only the run state knows the superseded document; the line below
+        // that clears it is the last place to learn it.
+        let supersededPath = try? fileStore.readRunState(episodeID: episodeID)?.previousAnalysisPath
         try fileStore.write(document, relativePath: relativePath)
         record.state = .completed
         record.analysisRelativePath = relativePath
@@ -1693,6 +1742,7 @@ final class EpisodeAdAnalysisStore {
         record.updatedAt = .now
         try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
         try fileStore.writeRunState(.init(transcriptFingerprint: fingerprint), episodeID: episodeID)
+        deleteSupersededAnalysisDocument(at: supersededPath, keeping: relativePath, episodeID: episodeID)
     }
 
     private static func jobIDMismatchError() -> EpisodeAdAnalysisHTTPError {
@@ -1902,7 +1952,7 @@ final class EpisodeAdAnalysisStore {
             if let state = try fileStore.readRunState(episodeID: episodeID),
                let path = state.previousAnalysisPath,
                let previous = try? fileStore.read(relativePath: path) {
-                try importCompletedAnalysis(previous, modelContext: modelContext)
+                try installCompletedAnalysis(previous, modelContext: modelContext)
                 try fileStore.writeRunState(state, episodeID: episodeID)
                 if let record = record(for: episodeID) {
                     record.failureKind = Self.failureKind(for: error)

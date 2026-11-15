@@ -53,7 +53,7 @@ struct PodcastDownloadSettingsView: View {
                 }
             } footer: {
                 Text(
-                    "When this show has more downloads than its limit, the oldest downloads are removed. \(DownloadSettingsCopy.keptDownloadsSentence)"
+                    "When this show has more downloads than its limit, the oldest downloads are removed. \(DownloadSettingsCopy.keptDownloadsSentence) \(DownloadSettingsCopy.scannedEpisodesSentence)"
                 )
             }
 
@@ -81,7 +81,7 @@ struct PodcastDownloadSettingsView: View {
                         Button("Delete All Downloads", role: .destructive, action: deleteDownloads)
                         Button("Cancel", role: .cancel) {}
                     } message: {
-                        Text("Downloaded audio for this podcast will be removed from this device.")
+                        Text("Downloaded audio for this podcast will be removed from this device. \(DownloadSettingsCopy.scannedEpisodesSentence)")
                     }
                 }
             }

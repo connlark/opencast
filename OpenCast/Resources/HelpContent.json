@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-11-08T02:50:31Z",
+  "updatedAt": "2026-11-15T04:16:37Z",
   "topics": [
     {
       "id": "why-we-charge",
@@ -417,7 +417,7 @@
       "title": "Storage",
       "symbol": "internaldrive",
       "summary": "Automatic caches are capped; downloads follow your limits.",
-      "updatedAt": "2026-10-30T07:42:02Z",
+      "updatedAt": "2026-11-15T04:16:37Z",
       "related": [
         "icloud-sync"
       ],
@@ -428,7 +428,7 @@
         },
         {
           "type": "paragraph",
-          "text": "Downloaded episodes stay until you delete them, unless a limit removes them. Keep Downloaded, set for every show in Download Settings (the gear in Downloads) or for one show in its own download settings, keeps only a show's most recently downloaded episodes; when it has more, the oldest are removed. Delete Downloads After Played removes episodes once they're played. Neither removes the current episode, or an episode being transcribed or scanned for ads."
+          "text": "Downloaded episodes stay until you delete them, unless a limit removes them. Keep Downloaded, set for every show in Download Settings (the gear in Downloads) or for one show in its own download settings, keeps only a show's most recently downloaded episodes; when it has more, the oldest are removed. Delete Downloads After Played removes episodes once they're played. Neither removes the current episode, or an episode being transcribed or scanned for ads. Removing a scanned episode's audio turns off its automatic ad skips; from version 2026.11.3, Detect Ads Again in the episode's menu restores them, while in earlier versions a new scan reuses the old transcript and may not restore them."
         },
         {
           "type": "paragraph",

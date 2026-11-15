@@ -72,11 +72,14 @@ nonisolated struct NowPlayingSoundLabLayout {
         let width: CGFloat
     }
 
-    /// The Sound Lab's fixed action titles, each of which also shows with its
-    /// trailing state glyph. Parameterized titles are outside the guarantee.
+    /// The Sound Lab's fixed action titles, each held whole beside its
+    /// trailing state glyph, whether or not its state shows one ("Detect Ads
+    /// Again" shows only idle). Parameterized titles are outside the
+    /// guarantee.
     static let fixedActionTitles = [
         ActionTitle(title: "Skip Promos & Ads", width: 131),
         ActionTitle(title: "Reanalyze", width: 70),
+        ActionTitle(title: "Detect Ads Again", width: 119),
         ActionTitle(title: "Detect on Device", width: 118),
         ActionTitle(title: "Resume", width: 55),
         ActionTitle(title: "Retry", width: 37),

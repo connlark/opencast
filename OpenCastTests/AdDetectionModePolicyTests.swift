@@ -6,16 +6,43 @@ import Testing
 @MainActor
 @Suite("Ad detection mode policy")
 struct AdDetectionModePolicyTests {
-    @Test("A completed local transcript always runs on-device")
-    func completedTranscriptShortCircuits() {
+    @Test("A completed transcript attached to the trusted download always runs on-device")
+    func attachedCompletedTranscriptShortCircuits() {
         for storedMode in [AdDetectionMode.cloud, .onDevice, nil] {
-            let policy = AdDetectionModePromptPolicy(
-                storedMode: storedMode,
-                hasCurrentCompletedTranscript: true,
-                isRemoteSurfaceVisible: true
-            )
-            #expect(policy.decision == .runOnDevice, "stored \(String(describing: storedMode))")
+            for isRemoteSurfaceVisible in [true, false] {
+                let policy = AdDetectionModePromptPolicy(
+                    storedMode: storedMode,
+                    hasAttachedCompletedTranscript: true,
+                    isRemoteSurfaceVisible: isRemoteSurfaceVisible
+                )
+                #expect(
+                    policy.decision == .runOnDevice,
+                    "stored \(String(describing: storedMode)) surface \(isRemoteSurfaceVisible)"
+                )
+            }
         }
+    }
+
+    @Test(
+        "A detached transcript follows the stored mode or prompts, as an untranscribed episode does",
+        arguments: [
+            (AdDetectionMode?.some(.onDevice), true, AdDetectionModePromptPolicy.Decision.runOnDevice),
+            (.some(.cloud), true, .runCloud),
+            (nil, true, .prompt),
+            (nil, false, .runOnDevice)
+        ]
+    )
+    func detachedTranscriptFollowsTheMode(
+        storedMode: AdDetectionMode?,
+        isRemoteSurfaceVisible: Bool,
+        expected: AdDetectionModePromptPolicy.Decision
+    ) {
+        let policy = AdDetectionModePromptPolicy(
+            storedMode: storedMode,
+            hasAttachedCompletedTranscript: false,
+            isRemoteSurfaceVisible: isRemoteSurfaceVisible
+        )
+        #expect(policy.decision == expected)
     }
 
     @Test("A stored mode runs without prompting")
@@ -23,14 +50,14 @@ struct AdDetectionModePolicyTests {
         #expect(
             AdDetectionModePromptPolicy(
                 storedMode: .cloud,
-                hasCurrentCompletedTranscript: false,
+                hasAttachedCompletedTranscript: false,
                 isRemoteSurfaceVisible: true
             ).decision == .runCloud
         )
         #expect(
             AdDetectionModePromptPolicy(
                 storedMode: .onDevice,
-                hasCurrentCompletedTranscript: false,
+                hasAttachedCompletedTranscript: false,
                 isRemoteSurfaceVisible: true
             ).decision == .runOnDevice
         )
@@ -39,7 +66,7 @@ struct AdDetectionModePolicyTests {
         #expect(
             AdDetectionModePromptPolicy(
                 storedMode: .cloud,
-                hasCurrentCompletedTranscript: false,
+                hasAttachedCompletedTranscript: false,
                 isRemoteSurfaceVisible: false
             ).decision == .runCloud
         )
@@ -50,14 +77,14 @@ struct AdDetectionModePolicyTests {
         #expect(
             AdDetectionModePromptPolicy(
                 storedMode: nil,
-                hasCurrentCompletedTranscript: false,
+                hasAttachedCompletedTranscript: false,
                 isRemoteSurfaceVisible: true
             ).decision == .prompt
         )
         #expect(
             AdDetectionModePromptPolicy(
                 storedMode: nil,
-                hasCurrentCompletedTranscript: false,
+                hasAttachedCompletedTranscript: false,
                 isRemoteSurfaceVisible: false
             ).decision == .runOnDevice
         )
@@ -68,6 +95,7 @@ struct AdDetectionModePolicyTests {
         let policy = AdAutoDetectPlayPolicy(
             isAutoDetectEnabled: true,
             hasCurrentCompletedAnalysis: false,
+            isAnalysisAttached: false,
             queueStatus: .cloudUnavailable(message: "No credits.")
         )
         #expect(policy.shouldEnqueue)
@@ -77,7 +105,8 @@ struct AdDetectionModePolicyTests {
     func menuStateTreatsCloudUnavailableAsDetect() {
         let state = EpisodeDetectAdsMenuState(
             queueStatus: .cloudUnavailable(message: "No credits."),
-            hasCurrentCompletedAnalysis: false
+            hasCurrentCompletedAnalysis: false,
+            isAnalysisAttached: false
         )
         #expect(state == .detect)
         #expect(state.isEnabled)

@@ -2266,8 +2266,802 @@ struct EpisodeTranscriptionStoreTests {
         #expect(!harness.fileStore.documentExists(relativePath: harness.priorRelativePath))
     }
 
+    @Test("A trusted source match reads only a transcript of the trusted bytes as completed")
+    func trustedSourceMatchReadsOnlyMatchingTranscriptAsCompleted() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let fileStore = EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
+        let episode = makeEpisode(episodeID: "source-match")
+        let document = try insertCompletedTranscript(
+            episodeID: episode.episodeID,
+            podcastID: episode.podcastID,
+            text: "transcript of earlier bytes",
+            fileStore: fileStore,
+            modelContext: context
+        )
+        let store = EpisodeTranscriptionStore(transcriber: FakeEpisodeTranscriber(), fileStore: fileStore)
+        store.load(modelContext: context)
+        let record = try #require(store.record(for: episode.episodeID))
+        let downloadRecord = completedDownloadRecord(episode: episode)
+        let summary = modelSummary()
+        let recordIdentity = EpisodeTranscriptionModelIdentity(
+            modelIdentifier: record.modelIdentifier,
+            version: record.modelVersion,
+            treeSHA256: record.modelTreeSHA256
+        )
+        func state(
+            _ sourceMatch: EpisodeTranscriptionSourceMatch,
+            modelIdentity: EpisodeTranscriptionModelIdentity? = nil
+        ) -> EpisodeTranscriptionJobState {
+            store.jobState(
+                for: episode.episodeID,
+                downloadRecord: downloadRecord,
+                modelState: .installed(summary),
+                modelIdentity: modelIdentity,
+                sourceMatch: sourceMatch
+            )
+        }
+
+        // Display surfaces keep seeing the transcript, whatever audio it describes.
+        #expect(state(.any) == .completed(record))
+        #expect(state(.trusted(sha256: document.sourceFileSHA256)) == .completed(record))
+        // Other bytes, or no trusted download, leave the episode ready to
+        // transcribe again, with or without a model identity to match.
+        #expect(state(.trusted(sha256: "other-bytes")) == .ready)
+        #expect(state(.trusted(sha256: nil)) == .ready)
+        #expect(state(.trusted(sha256: document.sourceFileSHA256), modelIdentity: recordIdentity) == .completed(record))
+        #expect(state(.trusted(sha256: "other-bytes"), modelIdentity: recordIdentity) == .ready)
+
+        // A transcript with no recorded hash proves no bytes.
+        record.sourceFileSHA256 = ""
+        #expect(state(.trusted(sha256: document.sourceFileSHA256)) == .ready)
+        #expect(state(.trusted(sha256: "")) == .ready)
+        #expect(state(.any) == .completed(record))
+
+        // Only a completed transcript is held to the source; an interrupted
+        // one still reads interrupted, so its own resume path stays as it is.
+        record.sourceFileSHA256 = document.sourceFileSHA256
+        record.state = .interrupted
+        #expect(state(.trusted(sha256: "other-bytes")) == .interrupted(record))
+    }
+
+    @Test("An interrupted Whisper replacement restores the prior transcript, keeps its partial and resumes from it")
+    func interruptedWhisperReplacementKeepsPartialAndResumes() async throws {
+        let harness = try makeReplacementHarness(episodeID: "replacement-interrupted")
+        #expect(await startReplacementAndCheckpoint(harness))
+        let partialPath = try replacementPartialRelativePath(harness)
+
+        harness.store.interruptActiveJob(modelContext: harness.context)
+
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+        try expectPriorTranscriptRestored(harness)
+        #expect(harness.fileStore.documentExists(relativePath: partialPath))
+        #expect(
+            harness.store.interruptedReplacement(for: harness.episodeID)
+                == EpisodeTranscriptionReplacementInterruption(isEnvironmental: false)
+        )
+        // The record reads the restored transcript; only the note knows.
+        #expect(!harness.store.hasEnvironmentalInterruptionPending(for: harness.episodeID))
+        #expect(!harness.store.hasResumableWhisperCheckpoint(for: harness.episodeID))
+
+        try await expectReplacementResumesAndCompletes(harness)
+    }
+
+    @Test("An environmental failure of a Whisper replacement restores the prior transcript, keeps its partial and resumes from it")
+    func environmentalWhisperReplacementFailureKeepsPartialAndResumes() async throws {
+        let harness = try makeReplacementHarness(
+            episodeID: "replacement-environmental",
+            failureEnvironment: { EpisodeTranscriptionFailureEnvironment(sceneState: .background, isProtectedDataAvailable: true) }
+        )
+        #expect(await startReplacementAndCheckpoint(harness, initialComputeProfile: .cpuOnly))
+        let partialPath = try replacementPartialRelativePath(harness)
+
+        harness.transcriber.fail(with: coreMLError())
+
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+        try expectPriorTranscriptRestored(harness)
+        #expect(harness.fileStore.documentExists(relativePath: partialPath))
+        #expect(
+            harness.store.interruptedReplacement(for: harness.episodeID)
+                == EpisodeTranscriptionReplacementInterruption(isEnvironmental: true)
+        )
+        // The record-based query stays the record's: a note whose queue item
+        // went away must never be resumed from the foreground.
+        #expect(!harness.store.hasEnvironmentalInterruptionPending(for: harness.episodeID))
+        #expect(harness.store.lastErrorMessage(for: harness.episodeID) == nil)
+
+        try await expectReplacementResumesAndCompletes(harness)
+    }
+
+    @Test(
+        "A cancelled or failed replacement restores the prior transcript and deletes its partial",
+        arguments: ReplacementStop.allCases
+    )
+    func stoppedReplacementRestoresPriorTranscriptAndDeletesPartial(stop: ReplacementStop) async throws {
+        let harness = try makeReplacementHarness(episodeID: "replacement-\(stop)")
+        #expect(await startReplacementAndCheckpoint(harness))
+        let partialPath = try replacementPartialRelativePath(harness)
+        #expect(harness.fileStore.documentExists(relativePath: partialPath))
+
+        switch stop {
+        case .userCancel:
+            harness.store.cancelTranscription(episodeID: harness.episodeID, modelContext: harness.context)
+        case .hardFailure:
+            harness.transcriber.fail(with: replacementFailure("Deterministic replacement failure"))
+        }
+
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+        try expectPriorTranscriptRestored(harness)
+        #expect(!harness.fileStore.documentExists(relativePath: partialPath))
+        #expect(harness.store.interruptedReplacement(for: harness.episodeID) == nil)
+        #expect(
+            harness.store.lastErrorMessage(for: harness.episodeID)
+                == (stop == .hardFailure ? "Deterministic replacement failure" : nil)
+        )
+        // A cancel leaves only its note to say so, read once; a failure
+        // says why in its recorded error.
+        #expect(harness.store.consumeCancelledReplacement(for: harness.episodeID) == (stop == .userCancel))
+        #expect(!harness.store.consumeCancelledReplacement(for: harness.episodeID))
+    }
+
+    @Test("A cancel during a replacement's setup is noted as a cancel, and a start clears the note")
+    func cancelDuringReplacementSetupIsNoted() async throws {
+        let harness = try makeReplacementHarness(episodeID: "replacement-setup-cancelled")
+
+        #expect(startReplacement(harness))
+        // Before the run's task starts: it is cancelled through the identity
+        // load and stops while the record still reads the prior transcript.
+        harness.store.cancelTranscription(episodeID: harness.episodeID, modelContext: harness.context)
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+        try expectPriorTranscriptRestored(harness)
+        #expect(harness.transcriber.requestCount == 0)
+        #expect(harness.store.interruptedReplacement(for: harness.episodeID) == nil)
+        #expect(harness.store.consumeCancelledReplacement(for: harness.episodeID))
+        #expect(!harness.store.consumeCancelledReplacement(for: harness.episodeID))
+
+        // A start clears a note no one read.
+        #expect(startReplacement(harness))
+        harness.store.cancelTranscription(episodeID: harness.episodeID, modelContext: harness.context)
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+        #expect(startReplacement(harness))
+        #expect(!harness.store.consumeCancelledReplacement(for: harness.episodeID))
+        harness.store.cancelTranscription(episodeID: harness.episodeID, modelContext: harness.context)
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+    }
+
+    @Test("An interrupted Apple Speech replacement restores the prior transcript and deletes its partial")
+    func interruptedAppleSpeechReplacementDeletesPartial() async throws {
+        let harness = try makeReplacementHarness(episodeID: "replacement-apple-interrupted")
+        var interruptionEvents: [String] = []
+        harness.store.onAppleSpeechRunInterrupted = { episodeID, restored in
+            interruptionEvents.append("\(episodeID):\(restored)")
+        }
+        #expect(await startReplacementAndCheckpoint(
+            harness,
+            engine: .appleSpeech,
+            modelIdentity: appleImproveIdentity(),
+            languageCode: "en-US"
+        ))
+        let partialPath = try replacementPartialRelativePath(harness, modelIdentity: appleImproveIdentity())
+        #expect(harness.fileStore.documentExists(relativePath: partialPath))
+
+        harness.store.interruptActiveJob(modelContext: harness.context)
+
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+        try expectPriorTranscriptRestored(harness)
+        #expect(!harness.fileStore.documentExists(relativePath: partialPath))
+        #expect(
+            harness.store.interruptedReplacement(for: harness.episodeID)
+                == EpisodeTranscriptionReplacementInterruption(isEnvironmental: false)
+        )
+        #expect(interruptionEvents == ["\(harness.episodeID):true"])
+
+        harness.store.deleteTranscript(episodeID: harness.episodeID, modelContext: harness.context)
+        #expect(harness.store.interruptedReplacement(for: harness.episodeID) == nil)
+    }
+
+    @Test(
+        "A hashing or duration failure before a preserving run leaves the prior transcript completed",
+        arguments: ReplacementSetupFailure.allCases,
+        [PriorCompletedTranscriptPolicy.preserve, .preserveKeepingInterruptedPartial]
+    )
+    func setupFailureLeavesPriorTranscriptCompleted(
+        failure: ReplacementSetupFailure,
+        policy: PriorCompletedTranscriptPolicy
+    ) async throws {
+        let harness = try makeReplacementHarness(episodeID: "replacement-setup-\(failure)-\(policy)")
+        let episode = failure == .duration
+            ? EpisodeListItemSnapshot.fixture(
+                episodeID: harness.episodeID,
+                duration: nil,
+                audioURL: harness.episode.audioURL,
+                guid: harness.episodeID
+            )
+            : harness.episode
+
+        #expect(startReplacement(harness, episode: episode, policy: policy))
+        if failure == .hashing {
+            // The run's task has not started yet; it finds no file to hash.
+            try FileManager.default.removeItem(at: harness.audioURL)
+        }
+
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+        try expectPriorTranscriptRestored(harness)
+        #expect(harness.store.lastErrorMessage(for: harness.episodeID) != nil)
+        #expect(harness.transcriber.requestCount == 0)
+    }
+
+    @Test("An interruption during a replacement's setup is noted, and consuming the note clears it")
+    func interruptionDuringReplacementSetupIsNoted() async throws {
+        let harness = try makeReplacementHarness(episodeID: "replacement-setup-interrupted")
+        let note = EpisodeTranscriptionReplacementInterruption(isEnvironmental: false)
+
+        #expect(startReplacement(harness))
+        // Before the run's task starts: it is cancelled through the identity
+        // load and stops while the record still reads the prior transcript.
+        harness.store.interruptActiveJob(modelContext: harness.context)
+
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+        try expectPriorTranscriptRestored(harness)
+        #expect(harness.transcriber.requestCount == 0)
+        #expect(harness.store.interruptedReplacement(for: harness.episodeID) == note)
+        #expect(harness.store.consumeInterruptedReplacement(for: harness.episodeID) == note)
+        #expect(harness.store.interruptedReplacement(for: harness.episodeID) == nil)
+        #expect(harness.store.consumeInterruptedReplacement(for: harness.episodeID) == nil)
+    }
+
+    @Test(
+        "A kept partial is not resumed for other bytes, another model, another language or another duration",
+        arguments: ReplacementResumeMismatch.allCases
+    )
+    func keptPartialIsNotResumedForAnotherSource(mismatch: ReplacementResumeMismatch) async throws {
+        let harness = try makeReplacementHarness(episodeID: "replacement-mismatch-\(mismatch)")
+        #expect(await startReplacementAndCheckpoint(harness))
+        harness.store.interruptActiveJob(modelContext: harness.context)
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+        let keptPartial = try harness.fileStore.read(relativePath: try replacementPartialRelativePath(harness))
+
+        var episode = harness.episode
+        var audioURL = harness.audioURL
+        var modelIdentity = EpisodeTranscriptionModelIdentity(summary: modelSummary())
+        var languageCode = "en"
+        switch mismatch {
+        case .otherBytes:
+            // As many bytes as the kept partial describes: only its hash differs.
+            audioURL = try writeAudioPlaceholder(
+                in: harness.directory,
+                contents: "fresh assembly \(harness.episodeID)".uppercased()
+            )
+        case .otherModel:
+            modelIdentity = tinyModelIdentity()
+        case .otherLanguage:
+            languageCode = "de"
+        case .otherDuration:
+            episode = .fixture(
+                episodeID: harness.episodeID,
+                duration: 90,
+                audioURL: harness.episode.audioURL,
+                guid: harness.episodeID
+            )
+        }
+        // The restart looks for a partial at its own fingerprint path. The
+        // kept one is put there, so only the document's own checks refuse it.
+        try harness.fileStore.write(
+            keptPartial,
+            relativePath: try replacementPartialRelativePath(harness, audioURL: audioURL, modelIdentity: modelIdentity)
+        )
+        #expect(startReplacement(
+            harness,
+            episode: episode,
+            audioURL: audioURL,
+            modelIdentity: modelIdentity,
+            languageCode: languageCode
+        ))
+
+        #expect(await waitUntil { harness.transcriber.requestCount == 2 })
+        #expect(harness.transcriber.lastRequest?.resumeStart == nil)
+        harness.store.cancelTranscription(episodeID: harness.episodeID, modelContext: harness.context)
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+    }
+
+    @Test(
+        "Deleting the download mid-replacement leaves the prior transcript completed, also when the cancelled run then fails",
+        arguments: DownloadDeletionScope.allCases, [false, true]
+    )
+    func downloadDeletionMidReplacementRestoresPriorTranscript(
+        scope: DownloadDeletionScope,
+        runFailsAfterDeletion: Bool
+    ) async throws {
+        let harness = try makeReplacementHarness(episodeID: "replacement-deleted-\(scope)-\(runFailsAfterDeletion)")
+        #expect(await startReplacementAndCheckpoint(harness))
+        let partialPath = try replacementPartialRelativePath(harness)
+        #expect(harness.fileStore.documentExists(relativePath: partialPath))
+
+        if runFailsAfterDeletion {
+            // Delivered before the deletion cancels the run, so the run wakes
+            // with this error, not a cancellation, and reaches the failure arm.
+            harness.transcriber.fail(with: replacementFailure("Late replacement failure"))
+        }
+        switch scope {
+        case .single:
+            harness.store.handleDownloadDeletion(
+                harness.downloadRecord,
+                localFileURL: harness.audioURL,
+                modelContext: harness.context
+            )
+        case .all:
+            harness.store.handleAllDownloadsDeleted(modelContext: harness.context)
+        }
+
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+        try expectPriorTranscriptRestored(harness)
+        #expect(try harness.context.fetch(FetchDescriptor<EpisodeTranscriptRecord>()).map(\.state) == [.completed])
+        #expect(!harness.fileStore.documentExists(relativePath: partialPath))
+        #expect(harness.store.lastErrorMessage(for: harness.episodeID) == nil)
+        #expect(harness.store.interruptedReplacement(for: harness.episodeID) == nil)
+    }
+
+    @Test(
+        "A replacement's document write still in flight when its run ends early leaves no document behind",
+        arguments: InFlightReplacementWrite.allCases
+    )
+    func inFlightWriteOfEndedReplacementLeavesNoDocument(write: InFlightReplacementWrite) async throws {
+        let gate = DocumentGate()
+        let harness = try makeReplacementHarness(episodeID: "replacement-in-flight-\(write)", documentWriteGate: gate)
+        #expect(await startReplacementAndCheckpoint(harness))
+        let partialPath = try replacementPartialRelativePath(harness)
+        let priorName = documentName(harness.priorRelativePath)
+
+        gate.arm()
+        switch write {
+        case .finalResultAcrossDownloadDeletion, .finalResultAcrossRestart:
+            harness.transcriber.emit(.finished(manualResult(segmentCount: 6)))
+        case .pendingCheckpointFlushAcrossDownloadDeletion:
+            // Checkpoint 2 is throttled, so the failing run flushes it as it
+            // unwinds, past any cancellation.
+            harness.transcriber.emit(.checkpoint(cumulativeCheckpoint(index: 2, audioDuration: 60)))
+            harness.transcriber.fail(with: replacementFailure("Run failed with a checkpoint pending"))
+        }
+        #expect(await waitUntil { gate.heldRelativePath == partialPath })
+
+        switch write {
+        case .finalResultAcrossDownloadDeletion, .pendingCheckpointFlushAcrossDownloadDeletion:
+            harness.store.handleDownloadDeletion(
+                harness.downloadRecord,
+                localFileURL: harness.audioURL,
+                modelContext: harness.context
+            )
+            gate.release()
+
+            #expect(await waitUntil { !harness.store.hasActiveJob })
+            try expectPriorTranscriptRestored(harness)
+            #expect(!harness.fileStore.documentExists(relativePath: partialPath))
+            #expect(try episodeDocumentNames(harness) == [priorName])
+        case .finalResultAcrossRestart:
+            harness.store.cancelTranscription(episodeID: harness.episodeID, modelContext: harness.context)
+            #expect(startReplacement(harness))
+            #expect(await waitUntil { harness.transcriber.requestCount == 2 })
+            harness.transcriber.emit(.checkpoint(cumulativeCheckpoint(index: 1, audioDuration: 60)))
+            #expect(await waitUntil {
+                harness.store.record(for: harness.episodeID)?.state == .running
+                    && harness.store.record(for: harness.episodeID)?.completedDuration == 10
+            })
+            gate.release()
+
+            // The ended run unloads once its write has come back.
+            #expect(await waitUntil { harness.transcriber.unloadCount == 1 })
+            #expect(try harness.fileStore.read(relativePath: partialPath).segments.count == 1)
+            #expect(try episodeDocumentNames(harness) == [priorName, documentName(partialPath)].sorted())
+            harness.store.cancelTranscription(episodeID: harness.episodeID, modelContext: harness.context)
+            #expect(await waitUntil { !harness.store.hasActiveJob })
+        }
+    }
+
+    @Test(
+        "A restart over a cancelled replacement that has not unwound restores the prior transcript first, keeping the partial only as the stop would",
+        arguments: [PriorCompletedTranscriptPolicy.preserve, .preserveKeepingInterruptedPartial],
+        ReplacementRestartStop.allCases
+    )
+    func restartBeforeCancelledReplacementUnwindsRestoresPriorFirst(
+        policy: PriorCompletedTranscriptPolicy,
+        stop: ReplacementRestartStop
+    ) async throws {
+        let harness = try makeReplacementHarness(episodeID: "replacement-restart-\(policy)-\(stop)")
+        #expect(await startReplacementAndCheckpoint(harness, policy: policy))
+        let partialPath = try replacementPartialRelativePath(harness)
+
+        switch stop {
+        case .userCancel:
+            harness.store.cancelTranscription(episodeID: harness.episodeID, modelContext: harness.context)
+        case .interruption:
+            harness.store.interruptActiveJob(modelContext: harness.context)
+        }
+        // The cancelled run needs the main actor to unwind, so it has not yet
+        // when the restart is admitted.
+        #expect(startReplacement(harness, policy: policy))
+        try expectPriorTranscriptRestored(harness)
+        let keepsPartial = stop == .interruption && policy == .preserveKeepingInterruptedPartial
+        #expect(harness.fileStore.documentExists(relativePath: partialPath) == keepsPartial)
+
+        #expect(await waitUntil { harness.transcriber.requestCount == 2 })
+        let expectedResumeStart: TimeInterval? = keepsPartial ? 10 : nil
+        #expect(harness.transcriber.lastRequest?.resumeStart == expectedResumeStart)
+        // The restart holds the prior transcript in its turn.
+        harness.store.cancelTranscription(episodeID: harness.episodeID, modelContext: harness.context)
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+        try expectPriorTranscriptRestored(harness)
+        #expect(try harness.context.fetch(FetchDescriptor<EpisodeTranscriptRecord>()).map(\.state) == [.completed])
+        #expect(!harness.fileStore.documentExists(relativePath: partialPath))
+        #expect(harness.store.lastErrorMessage(for: harness.episodeID) == nil)
+        #expect(harness.store.interruptedReplacement(for: harness.episodeID) == nil)
+    }
+
+    @Test(
+        "A completed replacement deletes the partial an earlier interrupted attempt kept for other bytes or another model",
+        arguments: [ReplacementResumeMismatch.otherBytes, .otherModel]
+    )
+    func completedReplacementDeletesPartialOfEarlierAttempt(mismatch: ReplacementResumeMismatch) async throws {
+        let harness = try makeReplacementHarness(episodeID: "replacement-sweep-\(mismatch)")
+        #expect(await startReplacementAndCheckpoint(harness))
+        let keptPath = try replacementPartialRelativePath(harness)
+        harness.store.interruptActiveJob(modelContext: harness.context)
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+        #expect(harness.fileStore.documentExists(relativePath: keptPath))
+
+        var audioURL = harness.audioURL
+        var modelIdentity = EpisodeTranscriptionModelIdentity(summary: modelSummary())
+        switch mismatch {
+        case .otherBytes:
+            audioURL = try writeAudioPlaceholder(in: harness.directory, contents: "another assembly")
+        case .otherModel:
+            modelIdentity = tinyModelIdentity()
+        case .otherLanguage, .otherDuration:
+            Issue.record("Same fingerprint path: the kept partial would be the one this run writes.")
+        }
+        let committedPath = try replacementPartialRelativePath(harness, audioURL: audioURL, modelIdentity: modelIdentity)
+        #expect(startReplacement(harness, audioURL: audioURL, modelIdentity: modelIdentity))
+        #expect(await waitUntil { harness.transcriber.requestCount == 2 })
+        harness.transcriber.emit(.finished(manualResult(segmentCount: 6)))
+        harness.transcriber.finish()
+
+        #expect(await waitUntil {
+            harness.store.record(for: harness.episodeID)?.state == .completed
+                && harness.store.record(for: harness.episodeID)?.transcriptRelativePath == committedPath
+                && !harness.store.hasActiveJob
+        })
+        #expect(!harness.fileStore.documentExists(relativePath: keptPath))
+        #expect(try episodeDocumentNames(harness) == [documentName(committedPath)])
+    }
+
+    @Test("Importing a remote transcript deletes the partial an interrupted replacement kept")
+    func remoteImportDeletesKeptReplacementPartial() async throws {
+        let harness = try makeReplacementHarness(episodeID: "replacement-sweep-remote")
+        #expect(await startReplacementAndCheckpoint(harness))
+        let keptPath = try replacementPartialRelativePath(harness)
+        harness.store.interruptActiveJob(modelContext: harness.context)
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+        #expect(harness.fileStore.documentExists(relativePath: keptPath))
+
+        try await harness.store.importRemoteTranscript(try remoteTranscript(harness), modelContext: harness.context)
+
+        let record = try #require(harness.store.record(for: harness.episodeID))
+        #expect(record.state == .completed)
+        #expect(record.engineProvenance == .remoteWhisper)
+        let importedPath = try #require(record.transcriptRelativePath)
+        #expect(!harness.fileStore.documentExists(relativePath: keptPath))
+        #expect(try episodeDocumentNames(harness) == [documentName(importedPath)])
+    }
+
+    @Test(
+        "A local run admitted while a remote import writes its document keeps the transcript: the import stands down and the prior document stays for the run to restore",
+        arguments: RemoteImportOverlap.allCases
+    )
+    func remoteImportStandsDownForARunAdmittedDuringItsWrite(overlap: RemoteImportOverlap) async throws {
+        let writeGate = DocumentGate()
+        let readGate = DocumentGate()
+        let harness = try makeReplacementHarness(
+            episodeID: "remote-import-overlap-\(overlap)",
+            documentWriteGate: writeGate,
+            documentReadGate: readGate
+        )
+        let remote = try remoteTranscript(harness)
+        let partialPath = try replacementPartialRelativePath(harness)
+
+        // The import has found no local run and is writing its document.
+        writeGate.arm()
+        let importTask = Task {
+            try await harness.store.importRemoteTranscript(remote, modelContext: harness.context)
+        }
+        #expect(await waitUntil { writeGate.heldRelativePath != nil })
+
+        switch overlap {
+        case .runInSetup:
+            // The pass's replacement has taken the prior transcript to
+            // restore and is held looking for a kept partial, before its
+            // first record write.
+            readGate.arm()
+            #expect(startReplacement(harness))
+            #expect(await waitUntil { readGate.heldRelativePath == partialPath })
+        case .runTranscribing:
+            // Improve's run has its first checkpoint on the running record.
+            #expect(await startReplacementAndCheckpoint(harness, policy: .preserve))
+        }
+        writeGate.release()
+        let imported = await importTask.result
+        #expect(throws: RemoteTranscriptImportError.localTranscriptionActive) { try imported.get() }
+        try expectEveryCompletedRecordHasItsDocument(harness)
+        readGate.release()
+
+        switch overlap {
+        case .runInSetup:
+            #expect(await waitUntil { harness.transcriber.requestCount == 1 })
+            harness.store.cancelTranscription(episodeID: harness.episodeID, modelContext: harness.context)
+            #expect(await waitUntil { !harness.store.hasActiveJob })
+            try expectPriorTranscriptRestored(harness)
+            #expect(try episodeDocumentNames(harness) == [documentName(harness.priorRelativePath)])
+        case .runTranscribing:
+            harness.transcriber.emit(.finished(manualResult(segmentCount: 6)))
+            harness.transcriber.finish()
+            #expect(await waitUntil { !harness.store.hasActiveJob })
+            let record = try #require(harness.store.record(for: harness.episodeID))
+            #expect(record.state == .completed)
+            #expect(record.engineProvenance != .remoteWhisper)
+            #expect(record.transcriptRelativePath == partialPath)
+            #expect(try episodeDocumentNames(harness) == [documentName(partialPath)])
+        }
+        try expectEveryCompletedRecordHasItsDocument(harness)
+    }
+
+    /// A remote transcript of the harness's download, as a cloud pass
+    /// imports it.
+    private func remoteTranscript(_ harness: ReplacementHarness) throws -> EpisodeTranscriptDocument {
+        var remote = EpisodeTranscriptDocument(
+            schemaVersion: EpisodeTranscriptDocument.currentSchemaVersion,
+            episodeID: harness.episodeID,
+            podcastID: harness.episode.podcastID,
+            sourceAudioURL: harness.downloadRecord.sourceAudioURL,
+            sourceFileByteCount: Int64(try Data(contentsOf: harness.audioURL).count),
+            sourceFileSHA256: try sha256(harness.audioURL),
+            modelIdentifier: "remote-whisper-large-v3-turbo",
+            modelVersion: "serving-contract-1",
+            modelTreeSHA256: "",
+            languageCode: "en",
+            audioDuration: 60,
+            checkpoints: [],
+            segments: manualResult(segmentCount: 6).segments,
+            text: "remote transcript",
+            timings: EpisodeTranscriptTimings(),
+            createdAt: .now,
+            updatedAt: .now
+        )
+        remote.transcriptionEngine = EpisodeTranscriptEngineProvenance.remoteWhisper.rawValue
+        remote.providerModelIdentifier = "@cf/openai/whisper-large-v3-turbo"
+        remote.remoteServingContractVersion = "1"
+        remote.remotePipelineVersion = "pass0"
+        return remote
+    }
+
+    /// No transcript record reads completed while its document is gone.
+    private func expectEveryCompletedRecordHasItsDocument(
+        _ harness: ReplacementHarness,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) throws {
+        let completed = try harness.context.fetch(FetchDescriptor<EpisodeTranscriptRecord>())
+            .filter { $0.state == .completed }
+        for record in completed {
+            #expect(
+                harness.fileStore.documentExists(relativePath: record.transcriptRelativePath),
+                "\(record.transcriptRelativePath ?? "nil") reads completed without its document",
+                sourceLocation: sourceLocation
+            )
+        }
+    }
+
+    private static let replacementPriorText = "prior transcript"
+
+    /// A completed transcript of earlier bytes (`insertCompletedTranscript`)
+    /// and a fresh download of other bytes to replace it from; the store's
+    /// transcriber is driven by the test.
+    private func makeReplacementHarness(
+        episodeID: String,
+        failureEnvironment: @escaping @MainActor () -> EpisodeTranscriptionFailureEnvironment = { .foreground },
+        documentWriteGate: DocumentGate? = nil,
+        documentReadGate: DocumentGate? = nil
+    ) throws -> ReplacementHarness {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let directory = try makeTemporaryDirectory()
+        let fileStore = EpisodeTranscriptFileStore(
+            baseDirectory: directory,
+            beforeDocumentWriteForTesting: documentWriteGate.map { gate in
+                { @Sendable relativePath in await gate.hold(relativePath) }
+            },
+            beforeDocumentReadForTesting: documentReadGate.map { gate in
+                { @Sendable relativePath in await gate.hold(relativePath) }
+            }
+        )
+        let episode = makeEpisode(episodeID: episodeID)
+        try insertCompletedTranscript(
+            episodeID: episodeID,
+            podcastID: episode.podcastID,
+            text: Self.replacementPriorText,
+            fileStore: fileStore,
+            modelContext: context
+        )
+        let downloadRecord = completedDownloadRecord(episode: episode)
+        context.insert(downloadRecord)
+        try context.save()
+        let transcriber = ManualEpisodeTranscriber()
+        let store = EpisodeTranscriptionStore(
+            transcriber: transcriber,
+            fileStore: fileStore,
+            failureEnvironment: failureEnvironment
+        )
+        store.load(modelContext: context)
+        return ReplacementHarness(
+            context: context,
+            episode: episode,
+            downloadRecord: downloadRecord,
+            audioURL: try writeAudioPlaceholder(in: directory, contents: "fresh assembly \(episodeID)"),
+            directory: directory,
+            store: store,
+            fileStore: fileStore,
+            transcriber: transcriber,
+            priorRelativePath: fileStore.relativePath(episodeID: episodeID, fingerprint: "fixture")
+        )
+    }
+
+    @discardableResult
+    private func startReplacement(
+        _ harness: ReplacementHarness,
+        episode: EpisodeListItemSnapshot? = nil,
+        audioURL: URL? = nil,
+        engine: EpisodeTranscriptionEngine = .whisper,
+        modelIdentity: EpisodeTranscriptionModelIdentity? = nil,
+        languageCode: String = "en",
+        initialComputeProfile: OpenCastTranscriptionComputeProfile = .backgroundSafe,
+        policy: PriorCompletedTranscriptPolicy = .preserveKeepingInterruptedPartial
+    ) -> Bool {
+        harness.store.startTranscription(
+            episode ?? harness.episode,
+            downloadRecord: harness.downloadRecord,
+            localFileURL: audioURL ?? harness.audioURL,
+            engine: engine,
+            modelIdentity: modelIdentity ?? EpisodeTranscriptionModelIdentity(summary: modelSummary()),
+            languageCode: languageCode,
+            initialComputeProfile: initialComputeProfile,
+            priorCompletedTranscript: policy,
+            modelContext: harness.context
+        )
+    }
+
+    /// Starts a replacement and waits until its first checkpoint (10 s of
+    /// 60) is written and committed on the running record.
+    private func startReplacementAndCheckpoint(
+        _ harness: ReplacementHarness,
+        engine: EpisodeTranscriptionEngine = .whisper,
+        modelIdentity: EpisodeTranscriptionModelIdentity? = nil,
+        languageCode: String = "en",
+        initialComputeProfile: OpenCastTranscriptionComputeProfile = .backgroundSafe,
+        policy: PriorCompletedTranscriptPolicy = .preserveKeepingInterruptedPartial
+    ) async -> Bool {
+        let requestCount = harness.transcriber.requestCount
+        guard startReplacement(
+            harness,
+            engine: engine,
+            modelIdentity: modelIdentity,
+            languageCode: languageCode,
+            initialComputeProfile: initialComputeProfile,
+            policy: policy
+        ),
+            await waitUntil({ harness.transcriber.requestCount == requestCount + 1 })
+        else {
+            return false
+        }
+        harness.transcriber.emit(.checkpoint(cumulativeCheckpoint(index: 1, audioDuration: 60)))
+        return await waitUntil {
+            harness.store.record(for: harness.episodeID)?.state == .running
+                && harness.store.record(for: harness.episodeID)?.completedDuration == 10
+        }
+    }
+
+    /// Restarts an interrupted replacement: it resumes from the kept
+    /// partial's checkpoint, completes over the new bytes and deletes the
+    /// superseded prior document.
+    private func expectReplacementResumesAndCompletes(
+        _ harness: ReplacementHarness,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) async throws {
+        let requestCount = harness.transcriber.requestCount
+        #expect(startReplacement(harness), sourceLocation: sourceLocation)
+        #expect(
+            await waitUntil { harness.transcriber.requestCount == requestCount + 1 },
+            sourceLocation: sourceLocation
+        )
+        #expect(harness.store.interruptedReplacement(for: harness.episodeID) == nil, sourceLocation: sourceLocation)
+        #expect(harness.transcriber.lastRequest?.resumeStart == 10, sourceLocation: sourceLocation)
+
+        harness.transcriber.emit(.finished(manualResult(segmentRange: 1..<6)))
+        harness.transcriber.finish()
+
+        let sourceSHA = try sha256(harness.audioURL)
+        #expect(
+            await waitUntil {
+                harness.store.record(for: harness.episodeID)?.state == .completed
+                    && harness.store.record(for: harness.episodeID)?.sourceFileSHA256 == sourceSHA
+                    && !harness.store.hasActiveJob
+            },
+            sourceLocation: sourceLocation
+        )
+        let document = try #require(harness.store.document(for: harness.episodeID), sourceLocation: sourceLocation)
+        #expect(document.segments.map(\.start) == [0, 10, 20, 30, 40, 50], sourceLocation: sourceLocation)
+        #expect(
+            !harness.fileStore.documentExists(relativePath: harness.priorRelativePath),
+            sourceLocation: sourceLocation
+        )
+    }
+
+    private func expectPriorTranscriptRestored(
+        _ harness: ReplacementHarness,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) throws {
+        let record = try #require(harness.store.record(for: harness.episodeID), sourceLocation: sourceLocation)
+        #expect(record.state == .completed, sourceLocation: sourceLocation)
+        #expect(record.sourceFileSHA256 == "fixture-sha", sourceLocation: sourceLocation)
+        #expect(record.transcriptRelativePath == harness.priorRelativePath, sourceLocation: sourceLocation)
+        #expect(
+            harness.store.document(for: harness.episodeID)?.text == Self.replacementPriorText,
+            sourceLocation: sourceLocation
+        )
+    }
+
+    private func replacementPartialRelativePath(
+        _ harness: ReplacementHarness,
+        audioURL: URL? = nil,
+        modelIdentity: EpisodeTranscriptionModelIdentity? = nil
+    ) throws -> String {
+        let identity = modelIdentity ?? EpisodeTranscriptionModelIdentity(summary: modelSummary())
+        return harness.fileStore.relativePath(
+            episodeID: harness.episodeID,
+            fingerprint: harness.fileStore.fingerprint(
+                sourceFileSHA256: try sha256(audioURL ?? harness.audioURL),
+                modelIdentifier: identity.modelIdentifier,
+                modelVersion: identity.version,
+                modelTreeSHA256: identity.treeSHA256
+            )
+        )
+    }
+
+    /// Every file in the episode's transcript directory, hidden ones included.
+    private func episodeDocumentNames(_ harness: ReplacementHarness) throws -> [String] {
+        let directory = harness.fileStore.transcriptsDirectory
+            .appending(path: harness.fileStore.safeStem(harness.episodeID), directoryHint: .isDirectory)
+        return try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+    }
+
+    private func documentName(_ relativePath: String) -> String {
+        URL(filePath: relativePath).lastPathComponent
+    }
+
+    private func tinyModelIdentity() -> EpisodeTranscriptionModelIdentity {
+        EpisodeTranscriptionModelIdentity(summary: OpenCastWhisperModelInstalledSummary(
+            modelIdentifier: OpenCastWhisperModel.tinyEnglish.rawValue,
+            version: OpenCastWhisperModel.tinyEnglish.defaultRemoteVersion,
+            totalByteCount: 10,
+            treeSHA256: String(repeating: "c", count: 64)
+        ))
+    }
+
+    private func replacementFailure(_ message: String) -> NSError {
+        NSError(
+            domain: "EpisodeTranscriptionStoreTests",
+            code: 2,
+            userInfo: [NSLocalizedDescriptionKey: message]
+        )
+    }
+
     /// Completes a Whisper transcript, then starts an Apple Speech improve run
-    /// with `preservesPriorCompletedTranscript` whose stream is test-driven.
+    /// preserving the prior transcript, whose stream is test-driven.
     private func makeImproveHarness(
         episodeID: String,
         secondAttemptStream: @escaping @MainActor (EpisodeTranscriptionRunRequest) -> AsyncThrowingStream<EpisodeTranscriptionRunEvent, Error>
@@ -2324,7 +3118,7 @@ struct EpisodeTranscriptionStoreTests {
             engine: .appleSpeech,
             modelIdentity: appleImproveIdentity(),
             languageCode: "en-US",
-            preservesPriorCompletedTranscript: true,
+            priorCompletedTranscript: .preserve,
             modelContext: context
         )
         // The prior-transcript snapshot is captured just before the improve
@@ -2445,6 +3239,108 @@ struct EpisodeTranscriptionStoreTests {
 
 private enum ImproveHarnessError: Error {
     case priorTranscriptNeverCompleted
+}
+
+@MainActor
+private struct ReplacementHarness {
+    let context: ModelContext
+    let episode: EpisodeListItemSnapshot
+    let downloadRecord: EpisodeDownloadRecord
+    let audioURL: URL
+    let directory: URL
+    let store: EpisodeTranscriptionStore
+    let fileStore: EpisodeTranscriptFileStore
+    let transcriber: ManualEpisodeTranscriber
+    let priorRelativePath: String
+
+    var episodeID: String {
+        episode.episodeID
+    }
+}
+
+enum ReplacementStop: CaseIterable, Sendable {
+    case userCancel
+    case hardFailure
+}
+
+enum ReplacementSetupFailure: CaseIterable, Sendable {
+    case hashing
+    case duration
+}
+
+enum ReplacementResumeMismatch: CaseIterable, Sendable {
+    case otherBytes
+    case otherModel
+    case otherLanguage
+    case otherDuration
+}
+
+enum DownloadDeletionScope: CaseIterable, Sendable {
+    case single
+    case all
+}
+
+enum InFlightReplacementWrite: CaseIterable, Sendable {
+    case finalResultAcrossDownloadDeletion
+    case pendingCheckpointFlushAcrossDownloadDeletion
+    case finalResultAcrossRestart
+}
+
+enum ReplacementRestartStop: CaseIterable, Sendable {
+    case userCancel
+    case interruption
+}
+
+/// Where a local run admitted during a remote import's document write has
+/// got to when that write comes back.
+enum RemoteImportOverlap: CaseIterable, Sendable {
+    case runInSetup
+    case runTranscribing
+}
+
+/// Holds the first document write (or read, on the read hook) that reaches
+/// it after `arm()` until `release()`, so a test can act while that caller
+/// is suspended in it.
+nonisolated private final class DocumentGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isArmed = false
+    private var heldPath: String?
+    private var heldContinuation: CheckedContinuation<Void, Never>?
+
+    var heldRelativePath: String? {
+        lock.withLock { heldPath }
+    }
+
+    func arm() {
+        lock.withLock { isArmed = true }
+    }
+
+    func release() {
+        let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            isArmed = false
+            let continuation = heldContinuation
+            heldContinuation = nil
+            return continuation
+        }
+        continuation?.resume()
+    }
+
+    func hold(_ relativePath: String) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let holds = lock.withLock { () -> Bool in
+                guard isArmed else {
+                    return false
+                }
+                isArmed = false
+                heldPath = relativePath
+                heldContinuation = continuation
+                return true
+            }
+            if !holds {
+                continuation.resume()
+            }
+        }
+    }
 }
 
 @MainActor
@@ -2581,6 +3477,16 @@ private final class ManualEpisodeTranscriber: EpisodeTranscribing, @unchecked Se
         lock.withLock { recordedRequests.last }
     }
 
+    var requestCount: Int {
+        lock.withLock { recordedRequests.count }
+    }
+
+    var unloadCount: Int {
+        lock.withLock { recordedUnloadCount }
+    }
+
+    private var recordedUnloadCount = 0
+
     func transcribe(
         _ request: EpisodeTranscriptionRunRequest
     ) -> AsyncThrowingStream<EpisodeTranscriptionRunEvent, Error> {
@@ -2600,7 +3506,12 @@ private final class ManualEpisodeTranscriber: EpisodeTranscribing, @unchecked Se
         lock.withLock { continuation }?.finish()
     }
 
+    func fail(with error: any Error) {
+        lock.withLock { continuation }?.finish(throwing: error)
+    }
+
     func unload() async {
+        lock.withLock { recordedUnloadCount += 1 }
     }
 }
 

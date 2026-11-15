@@ -124,7 +124,7 @@ struct PodcastActionsMenu: View {
             Button("Delete All Downloads", role: .destructive, action: deleteAllDownloads)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Downloaded audio for this podcast will be removed from this device.")
+            Text("Downloaded audio for this podcast will be removed from this device. \(DownloadSettingsCopy.scannedEpisodesSentence)")
         }
         .confirmationDialog(
             "Unsubscribe from \(subscription.title)?",

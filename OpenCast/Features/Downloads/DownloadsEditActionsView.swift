@@ -33,7 +33,7 @@ struct DownloadsEditActionsView: View {
                     Button("Delete Selected", role: .destructive, action: onDeleteSelected)
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("The selected downloaded files will be removed from this device.")
+                    Text("The selected downloaded files will be removed from this device. \(DownloadSettingsCopy.scannedEpisodesSentence)")
                 }
 
                 Spacer(minLength: 0)
@@ -55,7 +55,7 @@ struct DownloadsEditActionsView: View {
                     Button("Remove Played", role: .destructive, action: onRemovePlayed)
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("Played downloads that aren’t currently in use will be removed from this device.")
+                    Text("Played downloads that aren’t currently in use will be removed from this device. \(DownloadSettingsCopy.scannedEpisodesSentence)")
                 }
             }
         }

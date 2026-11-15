@@ -111,11 +111,11 @@ struct EpisodeActionBar: View {
         .glassEffectID("episodeActions.makeAdFree", in: glassNamespace)
         .disabled(!detectAdsState.isEnabled)
         .accessibilityLabel("Make Ad-Free")
-        .accessibilityValue(makeAdFreeAccessibilityValue)
+        .accessibilityValue(Self.makeAdFreeAccessibilityValue(for: detectAdsState))
     }
 
-    private var makeAdFreeAccessibilityValue: String {
-        switch detectAdsState {
+    static func makeAdFreeAccessibilityValue(for state: EpisodeDetectAdsMenuState) -> String {
+        switch state {
         case .detect:
             ""
         case .detecting:
@@ -124,6 +124,8 @@ struct EpisodeActionBar: View {
             "Queued"
         case .detected:
             "Ads detected"
+        case .detectAgain:
+            "Ad skips unavailable"
         }
     }
 

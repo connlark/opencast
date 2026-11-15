@@ -289,6 +289,41 @@ struct EpisodeAdAnalysisZoneMapperTests {
         #expect(fixture.playback.skipZones == [PlaybackSkipZone(id: 1, startTime: 4, endTime: 9)])
     }
 
+    @Test("A stream switched to a matching download installs the zones once a pass makes the download trusted by adopting its hash")
+    func streamSwitchedToDownloadTrustedByAdoptionInstallsZones() async throws {
+        let fixture = try await makeAppModelFixture(downloadSHA256: "")
+        defer { fixture.playback.unload() }
+        try fixture.playback.load(makeEpisode(duration: 30, audioURL: URL(string: "https://example.com/episode.mp3")!))
+        try seedCompletedAnalysis(
+            transcript: makeTranscriptDocument(),
+            spans: [span(id: 1, kind: .hostReadAd, start: 4, end: 9)],
+            in: fixture
+        )
+        fixture.appModel.loadLocalTranscriptionState(modelContext: fixture.context)
+        fixture.appModel.refreshPlaybackSkipZonesForCurrentEpisode()
+        await fixture.appModel.waitForSkipZoneRefresh()
+
+        // The file plays, but an unhashed download cannot vouch for the bytes.
+        #expect(fixture.playback.currentItemSourceIdentity?.assetURL == fixture.audioURL)
+        #expect(fixture.playback.skipZones.isEmpty)
+
+        let downloads = fixture.appModel.downloads
+        let download = try #require(downloads.record(for: "episode"))
+        let measuredFile = try #require(downloads.completedFileStamp(of: download))
+        let adopted = try downloads.adoptSourceHash(
+            "source",
+            byteCount: 123,
+            measuredFile: measuredFile,
+            for: "episode",
+            modelContext: fixture.context
+        )
+        #expect(adopted)
+        await fixture.appModel.waitForSkipZoneRefresh()
+
+        #expect(fixture.playback.currentItemSourceIdentity?.assetURL == fixture.audioURL)
+        #expect(fixture.playback.skipZones == [PlaybackSkipZone(id: 1, startTime: 4, endTime: 9)])
+    }
+
     @Test("A different downloaded assembly cannot use an old analysis")
     func mismatchedDownloadDisablesSkipZones() async throws {
         let fixture = try await makeAppModelFixture()
@@ -378,6 +413,96 @@ struct EpisodeAdAnalysisZoneMapperTests {
         #expect(fixture.playback.skipZones == [PlaybackSkipZone(id: 1, startTime: 26, endTime: 29)])
     }
 
+    @Test(
+        "A current analysis offers Detect Ads Again in the menus and the Sound Lab, and a tap follows the stored mode, once its download's file is gone or drifted",
+        arguments: [DownloadFileDefect.missing, .drifted]
+    )
+    func defectiveDownloadDetachesEveryAction(defect: DownloadFileDefect) async throws {
+        let fixture = try await makeAppModelFixture()
+        defer { fixture.playback.unload() }
+        try seedCompletedAnalysis(
+            transcript: makeTranscriptDocument(),
+            spans: [span(id: 1, kind: .hostReadAd, start: 4, end: 9)],
+            in: fixture
+        )
+        let appModel = fixture.appModel
+        appModel.loadLocalTranscriptionState(modelContext: fixture.context)
+        #expect(appModel.adDetectionSettings.setMode(.cloud, modelContext: fixture.context))
+        let episode = analysedEpisodeSnapshot()
+        #expect(await appModel.adFreePass.currentCompletedAnalysisVerdict(
+            for: episode.episodeID,
+            transcriptions: appModel.transcriptions,
+            adAnalyses: appModel.adAnalyses
+        ))
+
+        #expect(appModel.detectAdsMenuState(for: episode) == .detected)
+        #expect(soundLabPresentation(for: episode, appModel: appModel) == .completed(zoneCount: 0))
+        #expect(appModel.detectAdsTapDecision(for: episode) == .runOnDevice)
+
+        try defect.apply(to: fixture.audioURL)
+
+        // The record still reads completed; only the trusted form sees it.
+        #expect(appModel.downloads.record(for: episode.episodeID)?.state == .completed)
+        #expect(appModel.isAdAnalysisAttachedByRecord(for: episode.episodeID))
+        #expect(appModel.detectAdsMenuState(for: episode) == .detectAgain)
+        #expect(soundLabPresentation(for: episode, appModel: appModel) == .detached)
+        #expect(appModel.detectAdsTapDecision(for: episode) == .runCloud)
+    }
+
+    @Test("The page reads its analysis detached once the download is deleted: the deletion re-keys the load and the rail stays")
+    func sectionModelReadsDeletedDownloadAsDetached() async throws {
+        let fixture = try await makeAppModelFixture()
+        defer { fixture.playback.unload() }
+        try seedCompletedAnalysis(
+            transcript: makeTranscriptDocument(),
+            spans: [span(id: 1, kind: .hostReadAd, start: 4, end: 9)],
+            in: fixture
+        )
+        let appModel = fixture.appModel
+        appModel.loadLocalTranscriptionState(modelContext: fixture.context)
+        let episode = analysedEpisodeSnapshot()
+        let section = EpisodeAdAnalysisSectionModel()
+
+        let attachedKey = section.loadKey(appModel: appModel, episodeID: episode.episodeID)
+        await section.load(appModel: appModel, episode: episode, key: attachedKey)
+        #expect(section.hasCurrentAnalysis(forKey: attachedKey, episodeID: episode.episodeID))
+        #expect(section.isAnalysisAttached(forKey: attachedKey, episodeID: episode.episodeID))
+
+        let download = try #require(appModel.downloads.record(for: episode.episodeID))
+        appModel.downloads.deleteDownload(download, modelContext: fixture.context)
+        let detachedKey = section.loadKey(appModel: appModel, episodeID: episode.episodeID)
+        #expect(detachedKey != attachedKey)
+        await section.load(appModel: appModel, episode: episode, key: detachedKey)
+
+        #expect(section.hasCurrentAnalysis(forKey: detachedKey, episodeID: episode.episodeID))
+        #expect(!section.isAnalysisAttached(forKey: detachedKey, episodeID: episode.episodeID))
+        #expect(section.zoneTiers(forKey: detachedKey, episodeID: episode.episodeID).autoSkip == [
+            PlaybackSkipZone(id: 1, startTime: 4, endTime: 9)
+        ])
+    }
+
+    private func analysedEpisodeSnapshot() -> EpisodeListItemSnapshot {
+        .fixture(
+            episodeID: "episode", podcastID: "podcast", title: "Episode",
+            duration: 30, audioURL: "https://example.com/episode.mp3", guid: nil
+        )
+    }
+
+    private func soundLabPresentation(
+        for episode: EpisodeListItemSnapshot,
+        appModel: OpenCastAppModel
+    ) -> EpisodeAdFreePassPresentation {
+        appModel.adFreePass.presentation(
+            for: episode,
+            downloads: appModel.downloads,
+            transcriptionModels: appModel.transcriptionModels,
+            appleSpeechAssets: appModel.appleSpeechAssets,
+            transcriptions: appModel.transcriptions,
+            adAnalyses: appModel.adAnalyses,
+            currentZoneCount: 0
+        )
+    }
+
     private struct AppModelFixture {
         let context: ModelContext
         let transcriptFileStore: EpisodeTranscriptFileStore
@@ -387,7 +512,9 @@ struct EpisodeAdAnalysisZoneMapperTests {
         let audioURL: URL
     }
 
-    private func makeAppModelFixture() async throws -> AppModelFixture {
+    /// `downloadSHA256` empty leaves the completed download unhashed, as a
+    /// pause or a launch finalize completes one.
+    private func makeAppModelFixture(downloadSHA256: String = "source") async throws -> AppModelFixture {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
@@ -405,7 +532,7 @@ struct EpisodeAdAnalysisZoneMapperTests {
             episodeID: "episode", podcastID: "podcast", sourceAudioURL: "https://example.com/episode.mp3",
             localRelativePath: relativePath, state: .completed, bytesReceived: 123
         )
-        download.sourceFileSHA256 = "source"
+        download.sourceFileSHA256 = downloadSHA256
         context.insert(download)
         try context.save()
         await downloads.load(modelContext: context)
