@@ -8,6 +8,7 @@ final class PlaybackSettingsStore {
     static let playbackRatePreferenceKey = "playback.rate"
     static let voiceBoostModePreferenceKey = "playback.voiceBoost.mode"
     static let autoSkipPromosAndAdsPreferenceKey = "playback.autoSkipPromosAndAds"
+    static let autoSkipSoundPreferenceKey = "playback.autoSkipSound"
     static let privateNoteButtonsPreferenceKey = "playback.privateNotes.showButtons"
     static let tapToPlayPreferenceKey = "playback.episodeRow.tapToPlay"
     static let requeueInterruptedEpisodePreferenceKey = "playback.upNext.requeueInterruptedEpisode"
@@ -23,6 +24,9 @@ final class PlaybackSettingsStore {
     private(set) var skipBackwardOption = PlaybackSkipIntervalOption.defaultBackward
     private(set) var skipForwardOption = PlaybackSkipIntervalOption.defaultForward
     private(set) var isAutoSkipPromosAndAdsEnabled = true
+    /// Played over an automatic skip; nil is None. Kept while Auto-Skip is
+    /// off, when the controller gets no cue.
+    private(set) var autoSkipSound: SkipSound?
     private(set) var showsPrivateNoteButtons = false
     private(set) var isTapToPlayEnabled = true
     private(set) var isRequeueInterruptedEpisodeEnabled = false
@@ -34,10 +38,16 @@ final class PlaybackSettingsStore {
     /// instead while one applies, so this can differ from `playback.rate`.
     private(set) var globalPlaybackRate: Float = 1
     @ObservationIgnored private let save: (ModelContext) throws -> Void
+    @ObservationIgnored private let skipSoundURL: @MainActor (SkipSound) -> URL?
 
-    /// `save` is the test seam for preference saves.
-    init(save: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
+    /// `save` is the test seam for preference saves; `skipSoundURL` finds a
+    /// chosen sound's file.
+    init(
+        save: @escaping (ModelContext) throws -> Void = { try $0.save() },
+        skipSoundURL: @escaping @MainActor (SkipSound) -> URL? = { SkipSoundCatalog.url(for: $0, in: .main) }
+    ) {
         self.save = save
+        self.skipSoundURL = skipSoundURL
     }
 
     var canChangeCurrentEpisodeVoiceBoost: Bool {
@@ -73,6 +83,7 @@ final class PlaybackSettingsStore {
                 key: Self.autoSkipPromosAndAdsPreferenceKey,
                 modelContext: modelContext
             ) ?? true
+            autoSkipSound = try storedAutoSkipSound(modelContext: modelContext)
             showsPrivateNoteButtons = try booleanPreference(
                 key: Self.privateNoteButtonsPreferenceKey,
                 modelContext: modelContext
@@ -98,6 +109,7 @@ final class PlaybackSettingsStore {
             skipBackwardOption = .defaultBackward
             skipForwardOption = .defaultForward
             isAutoSkipPromosAndAdsEnabled = true
+            autoSkipSound = nil
             isTapToPlayEnabled = true
             isRequeueInterruptedEpisodeEnabled = false
             sleepTimerPresets = SleepTimerPresetDuration.defaults
@@ -267,6 +279,41 @@ final class PlaybackSettingsStore {
             lastErrorMessage = "Unable to update auto-skip: \(error.localizedDescription)"
             return false
         }
+    }
+
+    /// Chooses the sound played over an automatic skip (nil is None), then
+    /// plays a chosen sound once, also one already chosen, so the picker can
+    /// audition it. None plays nothing.
+    @discardableResult
+    func setAutoSkipSound(
+        _ sound: SkipSound?,
+        modelContext: ModelContext,
+        playback: any PlaybackSettingsControlling
+    ) -> Bool {
+        if autoSkipSound != sound {
+            let previousSound = autoSkipSound
+            autoSkipSound = sound
+            applyAutoSkipCue(to: playback)
+
+            do {
+                try persistPreference(
+                    sound?.id ?? "",
+                    key: Self.autoSkipSoundPreferenceKey,
+                    modelContext: modelContext
+                )
+                lastErrorMessage = nil
+            } catch {
+                autoSkipSound = previousSound
+                applyAutoSkipCue(to: playback)
+                lastErrorMessage = "Unable to update the skip sound: \(error.localizedDescription)"
+                return false
+            }
+        }
+
+        if let sound, let url = skipSoundURL(sound) {
+            playback.previewAutoSkipCue(url)
+        }
+        return true
     }
 
     /// Whether a tap on an episode row plays it. Off, the row opens the
@@ -526,6 +573,15 @@ final class PlaybackSettingsStore {
         return VoiceBoostMode(rawValue: rawValue) ?? .defaultMode
     }
 
+    /// Absent, empty and unknown ids all read as None.
+    private func storedAutoSkipSound(modelContext: ModelContext) throws -> SkipSound? {
+        try preferenceRecord(
+            key: Self.autoSkipSoundPreferenceKey,
+            modelContext: modelContext
+        )
+        .flatMap { SkipSoundCatalog.sound(id: $0.value) }
+    }
+
     private func storedPlaybackRate(modelContext: ModelContext) throws -> Float {
         guard let value = try preferenceRecord(
             key: Self.playbackRatePreferenceKey,
@@ -621,8 +677,22 @@ final class PlaybackSettingsStore {
         )
     }
 
+    /// The cue goes first: switching Auto-Skip on inside a zone skips at
+    /// once, and that skip should carry the sound.
     private func applyAutoSkip(to playback: any PlaybackSettingsControlling) {
+        applyAutoSkipCue(to: playback)
         playback.setAutoSkipEnabled(isAutoSkipPromosAndAdsEnabled)
+    }
+
+    /// Nothing can play the cue while Auto-Skip is off, so the controller
+    /// then gets nil, as with None, and no file is looked up.
+    private func applyAutoSkipCue(to playback: any PlaybackSettingsControlling) {
+        guard isAutoSkipPromosAndAdsEnabled, let autoSkipSound else {
+            playback.setAutoSkipCue(nil)
+            return
+        }
+
+        playback.setAutoSkipCue(skipSoundURL(autoSkipSound))
     }
 
     private func booleanPreference(

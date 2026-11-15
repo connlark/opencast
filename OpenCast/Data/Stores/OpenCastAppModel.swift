@@ -3264,6 +3264,18 @@ final class OpenCastAppModel {
     }
 
     @discardableResult
+    func setAutoSkipSound(
+        _ sound: SkipSound?,
+        modelContext: ModelContext
+    ) -> Bool {
+        playbackSettings.setAutoSkipSound(
+            sound,
+            modelContext: modelContext,
+            playback: playback
+        )
+    }
+
+    @discardableResult
     func setTapToPlayEnabled(
         _ isEnabled: Bool,
         modelContext: ModelContext

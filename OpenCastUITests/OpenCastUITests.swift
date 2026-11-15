@@ -4310,6 +4310,64 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededSkipSoundFollowsAutoSkipAndKeepsItsChoice() throws {
+        let app = makeSeededApp(forcesDarkMode: false, forcesLightMode: true)
+        app.launch()
+
+        openSettingsScreen("Ad Skipping", in: app)
+        let autoSkipToggle = autoSkipSettingsToggle(in: app)
+        let skipSoundRow = app.buttons["ad-skipping-skip-sound-row"]
+        let skipSoundFooter = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "Plays when an ad is skipped while you are listening.")
+        ).firstMatch
+        assertHittable(skipSoundRow, named: "Skip Sound row")
+        assertToggle(autoSkipToggle, isOn: true)
+        XCTAssertTrue(waitForEnabled(skipSoundRow, true), "Skip Sound should be available with Auto-Skip on")
+        XCTAssertTrue(settingsRow(skipSoundRow, showsValue: "None"), "Skip Sound should read None by default")
+        assertDoesNotExist(skipSoundFooter, named: "Skip Sound footer sentence with None")
+
+        tapToggle(autoSkipToggle, to: false)
+        XCTAssertTrue(waitForEnabled(skipSoundRow, false), "Skip Sound should be disabled with Auto-Skip off")
+        tapToggle(autoSkipToggle, to: true)
+        XCTAssertTrue(waitForEnabled(skipSoundRow, true), "Skip Sound should come back with Auto-Skip on")
+
+        skipSoundRow.tap()
+        assertScreen("Skip Sound", named: "Skip Sound picker", in: app)
+        let noneOption = app.buttons["skip-sound-option-none"]
+        let vinylScratchOption = app.buttons["skip-sound-option-vinyl-scratch"]
+        assertHittable(vinylScratchOption, named: "Vinyl Scratch option")
+        for id in ["rewind", "cassette", "guitar-riff"] {
+            assertExists(app.buttons["skip-sound-option-\(id)"], named: "\(id) option")
+        }
+        XCTAssertTrue(waitForSelection(of: noneOption), "None should start selected")
+        vinylScratchOption.tap()
+        XCTAssertTrue(waitForSelection(of: vinylScratchOption), "Vinyl Scratch should be selected after tapping it")
+        XCTAssertFalse(noneOption.isSelected, "None should no longer be selected")
+        attachSmokeScreenshot(named: "settings_skip_sound_picker")
+
+        tapBackButton(in: app)
+        assertScreen("Ad Skipping", named: "Ad Skipping screen after choosing a sound", in: app)
+        XCTAssertTrue(settingsRow(skipSoundRow, showsValue: "Vinyl Scratch"), "Skip Sound should read Vinyl Scratch")
+        assertExists(skipSoundFooter, named: "Skip Sound footer sentence with a sound chosen")
+        attachSmokeScreenshot(named: "settings_ad_skipping_skip_sound_chosen")
+
+        tapToggle(autoSkipToggle, to: false)
+        XCTAssertTrue(waitForEnabled(skipSoundRow, false), "Skip Sound should be disabled with Auto-Skip off")
+        XCTAssertTrue(settingsRow(skipSoundRow, showsValue: "Vinyl Scratch"), "Auto-Skip off should keep the choice")
+        tapToggle(autoSkipToggle, to: true)
+        XCTAssertTrue(waitForEnabled(skipSoundRow, true), "Skip Sound should come back with Auto-Skip on")
+
+        // UI-test launches keep their store in memory, so a relaunch reseeds
+        // it; reopening the screen is the round trip here, and
+        // PlaybackSettingsStoreTests reloads the choice from a saved store.
+        openSettingsScreen("Ad Skipping", in: app)
+        XCTAssertTrue(settingsRow(skipSoundRow, showsValue: "Vinyl Scratch"), "The choice should survive reopening the screen")
+        skipSoundRow.tap()
+        assertScreen("Skip Sound", named: "Skip Sound picker reopened", in: app)
+        XCTAssertTrue(waitForSelection(of: vinylScratchOption), "Vinyl Scratch should still be selected")
+    }
+
+    @MainActor
     func testSeededStaleAdAnalysisSkipsNothingAndOffersRerun() throws {
         let app = makeSeededApp(
             seedsCompletedTranscript: true,
@@ -6774,6 +6832,15 @@ final class OpenCastUITests: XCTestCase {
             }
             _ = springboard.alerts.firstMatch.waitForExistence(timeout: 0.5)
         } while Date.now < deadline
+    }
+
+    @MainActor
+    private func waitForEnabled(_ element: XCUIElement, _ isEnabled: Bool, timeout: TimeInterval = 5) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == %@", NSNumber(value: isEnabled)),
+            object: element
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
     /// Rows disable while a change is in flight, so waiting for `enabled`

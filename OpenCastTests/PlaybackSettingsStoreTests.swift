@@ -456,6 +456,215 @@ struct PlaybackSettingsStoreTests {
         #expect(reloadedPlayback.appliedAutoSkipValues == [false])
     }
 
+    @Test("Skip Sound defaults to None, which gives the controller no cue and looks up no file")
+    func skipSoundDefaultsToNone() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let playback = PlaybackVoiceBoostControllerSpy()
+        let lookups = SkipSoundLookupRecorder()
+        let store = PlaybackSettingsStore(skipSoundURL: lookups.url(for:))
+
+        store.load(modelContext: context, playback: playback)
+        store.setAutoSkipPromosAndAdsEnabled(false, modelContext: context, playback: playback)
+        store.setAutoSkipPromosAndAdsEnabled(true, modelContext: context, playback: playback)
+
+        #expect(store.autoSkipSound == nil)
+        #expect(playback.appliedAutoSkipCues == [nil, nil, nil])
+        #expect(playback.previewedAutoSkipCues.isEmpty)
+        #expect(lookups.sounds.isEmpty)
+    }
+
+    @Test("A chosen skip sound persists, reaches the controller as the catalog's file and plays once")
+    func skipSoundChoicePersistsAndReachesTheController() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let playback = PlaybackVoiceBoostControllerSpy()
+        let store = PlaybackSettingsStore()
+        let rewind = try #require(SkipSoundCatalog.sound(id: "rewind"))
+        let rewindURL = try #require(SkipSoundCatalog.url(for: rewind, in: .main))
+        store.load(modelContext: context, playback: playback)
+
+        #expect(store.setAutoSkipSound(rewind, modelContext: context, playback: playback))
+
+        #expect(store.autoSkipSound == rewind)
+        #expect(store.lastErrorMessage == nil)
+        #expect(playback.appliedAutoSkipCues == [nil, rewindURL])
+        #expect(playback.previewedAutoSkipCues == [rewindURL])
+        #expect(try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.autoSkipSoundPreferenceKey,
+            modelContext: context
+        )?.value == "rewind")
+
+        let reloadedPlayback = PlaybackVoiceBoostControllerSpy()
+        let reloadedStore = PlaybackSettingsStore()
+        reloadedStore.load(modelContext: ModelContext(container), playback: reloadedPlayback)
+
+        #expect(reloadedStore.autoSkipSound == rewind)
+        #expect(reloadedPlayback.appliedAutoSkipCues == [rewindURL])
+        #expect(reloadedPlayback.previewedAutoSkipCues.isEmpty)
+    }
+
+    @Test(
+        "An empty or unknown stored skip sound reads as None and gives the controller no cue",
+        arguments: ["", "removed-sound"]
+    )
+    func unreadableStoredSkipSoundReadsAsNone(storedValue: String) throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        context.insert(LocalPreferenceRecord(
+            key: PlaybackSettingsStore.autoSkipSoundPreferenceKey,
+            value: storedValue
+        ))
+        try context.save()
+        let playback = PlaybackVoiceBoostControllerSpy()
+        let lookups = SkipSoundLookupRecorder()
+        let store = PlaybackSettingsStore(skipSoundURL: lookups.url(for:))
+
+        store.load(modelContext: context, playback: playback)
+
+        #expect(store.autoSkipSound == nil)
+        #expect(playback.appliedAutoSkipCues == [nil])
+        #expect(lookups.sounds.isEmpty)
+    }
+
+    @Test("Choosing None clears the cue, plays nothing and persists")
+    func choosingNoneClearsTheCueAndPlaysNothing() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let playback = PlaybackVoiceBoostControllerSpy()
+        let store = PlaybackSettingsStore()
+        let rewind = try #require(SkipSoundCatalog.sound(id: "rewind"))
+        let rewindURL = try #require(SkipSoundCatalog.url(for: rewind, in: .main))
+        store.load(modelContext: context, playback: playback)
+        store.setAutoSkipSound(rewind, modelContext: context, playback: playback)
+
+        #expect(store.setAutoSkipSound(nil, modelContext: context, playback: playback))
+
+        #expect(store.autoSkipSound == nil)
+        #expect(playback.appliedAutoSkipCues == [nil, rewindURL, nil])
+        #expect(playback.previewedAutoSkipCues == [rewindURL])
+        let reloadedStore = PlaybackSettingsStore()
+        reloadedStore.load(modelContext: ModelContext(container), playback: PlaybackVoiceBoostControllerSpy())
+        #expect(reloadedStore.autoSkipSound == nil)
+    }
+
+    @Test("Choosing the sound already chosen plays it again without writing it again")
+    func choosingTheCurrentSoundPlaysItAgain() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let playback = PlaybackVoiceBoostControllerSpy()
+        let store = PlaybackSettingsStore()
+        let cassette = try #require(SkipSoundCatalog.sound(id: "cassette"))
+        let cassetteURL = try #require(SkipSoundCatalog.url(for: cassette, in: .main))
+        store.load(modelContext: context, playback: playback)
+        store.setAutoSkipSound(cassette, modelContext: context, playback: playback)
+        let firstWrite = try #require(try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.autoSkipSoundPreferenceKey,
+            modelContext: context
+        )?.updatedAt)
+
+        #expect(store.setAutoSkipSound(cassette, modelContext: context, playback: playback))
+
+        #expect(playback.appliedAutoSkipCues == [nil, cassetteURL])
+        #expect(playback.previewedAutoSkipCues == [cassetteURL, cassetteURL])
+        #expect(try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.autoSkipSoundPreferenceKey,
+            modelContext: context
+        )?.updatedAt == firstWrite)
+    }
+
+    @Test("Auto-Skip off gives the controller no cue and keeps the choice, which comes back when it goes on")
+    func autoSkipOffWithholdsTheCueAndKeepsTheChoice() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let playback = PlaybackVoiceBoostControllerSpy()
+        let store = PlaybackSettingsStore()
+        let rewind = try #require(SkipSoundCatalog.sound(id: "rewind"))
+        let rewindURL = try #require(SkipSoundCatalog.url(for: rewind, in: .main))
+        store.load(modelContext: context, playback: playback)
+        store.setAutoSkipSound(rewind, modelContext: context, playback: playback)
+
+        store.setAutoSkipPromosAndAdsEnabled(false, modelContext: context, playback: playback)
+
+        #expect(playback.autoSkipCalls.suffix(2) == [.cue(nil), .enabled(false)])
+        #expect(store.autoSkipSound == rewind)
+        #expect(try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.autoSkipSoundPreferenceKey,
+            modelContext: context
+        )?.value == "rewind")
+
+        let offPlayback = PlaybackVoiceBoostControllerSpy()
+        let offLookups = SkipSoundLookupRecorder()
+        let offStore = PlaybackSettingsStore(skipSoundURL: offLookups.url(for:))
+        offStore.load(modelContext: ModelContext(container), playback: offPlayback)
+        #expect(offStore.autoSkipSound == rewind)
+        #expect(offPlayback.appliedAutoSkipCues == [nil])
+        #expect(offLookups.sounds.isEmpty)
+
+        store.setAutoSkipPromosAndAdsEnabled(true, modelContext: context, playback: playback)
+
+        // The cue arrives before the switch, so a skip the switch itself
+        // triggers inside a zone carries the sound.
+        #expect(playback.autoSkipCalls.suffix(2) == [.cue(rewindURL), .enabled(true)])
+        #expect(store.autoSkipSound == rewind)
+        #expect(playback.previewedAutoSkipCues == [rewindURL])
+    }
+
+    @Test(
+        "A skip sound save failure restores the choice, the cue and the stored value and plays nothing",
+        arguments: [nil, "cassette"] as [String?]
+    )
+    func skipSoundSaveFailureRollsBack(storedValue: String?) throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let previousUpdatedAt = Date(timeIntervalSince1970: 1_000)
+        if let storedValue {
+            context.insert(LocalPreferenceRecord(
+                key: PlaybackSettingsStore.autoSkipSoundPreferenceKey,
+                value: storedValue,
+                updatedAt: previousUpdatedAt
+            ))
+            try context.save()
+        }
+        let unrelatedPreference = LocalPreferenceRecord(key: "unrelated.pending.preference", value: "keep")
+        context.insert(unrelatedPreference)
+        let playback = PlaybackVoiceBoostControllerSpy()
+        let store = PlaybackSettingsStore(save: { _ in
+            throw PlaybackSettingsSaveFailure()
+        })
+        store.load(modelContext: context, playback: playback)
+        let previousSound = store.autoSkipSound
+        let previousURL = previousSound.flatMap { SkipSoundCatalog.url(for: $0, in: .main) }
+        #expect(previousSound?.id == storedValue)
+        let rewind = try #require(SkipSoundCatalog.sound(id: "rewind"))
+        let rewindURL = try #require(SkipSoundCatalog.url(for: rewind, in: .main))
+
+        let didPersist = store.setAutoSkipSound(rewind, modelContext: context, playback: playback)
+
+        #expect(!didPersist)
+        #expect(store.autoSkipSound == previousSound)
+        #expect(playback.appliedAutoSkipCues == [previousURL, rewindURL, previousURL])
+        #expect(playback.previewedAutoSkipCues.isEmpty)
+        #expect(store.lastErrorMessage?.contains("Unable to update the skip sound") == true)
+
+        let restoredRecord = try LocalPreferenceRecord.preference(
+            forKey: PlaybackSettingsStore.autoSkipSoundPreferenceKey,
+            modelContext: context
+        )
+        #expect(restoredRecord?.value == storedValue)
+        #expect(restoredRecord?.updatedAt == (storedValue == nil ? nil : previousUpdatedAt))
+
+        try context.save()
+        let freshContext = ModelContext(container)
+        let reloadedStore = PlaybackSettingsStore()
+        reloadedStore.load(modelContext: freshContext, playback: PlaybackVoiceBoostControllerSpy())
+        #expect(reloadedStore.autoSkipSound == previousSound)
+        #expect(try LocalPreferenceRecord.preference(
+            forKey: unrelatedPreference.key,
+            modelContext: freshContext
+        )?.value == "keep")
+    }
+
     @Test("Tap to Play defaults on")
     func tapToPlayDefaultsOn() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -720,5 +929,16 @@ struct PlaybackSettingsStoreTests {
 private struct PlaybackSettingsSaveFailure: LocalizedError {
     var errorDescription: String? {
         "Simulated preference save failure"
+    }
+}
+
+/// Records each skip sound the store looks up and answers as the app does.
+@MainActor
+private final class SkipSoundLookupRecorder {
+    private(set) var sounds: [SkipSound] = []
+
+    func url(for sound: SkipSound) -> URL? {
+        sounds.append(sound)
+        return SkipSoundCatalog.url(for: sound, in: .main)
     }
 }

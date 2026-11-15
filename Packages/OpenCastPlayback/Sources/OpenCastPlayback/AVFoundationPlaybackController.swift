@@ -72,6 +72,21 @@ public final class AVFoundationPlaybackController {
     @ObservationIgnored private var voiceBoostTrackLoadTask: Task<Void, Never>?
     @ObservationIgnored private let voiceBoostTapDiagnostics: VoiceBoostAudioTapDiagnostics?
     @ObservationIgnored private let voiceBoostAudioTapFactory: VoiceBoostAudioTapFactory
+    @ObservationIgnored private let skipCuePlayerFactory: PlaybackSkipCuePlayerFactory
+    @ObservationIgnored private var autoSkipCueURL: URL?
+    /// Exists only while `isAudioSessionActive`: built inside the held
+    /// session, dropped whenever the session is released or lost.
+    @ObservationIgnored private var autoSkipCue: (any PlaybackSkipCuePlaying)?
+    /// The settings screen's preview, apart from `autoSkipCue`.
+    @ObservationIgnored private var previewCue: (any PlaybackSkipCuePlaying)?
+    @ObservationIgnored private var previewCueGeneration = 0
+    /// Set only while an acquisition for the current preview generation is
+    /// in flight; a stale one is let run, never cancelled.
+    @ObservationIgnored private var previewCueActivationTask: Task<Void, Never>?
+    /// The preview acquired the session and still owes its release. An
+    /// episode activation that succeeds takes the session over and clears
+    /// this; one that is cancelled or fails leaves the release owed.
+    @ObservationIgnored private var previewCueOwnsAudioSession = false
     @ObservationIgnored private let audioSessionActivation: PlaybackAudioSessionActivation
     @ObservationIgnored private let audioSessionDeactivation: PlaybackAudioSessionDeactivation
     @ObservationIgnored private var voiceBoostConfiguration = VoiceBoostConfiguration.default
@@ -125,6 +140,11 @@ public final class AVFoundationPlaybackController {
         },
         voiceBoostAudioTapFactory: @escaping VoiceBoostAudioTapFactory = {
             try VoiceBoostAudioTap(configuration: $0, diagnostics: $1)
+        },
+        skipCuePlayerFactory: @escaping PlaybackSkipCuePlayerFactory = {
+            let cue = try PlaybackSkipCuePlayer(contentsOf: $0)
+            cue.prepare()
+            return cue
         }
     ) {
         self.mediaSession = SystemPlaybackMediaSession(
@@ -132,6 +152,7 @@ public final class AVFoundationPlaybackController {
         )
         self.voiceBoostTapDiagnostics = voiceBoostTapDiagnostics
         self.voiceBoostAudioTapFactory = voiceBoostAudioTapFactory
+        self.skipCuePlayerFactory = skipCuePlayerFactory
         self.audioSessionActivation = audioSessionActivation
         self.audioSessionDeactivation = audioSessionDeactivation
         // Audio-only app: external playback hands the stream to a video-capable
@@ -157,13 +178,16 @@ public final class AVFoundationPlaybackController {
         removeAudioSessionObservers()
         voiceBoostTrackLoadTask?.cancel()
         audioSessionActivationTask?.cancel()
+        previewCueActivationTask?.cancel()
         sleepTimerTask?.cancel()
         player.pause()
         player.replaceCurrentItem(with: nil)
         currentVoiceBoostTap = nil
+        dropAutoSkipCue()
+        previewCue?.stop()
         mediaSession.clear()
         #if os(iOS) || os(tvOS) || os(visionOS)
-        if isAudioSessionActive {
+        if isAudioSessionActive || previewCueOwnsAudioSession {
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         }
         #endif
@@ -184,6 +208,8 @@ public final class AVFoundationPlaybackController {
         voiceBoostTrackLoadTask?.cancel()
         voiceBoostTrackLoadTask = nil
         isPlaybackRequested = false
+        // A cue from the previous episode's last skip must not run into this one.
+        silenceAutoSkipCue()
         clearExpiredSleepTimerRearm()
         playbackFailureRecoveryPolicy.reset()
         playbackAdSkipPolicy.setZones([])
@@ -351,6 +377,39 @@ public final class AVFoundationPlaybackController {
         )
     }
 
+    /// The sound played over an automatic skip while the listener hears the
+    /// episode, or nil for none. Only the URL is kept until the controller
+    /// holds the audio session; the player is opened inside it.
+    public func setAutoSkipCue(_ url: URL?) {
+        guard url != autoSkipCueURL else {
+            return
+        }
+
+        autoSkipCueURL = url
+        dropAutoSkipCue()
+        if url == nil {
+            invalidatePreviewCue()
+        }
+        makeAutoSkipCueIfNeeded()
+    }
+
+    /// Plays `url` once, for the settings screen. In a session the controller
+    /// already holds it releases nothing. Otherwise it takes the session in
+    /// the same order an episode does, without touching playback state, and
+    /// releases it when the sound ends unless an episode has taken it over.
+    public func previewAutoSkipCue(_ url: URL) {
+        previewCueGeneration += 1
+        previewCueActivationTask = nil
+        // Ownership is kept across the swap, so one release follows the last sound.
+        stopPreviewCue()
+        guard !isAudioSessionActive, !previewCueOwnsAudioSession else {
+            playPreviewCue(url)
+            return
+        }
+
+        beginPreviewCueActivation(url)
+    }
+
     public func setPlaybackDiagnosticsEnabled(_ isEnabled: Bool) {
         guard isPlaybackDiagnosticsEnabled != isEnabled else {
             return
@@ -458,6 +517,7 @@ public final class AVFoundationPlaybackController {
         recordDiagnosticsEvent("unloaded playback")
         replaceSnapshot(PlaybackSnapshot(rate: snapshot.rate, progressBoundaryID: snapshot.progressBoundaryID))
         mediaSession.clear()
+        invalidatePreviewCue()
         deactivateAudioSession()
     }
 
@@ -937,9 +997,11 @@ public final class AVFoundationPlaybackController {
         #endif
     }
 
-    private func handleAudioSessionMediaServicesWereReset() {
+    func handleAudioSessionMediaServicesWereReset() {
         invalidateAudioSessionActivation()
         isAudioSessionActive = false
+        dropAutoSkipCue()
+        invalidatePreviewCue(sessionLost: true)
         recordDiagnosticsEvent("audio session media services reset")
 
         guard isPlaybackRequested, snapshot.currentEpisode != nil else {
@@ -956,6 +1018,8 @@ public final class AVFoundationPlaybackController {
         )
         invalidateAudioSessionActivation()
         isAudioSessionActive = false
+        dropAutoSkipCue()
+        invalidatePreviewCue(sessionLost: true)
         guard snapshot.currentEpisode != nil else {
             isPlaybackRequested = false
             player.pause()
@@ -1017,6 +1081,8 @@ public final class AVFoundationPlaybackController {
     }
 
     func handleAudioSessionOldDeviceUnavailable() {
+        silenceAutoSkipCue()
+        invalidatePreviewCue()
         guard snapshot.currentEpisode != nil else {
             return
         }
@@ -1711,20 +1777,196 @@ public final class AVFoundationPlaybackController {
                 duration: resolvedDuration()
             ), let cutoff = episodeBoundaries.outroCutoff(duration: resolvedDuration())
             {
+                let cueOutcome = autoSkipCueURL == nil ? nil : PlaybackAutoSkipCueOutcome.none(.ending)
                 recordDiagnosticsEvent(
-                    "auto-skip zone=\(zoneID) from=\(diagnosticsTime(position)) reached outro=\(diagnosticsTime(cutoff))"
+                    "auto-skip zone=\(zoneID) from=\(diagnosticsTime(position)) reached outro=\(diagnosticsTime(cutoff))\(cueOutcome?.logSuffix ?? "")"
                 )
                 finishCurrentEpisode()
                 return
             }
+            // Decided before the seek is issued, played after it, so starting
+            // the cue never holds up the jump.
+            let cueDecision = autoSkipCueDecision(skippingTo: target)
             seekPlayer(to: target, mode: .autoSkip)
+            let cueOutcome = cueDecision.map { applyAutoSkipCueDecision($0) }
             snapshot.position = target
             markProgressBoundary()
             recordDiagnosticsEvent(
-                "auto-skip zone=\(zoneID) from=\(diagnosticsTime(position)) to=\(diagnosticsTime(target))"
+                "auto-skip zone=\(zoneID) from=\(diagnosticsTime(position)) to=\(diagnosticsTime(target))\(cueOutcome?.logSuffix ?? "")"
             )
             publishPlaybackState()
         }
+    }
+
+    private enum AutoSkipCueDecision {
+        case play(any PlaybackSkipCuePlaying)
+        case silent(PlaybackAutoSkipCueOutcome.Reason)
+    }
+
+    /// Nil when no cue is set. The cue plays only when the listener is
+    /// hearing the episode and it carries on after the skip.
+    private func autoSkipCueDecision(skippingTo target: TimeInterval) -> AutoSkipCueDecision? {
+        guard autoSkipCueURL != nil else {
+            return nil
+        }
+        if let duration = resolvedDuration(), target >= duration {
+            return .silent(.ending)
+        }
+        guard isPlaybackRequested else {
+            return .silent(.paused)
+        }
+        guard isAudioSessionActive else {
+            return .silent(.inactive)
+        }
+        guard let autoSkipCue else {
+            return .silent(.failed)
+        }
+        guard !autoSkipCue.isSounding else {
+            return .silent(.busy)
+        }
+        return .play(autoSkipCue)
+    }
+
+    private func applyAutoSkipCueDecision(_ decision: AutoSkipCueDecision) -> PlaybackAutoSkipCueOutcome {
+        switch decision {
+        case .play(let cue):
+            cue.play() ? .played : .none(.failed)
+        case .silent(let reason):
+            .none(reason)
+        }
+    }
+
+    private func makeAutoSkipCueIfNeeded() {
+        guard let autoSkipCueURL, autoSkipCue == nil, isAudioSessionActive else {
+            return
+        }
+
+        do {
+            autoSkipCue = try skipCuePlayerFactory(autoSkipCueURL)
+        } catch {
+            recordDiagnosticsEvent(
+                "auto-skip cue unavailable error=\(AVFoundationPlaybackDiagnosticsFormatter.errorSummary(for: error))"
+            )
+        }
+    }
+
+    private func silenceAutoSkipCue() {
+        guard let autoSkipCue, autoSkipCue.isSounding else {
+            return
+        }
+        autoSkipCue.stop()
+    }
+
+    private func dropAutoSkipCue() {
+        autoSkipCue?.stop()
+        autoSkipCue = nil
+    }
+
+    var hasAutoSkipCueForTesting: Bool {
+        autoSkipCue != nil
+    }
+
+    private func beginPreviewCueActivation(_ url: URL) {
+        let generation = previewCueGeneration
+        let activation = audioSessionActivation
+        let pendingDeactivation = audioSessionDeactivationTask
+        previewCueActivationTask = Task { [weak self] in
+            do {
+                await pendingDeactivation?.value
+                _ = try await activation()
+                self?.completePreviewCueActivation(generation: generation, url: url)
+            } catch is CancellationError {
+            } catch {
+                self?.failPreviewCueActivation(generation: generation, error: error)
+            }
+        }
+    }
+
+    private func completePreviewCueActivation(generation: Int, url: URL) {
+        guard generation == previewCueGeneration else {
+            // Nothing plays for a preview invalidated mid-flight. The session
+            // its activation took is released unless an episode or a newer
+            // preview holds it or is taking it.
+            if audioSessionActivationTask == nil,
+               !isAudioSessionActive,
+               !previewCueOwnsAudioSession,
+               previewCueActivationTask == nil
+            {
+                scheduleAudioSessionDeactivation()
+            }
+            return
+        }
+
+        previewCueActivationTask = nil
+        if !isAudioSessionActive {
+            previewCueOwnsAudioSession = true
+        }
+        playPreviewCue(url)
+    }
+
+    private func failPreviewCueActivation(generation: Int, error: any Error) {
+        guard generation == previewCueGeneration else {
+            return
+        }
+
+        previewCueActivationTask = nil
+        recordDiagnosticsEvent(
+            "auto-skip cue preview could not activate the audio session error=\(AVFoundationPlaybackDiagnosticsFormatter.errorSummary(for: error))"
+        )
+    }
+
+    private func playPreviewCue(_ url: URL) {
+        guard let cue = try? skipCuePlayerFactory(url) else {
+            endPreviewCue()
+            return
+        }
+
+        cue.onFinish = { [weak self, weak cue] in
+            guard let self, let cue, previewCue === cue else {
+                return
+            }
+            endPreviewCue()
+        }
+        previewCue = cue
+        if !cue.play() {
+            endPreviewCue()
+        }
+    }
+
+    /// Drops the preview player, then releases the session if the preview
+    /// alone holds it.
+    private func endPreviewCue() {
+        stopPreviewCue()
+        releasePreviewOwnedAudioSessionIfIdle()
+    }
+
+    /// While an episode activation is in flight the release stays owed: its
+    /// success takes the session over, and its failure or an unload comes
+    /// back here.
+    private func releasePreviewOwnedAudioSessionIfIdle() {
+        guard previewCueOwnsAudioSession, previewCue == nil, audioSessionActivationTask == nil else {
+            return
+        }
+
+        previewCueOwnsAudioSession = false
+        scheduleAudioSessionDeactivation()
+    }
+
+    private func stopPreviewCue() {
+        previewCue?.stop()
+        previewCue = nil
+    }
+
+    /// Ends the preview for an unload, None or a lost route. After an
+    /// interruption or a media-services reset (`sessionLost`) the system has
+    /// already taken the session, so nothing is released.
+    private func invalidatePreviewCue(sessionLost: Bool = false) {
+        previewCueGeneration += 1
+        previewCueActivationTask = nil
+        if sessionLost {
+            previewCueOwnsAudioSession = false
+        }
+        endPreviewCue()
     }
 
     private func shouldAcceptObservedPosition(_ position: TimeInterval) -> Bool {
@@ -2056,7 +2298,12 @@ public final class AVFoundationPlaybackController {
             // generation invalidated mid-flight (unload during activation).
             // With no newer activation owning it, release it — otherwise the
             // system session stays active while isAudioSessionActive is false.
-            if audioSessionActivationTask == nil, !isAudioSessionActive {
+            // A preview that is taking or holds the session releases it itself.
+            if audioSessionActivationTask == nil,
+               !isAudioSessionActive,
+               previewCueActivationTask == nil,
+               !previewCueOwnsAudioSession
+            {
                 scheduleAudioSessionDeactivation()
             }
             return
@@ -2064,9 +2311,12 @@ public final class AVFoundationPlaybackController {
 
         audioSessionActivationTask = nil
         isAudioSessionActive = true
+        previewCueOwnsAudioSession = false
         if didRetry {
             recordDiagnosticsEvent("audio session activated after retry")
         }
+        // After the play request, so opening the cue never delays the episode.
+        defer { makeAutoSkipCueIfNeeded() }
         guard isPlaybackRequested, snapshot.currentEpisode != nil else {
             return
         }
@@ -2083,6 +2333,7 @@ public final class AVFoundationPlaybackController {
 
         audioSessionActivationTask = nil
         isAudioSessionActive = false
+        releasePreviewOwnedAudioSessionIfIdle()
         recordDiagnosticsEvent("audio session activation retry failed: \(error.localizedDescription)")
         guard isPlaybackRequested else {
             return
@@ -2109,6 +2360,7 @@ public final class AVFoundationPlaybackController {
     }
 
     private func deactivateAudioSession() {
+        dropAutoSkipCue()
         guard isAudioSessionActive else {
             return
         }
@@ -2119,7 +2371,11 @@ public final class AVFoundationPlaybackController {
 
     private func scheduleAudioSessionDeactivation() {
         let deactivation = audioSessionDeactivation
+        let previousDeactivation = audioSessionDeactivationTask
         audioSessionDeactivationTask = Task {
+            // Two stale activations can each schedule a release; they reach
+            // the media server in order, and a later load waits on the last.
+            await previousDeactivation?.value
             do {
                 try await deactivation()
             } catch {
