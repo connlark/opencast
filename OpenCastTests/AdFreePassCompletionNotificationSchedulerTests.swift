@@ -37,6 +37,29 @@ struct AdFreePassCompletionNotificationSchedulerTests {
         #expect(payload?["kind"] as? String == "ad-free-pass")
     }
 
+    @Test("A pause holding an unattended item posts nothing; a manual item's pause posts as before")
+    func heldUnattendedPauseStaysSilent() async throws {
+        let center = FakeAdFreePassNotificationCenter()
+        let scheduler = AdFreePassCompletionNotificationScheduler(center: center)
+
+        let held = await scheduler.scheduleIfNeeded(
+            terminal: .interrupted,
+            outcomes: [],
+            isSceneActive: false,
+            isHoldingUnattendedItem: true
+        )
+        #expect(held == .suppressed(.silentOutcome))
+        #expect(center.addedRequests.isEmpty)
+
+        let manual = await scheduler.scheduleIfNeeded(
+            terminal: .interrupted,
+            outcomes: [],
+            isSceneActive: false
+        )
+        #expect(manual == .scheduled)
+        #expect(try #require(center.addedRequests.first).content.title == "Ad detection paused")
+    }
+
     @Test("An active scene suppresses scheduling before any settings read")
     func activeSceneSuppresses() async {
         let center = FakeAdFreePassNotificationCenter()

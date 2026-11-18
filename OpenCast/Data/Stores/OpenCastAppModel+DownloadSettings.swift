@@ -4,6 +4,7 @@ import SwiftData
 /// Download settings changes, each saved first and acted on after: turning
 /// a show on downloads its newest episode, and a lower limit trims at once.
 extension OpenCastAppModel {
+    /// Off also turns Detect Ads in New Episodes off, in the same save.
     @discardableResult
     func setAutoDownloadsNewEpisodes(
         _ isEnabled: Bool,
@@ -18,6 +19,34 @@ extension OpenCastAppModel {
             )
         }
         return autoDownloads.enableAutoDownload(forPodcastID: podcastID, modelContext: modelContext)
+    }
+
+    /// On turns Download New Episodes on first, with its own watermark and
+    /// pass, then marks the show's newest release for a scan if it is
+    /// already downloaded; a failed save at either step stops there.
+    @discardableResult
+    func setDetectsAdsInNewEpisodes(
+        _ isEnabled: Bool,
+        forPodcastID podcastID: String,
+        modelContext: ModelContext
+    ) -> Bool {
+        guard isEnabled else {
+            return downloadSettings.setDetectsAdsInNewEpisodes(
+                false,
+                forPodcastID: podcastID,
+                modelContext: modelContext
+            )
+        }
+        guard !downloadSettings.detectsAdsInNewEpisodes(forPodcastID: podcastID) else {
+            return true
+        }
+        guard autoDownloads.enableAutoDownload(forPodcastID: podcastID, modelContext: modelContext),
+              downloadSettings.setDetectsAdsInNewEpisodes(true, forPodcastID: podcastID, modelContext: modelContext)
+        else {
+            return false
+        }
+        newEpisodeAdDetection.enable(forPodcastID: podcastID, modelContext: modelContext)
+        return true
     }
 
     @discardableResult

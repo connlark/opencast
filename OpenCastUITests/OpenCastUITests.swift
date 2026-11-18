@@ -4920,6 +4920,57 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testSeededDetectAdsInNewEpisodesTurnsDownloadNewEpisodesOnAndFollowsItOff() throws {
+        let app = makeSeededApp(seedsCompletedDownload: true)
+        app.launch()
+
+        openSection("Downloads", in: app)
+        assertScreen("Downloads", named: "Downloads navigation bar", in: app)
+        let settingsButton = toolbarButton("Download Settings", in: "Downloads", of: app)
+        assertHittable(settingsButton, named: "Download Settings toolbar button")
+        settingsButton.tap()
+        assertScreen("Download Settings", named: "Download Settings screen", in: app)
+        let showRow = app.buttons["download-settings-show-\(Self.seededFeedURL)"]
+        scrollUntilHittable(showRow, in: app)
+        showRow.tap()
+
+        assertScreen("UI Test Show", named: "show download settings", in: app)
+        let autoDownload = app.switches["podcast-download-settings-auto-download-toggle"]
+        let detectAds = app.switches["podcast-download-settings-detect-ads-toggle"]
+        assertHittable(detectAds, named: "Detect Ads in New Episodes toggle")
+        XCTAssertEqual(detectAds.value as? String, "0", "Detect Ads in New Episodes ships off")
+        XCTAssertEqual(autoDownload.value as? String, "0", "Download New Episodes ships off")
+        assertExists(
+            elementContaining(label: "Detect Ads in New Episodes scans each of these downloads on this device", in: app),
+            named: "Detect Ads in New Episodes footer paragraph"
+        )
+
+        tapToggle(detectAds, to: true)
+        XCTAssertEqual(autoDownload.value as? String, "1", "Detect Ads in New Episodes turns Download New Episodes on")
+        attachSmokeScreenshot(named: "podcast_download_settings_detect_ads_on")
+
+        tapBackButton(in: app)
+        assertScreen("Download Settings", named: "Download Settings after turning Detect Ads on", in: app)
+        assertExists(
+            elementContaining(label: "Downloads and detects ads · Default (No Limit)", in: app),
+            named: "show row summary with Detect Ads in New Episodes"
+        )
+
+        scrollUntilHittable(showRow, in: app)
+        showRow.tap()
+        assertScreen("UI Test Show", named: "show download settings again", in: app)
+        tapToggle(autoDownload, to: false)
+        XCTAssertEqual(detectAds.value as? String, "0", "Download New Episodes off turns Detect Ads in New Episodes off")
+
+        tapBackButton(in: app)
+        assertScreen("Download Settings", named: "Download Settings after turning downloads off", in: app)
+        assertExists(
+            elementContaining(label: "Manual · Default (No Limit)", in: app),
+            named: "show row summary after Download New Episodes off"
+        )
+    }
+
+    @MainActor
     func testSeededDownloadsGroupByShowSectionShowsCountSizeAndLimitChip() throws {
         let app = makeSeededApp(seedsCompletedDownload: true)
         app.launch()

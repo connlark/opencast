@@ -51,10 +51,15 @@ final class EpisodeTranscriptionStore {
     @ObservationIgnored private let failureEnvironment: @MainActor () -> EpisodeTranscriptionFailureEnvironment
     @ObservationIgnored let workCoordinator: EpisodeTranscriptionWorkCoordinator
     @ObservationIgnored private var activeTask: Task<Void, Never>?
-    @ObservationIgnored private var activeRunID: UUID?
+    /// Names the active run, so a caller can tell a run it started from one
+    /// started since for the same episode.
+    @ObservationIgnored private(set) var activeRunID: UUID?
     @ObservationIgnored private var activeSourceFileURL: URL?
     @ObservationIgnored private var activeEngine: EpisodeTranscriptionEngine?
     @ObservationIgnored private var activeCancellationPreservesPartial = false
+    /// Set with a preserving cancel that the caller will resume by itself:
+    /// the run lands as an environmental interruption does.
+    @ObservationIgnored private var activeInterruptionHoldsForAutoResume = false
     @ObservationIgnored private var activePriorCompletedTranscriptPolicy = PriorCompletedTranscriptPolicy.discard
     @ObservationIgnored private var priorCompletedTranscriptSnapshot: PriorCompletedTranscriptSnapshot?
     /// Set when a caller restored the active run's prior transcript without
@@ -424,6 +429,7 @@ final class EpisodeTranscriptionStore {
         runLanguageCode: String? = nil,
         initialComputeProfile: OpenCastTranscriptionComputeProfile = .backgroundSafe,
         priorCompletedTranscript: PriorCompletedTranscriptPolicy = .discard,
+        priority: TaskPriority? = nil,
         localReservation: EpisodeTranscriptionWorkCoordinator.LocalReservation? = nil,
         modelContext: ModelContext
     ) -> Bool {
@@ -465,13 +471,14 @@ final class EpisodeTranscriptionStore {
         activeSourceFileURL = localFileURL
         activeEngine = engine
         activeCancellationPreservesPartial = false
+        activeInterruptionHoldsForAutoResume = false
         activePriorCompletedTranscriptPolicy = priorCompletedTranscript
         activeRunEndedByRestore = false
         priorCompletedTranscriptSnapshot = nil
         if engine == .appleSpeech {
             setIdleTimerDisabled(true)
         }
-        activeTask = Task {
+        activeTask = Task(priority: priority) {
             await runTranscription(
                 runID: runID,
                 episode: episode,
@@ -482,6 +489,7 @@ final class EpisodeTranscriptionStore {
                 languageCode: languageCode,
                 runLanguageCode: runLanguageCode ?? languageCode,
                 initialComputeProfile: initialComputeProfile,
+                priority: priority,
                 modelContext: modelContext
             )
         }
@@ -497,11 +505,17 @@ final class EpisodeTranscriptionStore {
         activeTask?.cancel()
     }
 
-    func interruptActiveJob(modelContext: ModelContext) {
+    /// Stops the active run, keeping what it transcribed to resume from.
+    /// With `holdsForAutoResume` the caller resumes it by itself, so the run
+    /// lands as an environmental interruption does: its record reads
+    /// `environmentalInterruptMessage`, and an interrupted replacement is
+    /// noted as environmental.
+    func interruptActiveJob(modelContext: ModelContext, holdsForAutoResume: Bool = false) {
         guard activeTask != nil else {
             return
         }
         activeCancellationPreservesPartial = true
+        activeInterruptionHoldsForAutoResume = holdsForAutoResume
         activeTask?.cancel()
     }
 
@@ -747,6 +761,7 @@ final class EpisodeTranscriptionStore {
         }
 
         activeCancellationPreservesPartial = preservesPartial
+        activeInterruptionHoldsForAutoResume = false
         activeTask.cancel()
         await activeTask.value
     }
@@ -761,6 +776,7 @@ final class EpisodeTranscriptionStore {
         languageCode: String,
         runLanguageCode: String,
         initialComputeProfile: OpenCastTranscriptionComputeProfile,
+        priority: TaskPriority?,
         modelContext: ModelContext
     ) async {
         defer {
@@ -789,6 +805,7 @@ final class EpisodeTranscriptionStore {
                     runLanguageCode: runLanguageCode,
                     modelContext: modelContext,
                     computeProfile: computeProfile,
+                    priority: priority,
                     workingRelativePath: &workingRelativePath
                 )
                 await transcriber.releaseRunResources()
@@ -860,6 +877,7 @@ final class EpisodeTranscriptionStore {
         runLanguageCode: String,
         modelContext: ModelContext,
         computeProfile: OpenCastTranscriptionComputeProfile,
+        priority: TaskPriority?,
         workingRelativePath: inout String?
     ) async throws {
         // Taken before the fallible setup, so a hashing or duration failure
@@ -951,10 +969,11 @@ final class EpisodeTranscriptionStore {
             modelIdentifier: modelIdentity.modelIdentifier,
             modelVersion: modelIdentity.version,
             modelTreeSHA256: modelIdentity.treeSHA256,
-            computeProfile: computeProfile
+            computeProfile: computeProfile,
+            priority: priority
         )
         AdFreePassBackgroundRunLog.record(
-            "transcription starting engine=\(engine.rawValue) model=\(modelIdentity.modelIdentifier) version=\(modelIdentity.version) language=\(languageCode) resume=\((resumeStart ?? 0).backgroundLogSeconds) audio=\(audioDuration.backgroundLogSeconds) sourceBytes=\(identity.byteCount) sourceSHA=\(identity.sha256)"
+            "transcription starting engine=\(engine.rawValue) model=\(modelIdentity.modelIdentifier) version=\(modelIdentity.version) language=\(languageCode) resume=\((resumeStart ?? 0).backgroundLogSeconds) audio=\(audioDuration.backgroundLogSeconds) sourceBytes=\(identity.byteCount) sourceSHA=\(identity.sha256) priority=\(priority?.description ?? "inherited")"
         )
 
         // Checkpoints are cumulative, so each full document rewrite persists
@@ -1489,7 +1508,7 @@ final class EpisodeTranscriptionStore {
 
             if activeCancellationPreservesPartial {
                 record.state = .interrupted
-                record.errorMessage = nil
+                record.errorMessage = activeInterruptionHoldsForAutoResume ? Self.environmentalInterruptMessage : nil
             } else {
                 try fileStore.delete(relativePath: relativePath ?? record.transcriptRelativePath)
                 record.state = .cancelled
@@ -1609,7 +1628,7 @@ final class EpisodeTranscriptionStore {
     /// a lifecycle interruption, or as a cancel.
     private func noteStoppedReplacement(episodeID: String) {
         guard !activeCancellationPreservesPartial else {
-            noteInterruptedReplacement(episodeID: episodeID, isEnvironmental: false)
+            noteInterruptedReplacement(episodeID: episodeID, isEnvironmental: activeInterruptionHoldsForAutoResume)
             return
         }
         replacementStopsByEpisodeID[episodeID] = .cancelled
@@ -1630,6 +1649,7 @@ final class EpisodeTranscriptionStore {
         activeSourceFileURL = nil
         activeEngine = nil
         activeCancellationPreservesPartial = false
+        activeInterruptionHoldsForAutoResume = false
         activePriorCompletedTranscriptPolicy = .discard
         activeRunEndedByRestore = false
         priorCompletedTranscriptSnapshot = nil

@@ -2347,6 +2347,105 @@ struct EpisodeTranscriptionStoreTests {
         try await expectReplacementResumesAndCompletes(harness)
     }
 
+    @Test(
+        "An interrupt that holds for auto-resume lands a first run as an environmental interruption; the plain one is unchanged",
+        arguments: [false, true], [EpisodeTranscriptionEngine.whisper, .appleSpeech]
+    )
+    func heldInterruptLandsFirstRunAsEnvironmental(
+        holdsForAutoResume: Bool,
+        engine: EpisodeTranscriptionEngine
+    ) async throws {
+        let harness = try makeAppleRunHarness(
+            episodeID: "held-first-\(engine.rawValue)-\(holdsForAutoResume)",
+            stream: { _ in neverFinishingStream() }
+        )
+        harness.store.startTranscription(
+            harness.episode,
+            downloadRecord: harness.downloadRecord,
+            localFileURL: harness.audioURL,
+            engine: engine,
+            modelIdentity: engine == .appleSpeech
+                ? appleImproveIdentity()
+                : EpisodeTranscriptionModelIdentity(summary: modelSummary()),
+            languageCode: "en",
+            modelContext: harness.context
+        )
+        #expect(await waitUntil {
+            harness.store.record(for: harness.episode.episodeID)?.state == .running
+        })
+
+        harness.store.interruptActiveJob(modelContext: harness.context, holdsForAutoResume: holdsForAutoResume)
+
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+        let record = try #require(harness.store.record(for: harness.episode.episodeID))
+        #expect(record.state == .interrupted)
+        #expect(record.errorMessage == (holdsForAutoResume ? EpisodeTranscriptionStore.environmentalInterruptMessage : nil))
+        #expect(harness.store.hasEnvironmentalInterruptionPending(for: harness.episode.episodeID) == holdsForAutoResume)
+        #expect(harness.store.lastErrorMessage(for: harness.episode.episodeID) == nil)
+    }
+
+    @Test(
+        "An interrupt that holds for auto-resume notes an interrupted replacement as environmental; the plain one is unchanged",
+        arguments: [false, true]
+    )
+    func heldInterruptNotesReplacementAsEnvironmental(holdsForAutoResume: Bool) async throws {
+        let harness = try makeReplacementHarness(episodeID: "held-replacement-\(holdsForAutoResume)")
+        #expect(await startReplacementAndCheckpoint(harness))
+        let partialPath = try replacementPartialRelativePath(harness)
+
+        harness.store.interruptActiveJob(modelContext: harness.context, holdsForAutoResume: holdsForAutoResume)
+
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+        try expectPriorTranscriptRestored(harness)
+        #expect(harness.fileStore.documentExists(relativePath: partialPath))
+        #expect(
+            harness.store.interruptedReplacement(for: harness.episodeID)
+                == EpisodeTranscriptionReplacementInterruption(isEnvironmental: holdsForAutoResume)
+        )
+
+        try await expectReplacementResumesAndCompletes(harness)
+    }
+
+    @Test("A run takes the task priority it is given and hands it on with the request; without one it inherits")
+    func runTakesTheGivenPriority() async throws {
+        let probe = TranscriptionPriorityProbe()
+        let harness = try makeAppleRunHarness(
+            episodeID: "run-priority",
+            stream: { request in
+                probe.record(request: request, basePriority: Task.basePriority)
+                return neverFinishingStream()
+            }
+        )
+        let start = { (priority: TaskPriority?) in
+            harness.store.startTranscription(
+                harness.episode,
+                downloadRecord: harness.downloadRecord,
+                localFileURL: harness.audioURL,
+                engine: .whisper,
+                modelIdentity: EpisodeTranscriptionModelIdentity(summary: self.modelSummary()),
+                languageCode: "en",
+                priority: priority,
+                modelContext: harness.context
+            )
+        }
+
+        #expect(start(.utility))
+        #expect(await waitUntil { probe.requests.count == 1 })
+        #expect(probe.requests[0].priority == .utility)
+        #expect(probe.basePriorities[0] == .utility)
+        harness.store.cancelTranscription(episodeID: harness.episode.episodeID, modelContext: harness.context)
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+
+        let testPriority = Task.basePriority
+        #expect(start(nil))
+        #expect(await waitUntil { probe.requests.count == 2 })
+        #expect(probe.requests[1].priority == nil)
+        #expect(probe.basePriorities[1] == testPriority)
+        #expect(probe.basePriorities[1] != .utility)
+        harness.store.cancelTranscription(episodeID: harness.episode.episodeID, modelContext: harness.context)
+        #expect(await waitUntil { !harness.store.hasActiveJob })
+    }
+
     @Test("An environmental failure of a Whisper replacement restores the prior transcript, keeps its partial and resumes from it")
     func environmentalWhisperReplacementFailureKeepsPartialAndResumes() async throws {
         let harness = try makeReplacementHarness(
@@ -3747,5 +3846,18 @@ private final class SuspendingUnloadEpisodeTranscriber: EpisodeTranscribing, @un
     func releaseFirstUnload() {
         firstUnloadContinuation?.resume()
         firstUnloadContinuation = nil
+    }
+}
+
+/// What the transcriber saw of each run: its request and the base priority
+/// of the task that made it, which no waiter can raise.
+@MainActor
+private final class TranscriptionPriorityProbe {
+    private(set) var requests: [EpisodeTranscriptionRunRequest] = []
+    private(set) var basePriorities: [TaskPriority?] = []
+
+    func record(request: EpisodeTranscriptionRunRequest, basePriority: TaskPriority?) {
+        requests.append(request)
+        basePriorities.append(basePriority)
     }
 }

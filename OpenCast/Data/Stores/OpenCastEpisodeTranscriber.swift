@@ -100,7 +100,8 @@ struct OpenCastEpisodeTranscriber: EpisodeTranscribing {
         case .appleSpeech:
             let service = AppleSpeechTranscriptionService(
                 requiresInstalledAssets: true,
-                allowsAssetInstallation: false
+                allowsAssetInstallation: false,
+                analyzerPriority: request.priority
             )
             let serviceToken = track(service)
             AdFreePassBackgroundRunLog.record("compute selected profile=appleSpeech strictInstalledAssets=true")

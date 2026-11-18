@@ -164,6 +164,45 @@ struct AdFreePassCompletionNotificationContentTests {
         #expect(keyRequired.body == "1 episode couldn't be analyzed.")
     }
 
+    @Test("A drain of new episodes' items alone posts nothing; a mixed drain counts only the others")
+    func preparedOutcomesStayOutOfTheSummary() throws {
+        #expect(makeContent(outcomes: [
+            completedOutcome(episodeID: "a", zoneCount: 2, origin: .prepared),
+            failedOutcome(episodeID: "b", origin: .prepared),
+        ]) == nil)
+
+        let mixed = try #require(makeContent(outcomes: [
+            completedOutcome(episodeID: "a", zoneCount: 2, origin: .prepared),
+            completedOutcome(episodeID: "b", zoneCount: 3, origin: .auto),
+            failedOutcome(episodeID: "c", origin: .prepared),
+            failedOutcome(episodeID: "d"),
+        ]))
+        #expect(mixed.title == "Found 3 ad breaks in 1 episode")
+        #expect(mixed.body == "1 episode couldn't be analyzed.")
+    }
+
+    @Test("A pause that holds an unattended item to resume by itself posts nothing; any other pause posts as before")
+    func heldUnattendedPauseIsSilent() throws {
+        #expect(AdFreePassCompletionNotificationContent(
+            terminal: .interrupted,
+            outcomes: [],
+            isHoldingUnattendedItem: true
+        ) == nil)
+
+        let manual = try #require(AdFreePassCompletionNotificationContent(
+            terminal: .interrupted,
+            outcomes: [],
+            isHoldingUnattendedItem: false
+        ))
+        #expect(manual.title == "Ad detection paused")
+        // The hold says nothing about a drained queue's results.
+        #expect(AdFreePassCompletionNotificationContent(
+            terminal: .drained(completedCount: 1, failedCount: 0),
+            outcomes: [completedOutcome(episodeID: "a", zoneCount: 1)],
+            isHoldingUnattendedItem: true
+        ) != nil)
+    }
+
     // MARK: - Fixtures
 
     private func makeContent(
@@ -189,27 +228,31 @@ struct AdFreePassCompletionNotificationContentTests {
         episodeID: String,
         zoneCount: Int,
         title: String? = nil,
-        owner: JobCompletionDeliveryOwner = .local
+        owner: JobCompletionDeliveryOwner = .local,
+        origin: AdFreePassQueueOrigin = .manual
     ) -> AdFreePassQueueItemOutcome {
         AdFreePassQueueItemOutcome(
             episodeID: episodeID,
             episodeTitle: title ?? "Episode \(episodeID)",
             artworkURL: nil,
             kind: .completed(zoneCount: zoneCount),
-            completionDeliveryOwner: owner
+            completionDeliveryOwner: owner,
+            origin: origin
         )
     }
 
     private func failedOutcome(
         episodeID: String,
-        owner: JobCompletionDeliveryOwner = .local
+        owner: JobCompletionDeliveryOwner = .local,
+        origin: AdFreePassQueueOrigin = .manual
     ) -> AdFreePassQueueItemOutcome {
         AdFreePassQueueItemOutcome(
             episodeID: episodeID,
             episodeTitle: "Episode \(episodeID)",
             artworkURL: nil,
             kind: .failed(message: "Download failed."),
-            completionDeliveryOwner: owner
+            completionDeliveryOwner: owner,
+            origin: origin
         )
     }
 }

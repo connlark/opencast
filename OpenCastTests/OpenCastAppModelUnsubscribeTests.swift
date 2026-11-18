@@ -50,6 +50,7 @@ struct OpenCastAppModelUnsubscribeTests {
         let preferenceKeys = try context.fetch(FetchDescriptor<LocalPreferenceRecord>()).map(\.key)
         #expect(preferenceKeys.contains("playback.voiceBoost.episode.\(episodeID)"))
         #expect(preferenceKeys.contains("podcastDetail.sortOrder.\(feedURL)"))
+        #expect(preferenceKeys.contains("downloads.detectAdsPending.\(episodeID)"))
         // A still-subscribed feed keeps its audio: files cannot be rolled
         // back, and a dynamic-enclosure re-download may not be
         // byte-identical.
@@ -58,7 +59,7 @@ struct OpenCastAppModelUnsubscribeTests {
         #expect(try context.fetch(FetchDescriptor<EpisodeDownloadRecord>()).count == 1)
     }
 
-    @Test("A successful unsubscribe sweeps voice-boost and episode-list preferences")
+    @Test("A successful unsubscribe sweeps voice-boost, episode-list and Detect Ads in New Episodes preferences")
     func successfulUnsubscribeSweepsSidecarPreferences() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
@@ -72,6 +73,9 @@ struct OpenCastAppModelUnsubscribeTests {
         try seedSidecarPreferences(feedURL: feedURL, episodeID: episodeID, in: context)
         try seedSidecarPreferences(feedURL: keptFeedURL, episodeID: keptEpisodeID, in: context)
         await appModel.library.load(modelContext: context)
+        // Loaded as at launch: the store deletes only the markers of a show
+        // it has read one for.
+        appModel.downloadSettings.load(modelContext: context)
 
         let outcome = await appModel.unsubscribe(feedURL: feedURL, modelContext: context)
 
@@ -84,6 +88,14 @@ struct OpenCastAppModelUnsubscribeTests {
         #expect(preferenceKeys.contains("playback.voiceBoost.episode.\(keptEpisodeID)"))
         #expect(!preferenceKeys.contains("podcastDetail.sortOrder.\(feedURL)"))
         #expect(preferenceKeys.contains("podcastDetail.sortOrder.\(keptFeedURL)"))
+        // The show's markers go by their value, including one for an
+        // episode the library no longer lists.
+        #expect(!preferenceKeys.contains("downloads.detectAdsInNewEpisodes.\(feedURL)"))
+        #expect(preferenceKeys.contains("downloads.detectAdsInNewEpisodes.\(keptFeedURL)"))
+        #expect(!preferenceKeys.contains("downloads.detectAdsPending.\(episodeID)"))
+        #expect(!preferenceKeys.contains("downloads.detectAdsPending.\(episodeID)-gone"))
+        #expect(preferenceKeys.contains("downloads.detectAdsPending.\(keptEpisodeID)"))
+        #expect(preferenceKeys.contains("downloads.detectAdsPending.\(keptEpisodeID)-gone"))
     }
 
     @Test("A cleanup warning keeps the podcast removed and remains visible")
@@ -223,6 +235,10 @@ struct OpenCastAppModelUnsubscribeTests {
                 value: PodcastEpisodeSortOrder.oldestFirst.rawValue
             )
         )
+        context.insert(LocalPreferenceRecord(key: "downloads.detectAdsInNewEpisodes.\(feedURL)", value: "true"))
+        for markedEpisodeID in [episodeID, "\(episodeID)-gone"] {
+            context.insert(LocalPreferenceRecord(key: "downloads.detectAdsPending.\(markedEpisodeID)", value: feedURL))
+        }
         try context.save()
     }
 }

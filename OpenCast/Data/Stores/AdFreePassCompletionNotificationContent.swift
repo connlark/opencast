@@ -6,14 +6,22 @@
 /// counterpart telling the user nothing is lost — and an expiration park of
 /// a cloud item says the server is still working. Model consent, a cloud
 /// user cancel and the other cloud parks stay silent (the queue screen
-/// carries those).
+/// carries those). Work nobody tapped stays quiet: a pause that holds such
+/// an item to resume by itself, and the results of new episodes' items.
 struct AdFreePassCompletionNotificationContent: Equatable {
     let title: String
     let body: String
 
-    init?(terminal: AdFreePassQueueTerminalOutcome, outcomes: [AdFreePassQueueItemOutcome]) {
+    init?(
+        terminal: AdFreePassQueueTerminalOutcome,
+        outcomes: [AdFreePassQueueItemOutcome],
+        isHoldingUnattendedItem: Bool = false
+    ) {
         switch terminal {
         case .interrupted:
+            guard !isHoldingUnattendedItem else {
+                return nil
+            }
             title = "Ad detection paused"
             body = "iOS paused background processing. It will pick up where it left off next time you open OpenCast."
             return
@@ -32,7 +40,7 @@ struct AdFreePassCompletionNotificationContent: Equatable {
 
         var completed: [(episodeTitle: String, zoneCount: Int)] = []
         var failedCount = 0
-        for outcome in outcomes where outcome.completionDeliveryOwner == .local {
+        for outcome in outcomes where outcome.completionDeliveryOwner == .local && outcome.origin != .prepared {
             switch outcome.kind {
             case .completed(let zoneCount):
                 completed.append((outcome.episodeTitle, zoneCount))

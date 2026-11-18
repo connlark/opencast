@@ -1,11 +1,12 @@
 import SwiftData
 import SwiftUI
 
-/// One show's Download New Episodes and Keep Downloaded choices, pushed from
-/// the Downloads screens and presented by `PodcastDownloadSettingsSheet`
-/// from the show's actions menu. Unlike Skip Intro & Outro, whose free-text
-/// fields validate into one synced write, these are discrete device-local
-/// choices that apply on change, so turning a show on downloads at once.
+/// One show's Download New Episodes, Detect Ads in New Episodes and Keep
+/// Downloaded choices, pushed from the Downloads screens and presented by
+/// `PodcastDownloadSettingsSheet` from the show's actions menu. Unlike Skip
+/// Intro & Outro, whose free-text fields validate into one synced write,
+/// these are discrete device-local choices that apply on change, so turning
+/// a show on downloads at once.
 struct PodcastDownloadSettingsView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
@@ -32,12 +33,17 @@ struct PodcastDownloadSettingsView: View {
             Section {
                 Toggle("Download New Episodes", isOn: autoDownloadBinding)
                     .accessibilityIdentifier("podcast-download-settings-auto-download-toggle")
+                Toggle("Detect Ads in New Episodes", isOn: detectAdsBinding)
+                    .accessibilityIdentifier("podcast-download-settings-detect-ads-toggle")
             } footer: {
-                Text(
-                    appModel.downloadSettings.autoDownloadsRequireWiFi
-                        ? "Downloads the newest episode now and each new episode when the show refreshes. Waits for Wi-Fi while Wi-Fi Only for Automatic Downloads is on."
-                        : "Downloads the newest episode now and each new episode when the show refreshes. Uses any connection; turn on Wi-Fi Only in Download Settings to wait for Wi-Fi."
-                )
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(
+                        appModel.downloadSettings.autoDownloadsRequireWiFi
+                            ? "Downloads the newest episode now and each new episode when the show refreshes. Waits for Wi-Fi while Wi-Fi Only for Automatic Downloads is on."
+                            : "Downloads the newest episode now and each new episode when the show refreshes. Uses any connection; turn on Wi-Fi Only in Download Settings to wait for Wi-Fi."
+                    )
+                    Text(DownloadSettingsCopy.detectAdsInNewEpisodesFooter)
+                }
             }
 
             Section {
@@ -95,6 +101,14 @@ struct PodcastDownloadSettingsView: View {
             appModel.downloadSettings.autoDownloadsNewEpisodes(forPodcastID: feedURL)
         } set: { isEnabled in
             appModel.setAutoDownloadsNewEpisodes(isEnabled, forPodcastID: feedURL, modelContext: modelContext)
+        }
+    }
+
+    private var detectAdsBinding: Binding<Bool> {
+        Binding {
+            appModel.downloadSettings.detectsAdsInNewEpisodes(forPodcastID: feedURL)
+        } set: { isEnabled in
+            appModel.setDetectsAdsInNewEpisodes(isEnabled, forPodcastID: feedURL, modelContext: modelContext)
         }
     }
 

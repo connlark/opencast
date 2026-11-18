@@ -110,7 +110,10 @@ final class DownloadCleanupCoordinator {
     /// Keeps the show's most recently completed downloads up to its Keep
     /// Downloaded limit and deletes the rest, played or not. A download in
     /// use, or an unplayed episode's transcript audio, is never deleted but
-    /// still holds its place, so a show can sit above its limit.
+    /// still holds its place, so a show can sit above its limit. For a show
+    /// with Detect Ads in New Episodes the limit is hard: every new episode
+    /// it brings in is scanned, so sparing transcript audio would let a show
+    /// the listener does not keep up with grow without bound.
     func trimDownloadsToKeepLimit(forPodcastID podcastID: String, modelContext: ModelContext) {
         guard let maximumCount = settings.resolvedKeepLimit(forPodcastID: podcastID).maximumCount else {
             return
@@ -124,10 +127,14 @@ final class DownloadCleanupCoordinator {
         }
 
         let remoteJobEpisodeIDs = remoteJobEpisodeIDs()
+        let sparesTranscriptAudio = !settings.detectsAdsInNewEpisodes(forPodcastID: podcastID)
         let excessRecords = completedRecords
             .sorted(by: Self.isMoreRecentlyCompleted)
             .dropFirst(maximumCount)
-            .filter { !(isInUse($0, remoteJobEpisodeIDs: remoteJobEpisodeIDs) || isUnheardTranscriptAsset($0)) }
+            .filter {
+                !(isInUse($0, remoteJobEpisodeIDs: remoteJobEpisodeIDs)
+                    || (sparesTranscriptAudio && isUnheardTranscriptAsset($0)))
+            }
         deleteDownloads(Array(excessRecords), modelContext: modelContext)
     }
 
@@ -198,7 +205,8 @@ final class DownloadCleanupCoordinator {
     }
 
     /// The trim's one other exception, and only while the episode is
-    /// unplayed: a download whose bytes its transcript describes is that
+    /// unplayed and its show is without Detect Ads in New Episodes: a
+    /// download whose bytes its transcript describes is that
     /// transcript's karaoke and ad-skip audio, which a re-download of a
     /// dynamic enclosure may not reproduce. Once the episode is played it is
     /// ordinary trim material.

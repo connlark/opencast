@@ -19,6 +19,9 @@ struct AdFreePassQueueItemOutcome: Identifiable, Equatable {
     /// its remote job run snapshotted before the reference was cleared;
     /// on-device items, and cloud items that never reached a run, are local.
     let completionDeliveryOwner: JobCompletionDeliveryOwner
+    /// Who queued the item. A new episode's outcome stays out of the
+    /// drain's completion summary.
+    var origin: AdFreePassQueueOrigin = .manual
 
     var id: String {
         episodeID

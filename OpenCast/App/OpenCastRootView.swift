@@ -223,6 +223,9 @@ struct OpenCastRootView: View {
             addedFeedURLStrings: appModel.library.activePodcastIDs.subtracting(activePodcastIDsBeforeInitialLoad)
         )
         appModel.restorePlaybackSurfaceIfNeeded(modelContext: modelContext)
+        // After the queue restore and ahead of the trim, which spares a
+        // queued download.
+        appModel.sweepNewEpisodeAdDetection(modelContext: modelContext)
         appModel.reattachRemoteJobsIfNeeded(modelContext: modelContext, trigger: .launch)
         appModel.sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
         appModel.trimDownloadsToKeepLimits(modelContext: modelContext)

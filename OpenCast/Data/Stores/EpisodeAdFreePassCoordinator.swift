@@ -39,6 +39,16 @@ final class EpisodeAdFreePassCoordinator {
     @ObservationIgnored private var activeTranscriptionModelIdentity: EpisodeTranscriptionModelIdentity?
     @ObservationIgnored private var stickyComputeProfile: OpenCastTranscriptionComputeProfile?
     @ObservationIgnored private var pausedForEnvironmentalInterrupt = false
+    /// The environmental pause holds an unattended item for the lifecycle
+    /// (nobody there to run it), not for a compute failure; only this kind
+    /// resumes once the work may run again without the app coming back.
+    @ObservationIgnored private var pausedForLifecycleHold = false
+    /// The active item whose pass stops into a lifecycle hold, however its
+    /// transcription then ends.
+    @ObservationIgnored private var lifecycleHoldEpisodeID: String?
+    /// The transcription this queue started for its active item, as opposed
+    /// to one it joined.
+    @ObservationIgnored private var ownedTranscription: OwnedTranscription?
     @ObservationIgnored private var lastInterruptedEpisodeID: String?
     /// The running cloud item's job store, so a user cancel can persist its
     /// intent before the local task is cancelled.
@@ -57,6 +67,9 @@ final class EpisodeAdFreePassCoordinator {
     @ObservationIgnored var onKeyRequired: (@MainActor (AnalysisKeyRequiredReason) -> Void)?
     @ObservationIgnored var isBackgroundProtected: @MainActor () -> Bool = { false }
     @ObservationIgnored var requiresNonGPUCompute: @MainActor () -> Bool = { false }
+    /// Whether an item nobody tapped may run now; asked before such an item
+    /// starts its own transcription, and when its lifecycle hold lands.
+    @ObservationIgnored var allowsUnattendedWork: @MainActor () -> Bool = { true }
 
     var initialWhisperComputeProfile: OpenCastTranscriptionComputeProfile {
         stickyComputeProfile ?? (requiresNonGPUCompute() ? .cpuAndNeuralEngine : .backgroundSafe)
@@ -84,6 +97,25 @@ final class EpisodeAdFreePassCoordinator {
 
     var isQueuePausedForEnvironmentalInterrupt: Bool {
         queueState == .pausedInterrupted && pausedForEnvironmentalInterrupt
+    }
+
+    /// Paused with an item nobody tapped held at the head, to resume by
+    /// itself.
+    var isHoldingUnattendedItem: Bool {
+        isQueuePausedForEnvironmentalInterrupt && entries.first?.item.origin.isUnattended == true
+    }
+
+    /// Whether the store's active transcription is one this queue started
+    /// for its active unattended item.
+    var ownsUnattendedActiveTranscription: Bool {
+        activeItem?.origin.isUnattended == true && ownsActiveTranscription
+    }
+
+    private var ownsActiveTranscription: Bool {
+        guard let ownedTranscription else {
+            return false
+        }
+        return ownedTranscription.transcriptions.activeRunID == ownedTranscription.runID
     }
 
     var queueSnapshot: AdFreePassQueueSnapshot {
@@ -207,6 +239,12 @@ final class EpisodeAdFreePassCoordinator {
 
         if let queuedPresentation = queuedPresentation(for: episodeID) {
             return queuedPresentation
+        }
+
+        // A hold can land before the transcription wrote a record, which
+        // would read as never started.
+        if pausedForLifecycleHold, isHoldingUnattendedItem, entries.first?.item.episodeID == episodeID {
+            return .pausedInBackground
         }
 
         // Cloud stages live entirely in the coordinator (no local store
@@ -402,7 +440,7 @@ final class EpisodeAdFreePassCoordinator {
             origin: origin,
             enqueuedAt: .now,
             sequence: nextSequence(front: insertsAtFront),
-            mode: mode
+            mode: Self.mode(mode, for: origin)
         )
         let dependencies = PassDependencies(
             downloads: downloads,
@@ -499,7 +537,7 @@ final class EpisodeAdFreePassCoordinator {
                 continue
             }
 
-            let mode = AdDetectionMode(rawValue: record.modeRawValue) ?? .onDevice
+            let mode = Self.mode(AdDetectionMode(rawValue: record.modeRawValue) ?? .onDevice, for: origin)
             if mode == .cloud,
                remoteJobStore?.existingReference(for: record.episodeID, purpose: .adDetection)?
                 .userCancelRequestedAt != nil {
@@ -556,6 +594,42 @@ final class EpisodeAdFreePassCoordinator {
         }
         beginDrainSessionIfNeeded()
         startDrain()
+    }
+
+    /// A new episode's item never creates a cloud job.
+    private static func mode(_ mode: AdDetectionMode, for origin: AdFreePassQueueOrigin) -> AdDetectionMode {
+        origin == .prepared ? .onDevice : mode
+    }
+
+    /// Stops the active item's own transcription so the item waits at the
+    /// head, its record kept, and resumes by itself; whatever the stopped
+    /// transcription leaves behind, the pass ends held. Only an unattended
+    /// item's transcription this queue started is stopped: a manual item, or
+    /// a transcription the pass joined, is left alone.
+    func holdActiveItemForLifecycle(modelContext: ModelContext) {
+        guard let activeItem,
+              activeItem.origin.isUnattended,
+              let ownedTranscription,
+              ownsActiveTranscription
+        else {
+            return
+        }
+
+        lifecycleHoldEpisodeID = activeItem.episodeID
+        AdFreePassBackgroundRunLog.record("queue lifecycle hold episodeID=\(activeItem.episodeID)")
+        ownedTranscription.transcriptions.interruptActiveJob(modelContext: modelContext, holdsForAutoResume: true)
+    }
+
+    /// Resumes a lifecycle hold once its unattended item may run again. A
+    /// hold after a compute failure waits for the app, so a failing
+    /// background compute cannot loop.
+    func resumeLifecycleHoldIfAllowed() {
+        guard pausedForLifecycleHold, isHoldingUnattendedItem, allowsUnattendedWork() else {
+            return
+        }
+
+        AdFreePassBackgroundRunLog.record("queue lifecycle hold resumed episodeID=\(entries.first?.item.episodeID ?? "none")")
+        resumeQueueForEnvironmentalAutoResume()
     }
 
     func resumeQueueForEnvironmentalAutoResume() {
@@ -631,6 +705,9 @@ final class EpisodeAdFreePassCoordinator {
         activeTranscriptionModelIdentity = nil
         stickyComputeProfile = nil
         pausedForEnvironmentalInterrupt = false
+        pausedForLifecycleHold = false
+        lifecycleHoldEpisodeID = nil
+        ownedTranscription = nil
         lastInterruptedEpisodeID = nil
     }
 
@@ -803,6 +880,29 @@ final class EpisodeAdFreePassCoordinator {
         /// The user cancelled a running cloud item; its cancel task deletes
         /// the queue record once the attempt is recorded.
         case cloudUserCancelled
+        /// An unattended item stopped, or kept from starting, because it may
+        /// not run now; it waits at the head and resumes by itself.
+        case heldForLifecycle
+        /// A new episode's item without its trusted download leaves the
+        /// queue with no outcome, and the drain goes on.
+        case dropped
+
+        /// An end that a stopped transcription leaves: the store's own
+        /// interruption, or a start stopped before its record existed.
+        var isStoppedTranscription: Bool {
+            switch self {
+            case .failed, .interrupted:
+                true
+            case .completed, .cloudUnavailable, .awaitingConsent, .keyRequired, .remoteParked,
+                 .cloudUserCancelled, .heldForLifecycle, .dropped:
+                false
+            }
+        }
+    }
+
+    private struct OwnedTranscription {
+        let transcriptions: EpisodeTranscriptionStore
+        let runID: UUID
     }
 
     private var finishedItemCount: Int {
@@ -833,6 +933,7 @@ final class EpisodeAdFreePassCoordinator {
         currentStage = nil
         lastInterruptedEpisodeID = nil
         pausedForEnvironmentalInterrupt = false
+        pausedForLifecycleHold = false
     }
 
     private func resumePausedQueueIfHeadReEnqueued(
@@ -895,7 +996,7 @@ final class EpisodeAdFreePassCoordinator {
             await userCancel.value
         }
 
-        if item.origin == .auto,
+        if item.origin.isUnattended,
            await currentCompletedAnalysisVerdict(
                for: item.episodeID,
                transcriptions: dependencies.transcriptions,
@@ -942,6 +1043,7 @@ final class EpisodeAdFreePassCoordinator {
             return
         }
 
+        pausedForLifecycleHold = false
         queueState = .running
         drainGeneration += 1
         let generation = drainGeneration
@@ -963,8 +1065,9 @@ final class EpisodeAdFreePassCoordinator {
         // failures, profile changes, and memory warnings drop it earlier.
         let retentionStore = entries.first?.deps.transcriptions
         retentionStore?.beginModelRetentionDrain()
+        var endsRetentionOnExit = true
         defer {
-            if let retentionStore {
+            if endsRetentionOnExit, let retentionStore {
                 Task { await retentionStore.endModelRetentionDrain() }
             }
         }
@@ -1002,7 +1105,8 @@ final class EpisodeAdFreePassCoordinator {
                     episodeTitle: failedEntry.item.episode.title,
                     artworkURL: failedEntry.item.episode.artworkURL,
                     kind: .failed(message: message),
-                    completionDeliveryOwner: .local
+                    completionDeliveryOwner: .local,
+                    origin: failedEntry.item.origin
                 ))
                 continue
             }
@@ -1021,6 +1125,8 @@ final class EpisodeAdFreePassCoordinator {
             lastPublishedStage = nil
             activeTranscriptionEngine = entry.deps.transcriptionEngine
             activeTranscriptionModelIdentity = nil
+            lifecycleHoldEpisodeID = nil
+            ownedTranscription = nil
             AdFreePassBackgroundRunLog.record(
                 "queue item starting episodeID=\(entry.item.episodeID) origin=\(entry.item.origin.rawValue) finished=\(finishedItemCount) total=\(drainTotalItemCount)"
             )
@@ -1029,11 +1135,22 @@ final class EpisodeAdFreePassCoordinator {
             )
 
             var deliveryOwner = JobCompletionDeliveryOwner.local
-            let outcome = await runPass(entry, deliveryOwner: &deliveryOwner)
+            var outcome = await runPass(entry, deliveryOwner: &deliveryOwner)
 
             guard generation == drainGeneration else {
                 return
             }
+
+            // The mark, not the record, decides: a start stopped before its
+            // record existed reads as a failed transcription. A cancelled
+            // drain (the listener's cancel, a card expiry) is never a hold.
+            if lifecycleHoldEpisodeID == entry.item.episodeID,
+               outcome.isStoppedTranscription,
+               !Task.isCancelled {
+                outcome = .heldForLifecycle
+            }
+            lifecycleHoldEpisodeID = nil
+            ownedTranscription = nil
 
             if isBackgroundProtected(),
                entry.deps.transcriptions.lastEnvironmentalComputeFallbackEpisodeID == entry.item.episodeID {
@@ -1053,7 +1170,8 @@ final class EpisodeAdFreePassCoordinator {
                     episodeTitle: entry.item.episode.title,
                     artworkURL: entry.item.episode.artworkURL,
                     kind: .completed(zoneCount: zoneCount),
-                    completionDeliveryOwner: deliveryOwner
+                    completionDeliveryOwner: deliveryOwner,
+                    origin: entry.item.origin
                 ))
                 removePersistedItem(episodeID: entry.item.episodeID, modelContext: entry.deps.modelContext)
             case .failed(let message):
@@ -1063,7 +1181,8 @@ final class EpisodeAdFreePassCoordinator {
                     episodeTitle: entry.item.episode.title,
                     artworkURL: entry.item.episode.artworkURL,
                     kind: .failed(message: message),
-                    completionDeliveryOwner: deliveryOwner
+                    completionDeliveryOwner: deliveryOwner,
+                    origin: entry.item.origin
                 ))
                 removePersistedItem(episodeID: entry.item.episodeID, modelContext: entry.deps.modelContext)
             case .cloudUnavailable(let message):
@@ -1073,7 +1192,8 @@ final class EpisodeAdFreePassCoordinator {
                     episodeTitle: entry.item.episode.title,
                     artworkURL: entry.item.episode.artworkURL,
                     kind: .cloudUnavailable(message: message),
-                    completionDeliveryOwner: deliveryOwner
+                    completionDeliveryOwner: deliveryOwner,
+                    origin: entry.item.origin
                 ))
                 removePersistedItem(episodeID: entry.item.episodeID, modelContext: entry.deps.modelContext)
             case .awaitingConsent:
@@ -1090,6 +1210,27 @@ final class EpisodeAdFreePassCoordinator {
                 }
                 endDrain(state: entries.isEmpty ? .idle : .pausedInterrupted, terminal: .interrupted)
                 return
+            case .heldForLifecycle:
+                // A start stopped before its record read as a failure.
+                clearFailure(episodeID: entry.item.episodeID)
+                setStage(.interrupted)
+                entries.insert(entry, at: 0)
+                pausedForEnvironmentalInterrupt = true
+                pausedForLifecycleHold = true
+                AdFreePassBackgroundRunLog.record("queue item held episodeID=\(entry.item.episodeID) hold=lifecycle")
+                endDrain(state: .pausedInterrupted, terminal: .interrupted)
+                // The listener may have pressed play again, or opened the
+                // app, while the transcription was still stopping. A resume
+                // starts the next drain, which opens its own retention, so
+                // this drain's retention ends first: ended afterwards, it
+                // would close the next drain's.
+                endsRetentionOnExit = false
+                await retentionStore?.endModelRetentionDrain()
+                resumeLifecycleHoldIfAllowed()
+                return
+            case .dropped:
+                AdFreePassBackgroundRunLog.record("queue item dropped episodeID=\(entry.item.episodeID) reason=noTrustedDownload")
+                removePersistedItem(episodeID: entry.item.episodeID, modelContext: entry.deps.modelContext)
             case .keyRequired(let reason):
                 drainFailedCount += 1
                 drainOutcomes.append(AdFreePassQueueItemOutcome(
@@ -1097,7 +1238,8 @@ final class EpisodeAdFreePassCoordinator {
                     episodeTitle: entry.item.episode.title,
                     artworkURL: entry.item.episode.artworkURL,
                     kind: .keyRequired(reason),
-                    completionDeliveryOwner: deliveryOwner
+                    completionDeliveryOwner: deliveryOwner,
+                    origin: entry.item.origin
                 ))
                 removePersistedItem(episodeID: entry.item.episodeID, modelContext: entry.deps.modelContext)
                 // A key the listener just removed in AI Services needs no
@@ -1151,6 +1293,13 @@ final class EpisodeAdFreePassCoordinator {
         }
         let episode = entry.item.episode
         let deps = entry.deps
+        // A new episode's item only reads the download its show brought in:
+        // nothing here may start, resume or repeat a download for it, so a
+        // file that fails trust is not downloaded again either.
+        let readsDownloadOnly = entry.item.origin == .prepared
+        if readsDownloadOnly, deps.downloads.completedSourceIdentity(for: episode.episodeID) == nil {
+            return .dropped
+        }
 
         let localReservation: EpisodeTranscriptionWorkCoordinator.LocalReservation
         switch deps.transcriptions.reserveLocalWork(
@@ -1167,11 +1316,13 @@ final class EpisodeAdFreePassCoordinator {
         }
 
         do {
-            try await ensureTrustedDownload(
-                for: episode,
-                downloads: deps.downloads,
-                modelContext: deps.modelContext
-            )
+            if !readsDownloadOnly {
+                try await ensureTrustedDownload(
+                    for: episode,
+                    downloads: deps.downloads,
+                    modelContext: deps.modelContext
+                )
+            }
 
             // A completed transcript of this download's bytes
             // counts as done for the default path regardless of engine — skip
@@ -1206,6 +1357,9 @@ final class EpisodeAdFreePassCoordinator {
                     modelContext: deps.modelContext
                 )
             }
+            // The transcript is in hand; a hold asked for a moment too late
+            // does not turn what follows into one.
+            lifecycleHoldEpisodeID = nil
             try await completedAnalysis(
                 for: transcriptDocument,
                 transcriptions: deps.transcriptions,
@@ -2271,6 +2425,11 @@ final class EpisodeAdFreePassCoordinator {
     private func installModelIfConsentedOrStop(
         _ transcriptionModels: TranscriptionModelStore
     ) async throws -> Bool {
+        // Nobody is there to consent for a new episode's item, and waiting
+        // on consent would stall every item behind it.
+        if activeItem?.origin == .prepared {
+            throw EpisodeTranscriptionError.missingSpeechModel
+        }
         guard pendingModelConsentEpisodeID == activeEpisodeID else {
             let byteCount = try await transcriptionModels.selectedModelRemoteByteCount()
             pendingModelConsentByteCount = byteCount
@@ -2299,6 +2458,13 @@ final class EpisodeAdFreePassCoordinator {
     ) async throws {
         guard !didStartTranscription else {
             throw secondPassError()
+        }
+        // A drain that lost its reason to run while it downloaded or
+        // analysed must not start transcribing with nobody there.
+        if activeItem?.origin.isUnattended == true, !allowsUnattendedWork() {
+            lifecycleHoldEpisodeID = episode.episodeID
+            AdFreePassBackgroundRunLog.record("queue admission refused episodeID=\(episode.episodeID)")
+            throw PassStop.interrupted
         }
 
         try await startTranscription(
@@ -2345,7 +2511,7 @@ final class EpisodeAdFreePassCoordinator {
         // cancel or failure restores it, and an interruption restores it and
         // keeps the partial to resume from (R5).
         let replacesCompletedTranscript = transcriptions.record(for: episode.episodeID)?.state == .completed
-        transcriptions.startTranscription(
+        let didStart = transcriptions.startTranscription(
             episode,
             downloadRecord: downloadRecord,
             localFileURL: localFileURL,
@@ -2355,9 +2521,19 @@ final class EpisodeAdFreePassCoordinator {
             runLanguageCode: transcriptionPlan.runLanguageCode,
             initialComputeProfile: initialComputeProfile,
             priorCompletedTranscript: replacesCompletedTranscript ? .preserveKeepingInterruptedPartial : .discard,
+            priority: Self.transcriptionPriority(for: activeItem?.origin),
             localReservation: localReservation,
             modelContext: modelContext
         )
+        if didStart, let runID = transcriptions.activeRunID {
+            ownedTranscription = OwnedTranscription(transcriptions: transcriptions, runID: runID)
+        }
+    }
+
+    /// Work nobody is waiting on runs at `.utility`, the priority measured
+    /// stall-free beside playback; a manual item keeps the inherited one.
+    private static func transcriptionPriority(for origin: AdFreePassQueueOrigin?) -> TaskPriority? {
+        origin?.isUnattended == true ? .utility : nil
     }
 
     /// What the pass reports when its own transcription left the episode

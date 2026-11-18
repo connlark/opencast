@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-11-15T07:13:47Z",
+  "updatedAt": "2026-11-15T23:38:03Z",
   "topics": [
     {
       "id": "why-we-charge",
@@ -127,7 +127,7 @@
       "title": "Ad detection",
       "symbol": "forward.end",
       "summary": "Find promo and ad breaks on your device or in the cloud.",
-      "updatedAt": "2026-11-15T07:13:47Z",
+      "updatedAt": "2026-11-15T23:38:03Z",
       "related": [
         "credits",
         "transcription-engines",
@@ -157,6 +157,10 @@
         {
           "type": "paragraph",
           "text": "Automatic skips apply only when the downloaded audio matches the analyzed transcript, so a re-edited episode never skips at the wrong spot. From version 2026.11.3, **Skip Sound** in Settings › Ad Skipping can play one of a few short sounds, or one of your own up to 3 seconds long, when an ad is skipped while you are listening, so you can tell a skip from a glitch."
+        },
+        {
+          "type": "paragraph",
+          "text": "From version 2026.11.3, **Detect Ads in New Episodes** in a show's download settings scans each episode the show downloads automatically on your device as it arrives, while opencast is open or playing, so the skips are ready before you play; each scan uses your AI key or the trial like any other, and a scan that fails is not retried by itself."
         }
       ]
     },
@@ -417,7 +421,7 @@
       "title": "Storage",
       "symbol": "internaldrive",
       "summary": "Automatic caches are capped; downloads follow your limits.",
-      "updatedAt": "2026-11-15T04:16:37Z",
+      "updatedAt": "2026-11-15T23:38:03Z",
       "related": [
         "icloud-sync"
       ],
@@ -432,7 +436,7 @@
         },
         {
           "type": "paragraph",
-          "text": "A show set to Download New Episodes downloads its newest episode right away, then each new episode when the show refreshes while opencast is open, up to its limit at a time (three with No Limit). With Wi-Fi Only for Automatic Downloads on, these wait for Wi-Fi: on cellular or in Low Data Mode nothing is lost, they start on the next Wi-Fi refresh. Episodes you download yourself use any connection."
+          "text": "A show set to Download New Episodes downloads its newest episode right away, then each new episode when the show refreshes while opencast is open, up to its limit at a time (three with No Limit). With Wi-Fi Only for Automatic Downloads on, these wait for Wi-Fi: on cellular or in Low Data Mode nothing is lost, they start on the next Wi-Fi refresh. Episodes you download yourself use any connection. From version 2026.11.3, a show also set to Detect Ads in New Episodes has each of these downloads scanned for ads on your device as it arrives, and Keep Downloaded removes that show's oldest downloads even when they're scanned and unplayed."
         },
         {
           "type": "paragraph",

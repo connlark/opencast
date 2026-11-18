@@ -9,7 +9,9 @@ import SwiftData
 /// Any existing download record blocks an episode: a failed or deleted
 /// automatic download is not retried. Passes run only in the foreground,
 /// after refreshes and on activation; nothing schedules them in the
-/// background.
+/// background. Each download started for a show with Detect Ads in New
+/// Episodes leaves a marker, which `NewEpisodeAdDetectionCoordinator`
+/// takes once the download completes.
 final class PodcastAutoDownloadCoordinator {
     static let unlimitedBatchCap = 3
 
@@ -184,19 +186,26 @@ final class PodcastAutoDownloadCoordinator {
         // the network check; everything below is recomputed and runs in one
         // synchronous stretch, so each watermark moves with its starts.
         let startAsOf = now()
+        var detectAdsPodcastIDsByEpisodeID: [String: String] = [:]
         for podcastID in enabledPodcastIDs() {
             guard let watermark = settings.autoDownloadWatermark(forPodcastID: podcastID) else {
                 continue
             }
             let released = library.releasedEpisodes(forPodcastID: podcastID, publishedAfter: watermark, asOf: startAsOf)
             let batchCap = settings.resolvedKeepLimit(forPodcastID: podcastID).maximumCount ?? Self.unlimitedBatchCap
+            let detectsAds = settings.detectsAdsInNewEpisodes(forPodcastID: podcastID)
             for episode in candidates(in: released).prefix(batchCap) {
                 // A false leaves a failed record and the store's error
                 // message; the record keeps later passes from retrying.
-                downloads.startDownload(for: episode, modelContext: modelContext)
+                if downloads.startDownload(for: episode, modelContext: modelContext), detectsAds {
+                    detectAdsPodcastIDsByEpisodeID[episode.episodeID] = podcastID
+                }
             }
             advanceWatermark(forPodcastID: podcastID, past: released, modelContext: modelContext)
         }
+        // A completion lands in a later turn, so each marker is in place
+        // before its download can finish.
+        settings.addDetectAdsPendingMarkers(detectAdsPodcastIDsByEpisodeID, modelContext: modelContext)
     }
 
     private func enabledPodcastIDs() -> [String] {

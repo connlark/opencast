@@ -2453,6 +2453,445 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(records.isEmpty)
     }
 
+    // MARK: - Unattended items
+
+    @Test("A new episode's item joins the back of the queue and never runs in the cloud; only a play goes to the front")
+    func preparedJoinsTheBackAndAutoTheFront() async throws {
+        let downloader = GatedEpisodeAudioDownloader()
+        let fixture = try await makeFixture(downloader: downloader)
+        let first = makeEpisode(episodeID: "unattended-order-first")
+        let prepared = makeEpisode(episodeID: "unattended-order-prepared")
+        let manual = makeEpisode(episodeID: "unattended-order-manual")
+        let played = makeEpisode(episodeID: "unattended-order-auto")
+        let laterPrepared = makeEpisode(episodeID: "unattended-order-prepared-2")
+
+        fixture.enqueue(first)
+        #expect(await waitUntil { fixture.coordinator.activeEpisodeID == first.episodeID })
+        fixture.enqueue(prepared, origin: .prepared)
+        fixture.enqueue(manual)
+        fixture.enqueue(played, origin: .auto)
+        fixture.coordinator.enqueue(
+            episode: laterPrepared,
+            origin: .prepared,
+            downloads: fixture.downloads,
+            transcriptionModels: fixture.transcriptionModels,
+            appleSpeechAssets: fixture.appleSpeechAssets,
+            transcriptions: fixture.transcriptions,
+            adAnalyses: fixture.adAnalyses,
+            modelContext: fixture.context,
+            mode: .cloud,
+            refreshSkipZones: { 0 }
+        )
+
+        #expect(fixture.coordinator.queueItems.map(\.episodeID) == [
+            played.episodeID, prepared.episodeID, manual.episodeID, laterPrepared.episodeID,
+        ])
+        #expect(fixture.coordinator.queueItems.last?.mode == .onDevice)
+        fixture.coordinator.reset()
+    }
+
+    @Test("A new episode's item is skipped at launch while its current analysis is attached")
+    func preparedLaunchSkipsAnalyzedEpisode() async throws {
+        let downloader = ScriptedEpisodeAudioDownloader(contents: Data("downloaded audio".utf8))
+        let fixture = try await makeFixture(downloader: downloader)
+        let episode = makeEpisode(episodeID: "unattended-prepared-skip")
+        fixture.enqueue(episode)
+        #expect(await fixture.waitForDrain())
+        #expect(await waitUntil {
+            fixture.coordinator.hasCurrentCompletedAnalysis(
+                for: episode.episodeID,
+                transcriptions: fixture.transcriptions,
+                adAnalyses: fixture.adAnalyses
+            )
+        })
+
+        fixture.enqueue(episode, origin: .prepared)
+
+        #expect(await waitUntil { fixture.coordinator.queueItems.isEmpty && fixture.coordinator.queueState == .idle })
+        #expect(fixture.coordinator.drainOutcomes.isEmpty)
+        #expect(fixture.analysisEnvironment.resolvedRunIDs.count == 1)
+        #expect(try fixture.context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>()).isEmpty)
+    }
+
+    @Test(
+        "A lifecycle hold keeps the unattended item at the head with its record, however its own transcription stops, and the playback entry point resumes it",
+        arguments: HeldTranscription.allCases, TestQueueOrigin.unattended
+    )
+    func lifecycleHoldKeepsItemAndResumes(stop: HeldTranscription, origin: TestQueueOrigin) async throws {
+        let transcriber = FirstRunHoldingTranscriber(heldRunCount: stop == .beforeRecord ? 0 : 1)
+        let fixture = try await makeFixture(
+            downloader: ScriptedEpisodeAudioDownloader(contents: nil),
+            transcriber: transcriber,
+            loadsStores: false
+        )
+        let episode = makeEpisode(episodeID: "unattended-hold-\(stop)-\(origin)")
+        let contents = Data("current audio".utf8)
+        if stop == .replacement {
+            _ = try await seedDetachedTranscript(for: episode, contents: contents, fixture: fixture)
+        } else {
+            try insertCompletedDownload(
+                for: episode,
+                fileStore: fixture.downloadFileStore,
+                context: fixture.context,
+                contents: contents,
+                isHashed: true
+            )
+            await fixture.loadStores()
+        }
+        var mayRun = true
+        fixture.coordinator.allowsUnattendedWork = { mayRun }
+        var terminals: [AdFreePassQueueTerminalOutcome] = []
+        fixture.coordinator.onQueueTerminal = { terminals.append($0) }
+        if stop == .beforeRecord {
+            // The first transcribing stage publishes in the same turn as the
+            // start, before the store's run has hashed its source.
+            var didHold = false
+            fixture.coordinator.onStageChange = { stage, _ in
+                guard case .transcribing = stage, !didHold else {
+                    return
+                }
+                didHold = true
+                mayRun = false
+                fixture.coordinator.holdActiveItemForLifecycle(modelContext: fixture.context)
+            }
+        }
+
+        fixture.enqueue(episode, origin: origin.origin)
+        if stop != .beforeRecord {
+            #expect(await waitUntil { transcriber.requestCount == 1 })
+            #expect(fixture.coordinator.ownsUnattendedActiveTranscription)
+            mayRun = false
+            fixture.coordinator.holdActiveItemForLifecycle(modelContext: fixture.context)
+        }
+
+        #expect(await waitUntil { fixture.coordinator.queueState == .pausedInterrupted })
+        #expect(fixture.coordinator.isQueuePausedForEnvironmentalInterrupt)
+        #expect(fixture.coordinator.isHoldingUnattendedItem)
+        #expect(fixture.coordinator.queueItems.map(\.episodeID) == [episode.episodeID])
+        #expect(fixture.coordinator.drainOutcomes.isEmpty)
+        #expect(terminals == [.interrupted])
+        #expect(try fixture.context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>()).map(\.episodeID) == [episode.episodeID])
+        #expect(fixture.presentation(for: episode) == .pausedInBackground)
+        switch stop {
+        case .fresh:
+            let record = try #require(fixture.transcriptions.record(for: episode.episodeID))
+            #expect(record.state == .interrupted)
+            #expect(record.errorMessage == EpisodeTranscriptionStore.environmentalInterruptMessage)
+        case .replacement:
+            #expect(fixture.transcriptions.record(for: episode.episodeID)?.state == .completed)
+        case .beforeRecord:
+            #expect(transcriber.requestCount == 0)
+            #expect(fixture.transcriptions.record(for: episode.episodeID) == nil)
+        }
+
+        // Still not allowed: the playback entry point leaves it held.
+        fixture.coordinator.resumeLifecycleHoldIfAllowed()
+        #expect(fixture.coordinator.queueState == .pausedInterrupted)
+
+        mayRun = true
+        fixture.coordinator.resumeLifecycleHoldIfAllowed()
+
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.completed(zoneCount: 1)])
+        #expect(fixture.transcriptions.record(for: episode.episodeID)?.sourceFileSHA256 == OpenCastSHA256.hash(contents))
+        #expect(try fixture.context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>()).isEmpty)
+    }
+
+    @Test("A lifecycle hold leaves a manual item's transcription and one the pass joined running")
+    func lifecycleHoldLeavesManualAndJoinedRuns() async throws {
+        let transcriber = FirstRunHoldingTranscriber(heldRunCount: 2)
+        let fixture = try await makeFixture(
+            downloader: ScriptedEpisodeAudioDownloader(contents: nil),
+            transcriber: transcriber,
+            loadsStores: false
+        )
+        let manual = makeEpisode(episodeID: "unattended-hold-manual")
+        let joined = makeEpisode(episodeID: "unattended-hold-joined")
+        var downloadRecords: [String: EpisodeDownloadRecord] = [:]
+        for episode in [manual, joined] {
+            downloadRecords[episode.episodeID] = try insertCompletedDownload(
+                for: episode,
+                fileStore: fixture.downloadFileStore,
+                context: fixture.context,
+                isHashed: true
+            )
+        }
+        await fixture.loadStores()
+        fixture.coordinator.allowsUnattendedWork = { false }
+
+        fixture.enqueue(manual)
+        #expect(await waitUntil { transcriber.requestCount == 1 })
+        #expect(!fixture.coordinator.ownsUnattendedActiveTranscription)
+        fixture.coordinator.holdActiveItemForLifecycle(modelContext: fixture.context)
+        transcriber.finishHeldRun()
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.completed(zoneCount: 1)])
+
+        // Generate Transcript already transcribing the episode: the pass
+        // joins that run and never starts its own.
+        let downloadRecord = try #require(downloadRecords[joined.episodeID])
+        let fileURL = try #require(fixture.downloads.localFileURL(for: downloadRecord))
+        #expect(fixture.transcriptions.startTranscription(
+            joined,
+            downloadRecord: downloadRecord,
+            localFileURL: fileURL,
+            modelSummary: fixture.modelInstaller.summary,
+            modelContext: fixture.context
+        ))
+        #expect(await waitUntil { transcriber.requestCount == 2 })
+        fixture.enqueue(joined, origin: .auto)
+        #expect(await waitUntil {
+            guard case .transcribing = fixture.coordinator.currentStage else {
+                return false
+            }
+            return fixture.coordinator.activeEpisodeID == joined.episodeID
+        })
+        #expect(!fixture.coordinator.ownsUnattendedActiveTranscription)
+        fixture.coordinator.holdActiveItemForLifecycle(modelContext: fixture.context)
+        transcriber.finishHeldRun()
+
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.completed(zoneCount: 1)])
+        #expect(!fixture.coordinator.isQueuePausedForEnvironmentalInterrupt)
+        #expect(transcriber.requestCount == 2)
+    }
+
+    @Test("An unattended item that may not run is held without starting its transcription; a manual item is never asked")
+    func admissionRefusalHoldsWithoutStarting() async throws {
+        let transcriber = FirstRunHoldingTranscriber(heldRunCount: 0)
+        let fixture = try await makeFixture(
+            downloader: ScriptedEpisodeAudioDownloader(contents: nil),
+            transcriber: transcriber,
+            loadsStores: false
+        )
+        let manual = makeEpisode(episodeID: "unattended-admission-manual")
+        let prepared = makeEpisode(episodeID: "unattended-admission-prepared")
+        for episode in [manual, prepared] {
+            try insertCompletedDownload(
+                for: episode,
+                fileStore: fixture.downloadFileStore,
+                context: fixture.context,
+                isHashed: true
+            )
+        }
+        await fixture.loadStores()
+        var askCount = 0
+        var mayRun = false
+        fixture.coordinator.allowsUnattendedWork = {
+            askCount += 1
+            return mayRun
+        }
+
+        fixture.enqueue(manual)
+        #expect(await fixture.waitForDrain())
+        #expect(askCount == 0)
+        #expect(transcriber.requestCount == 1)
+
+        var terminals: [AdFreePassQueueTerminalOutcome] = []
+        fixture.coordinator.onQueueTerminal = { terminals.append($0) }
+        fixture.enqueue(prepared, origin: .prepared)
+
+        #expect(await waitUntil { fixture.coordinator.queueState == .pausedInterrupted })
+        #expect(askCount > 0)
+        #expect(transcriber.requestCount == 1)
+        #expect(fixture.coordinator.isHoldingUnattendedItem)
+        #expect(fixture.coordinator.queueItems.map(\.episodeID) == [prepared.episodeID])
+        #expect(terminals == [.interrupted])
+        #expect(fixture.coordinator.drainOutcomes.isEmpty)
+        #expect(try fixture.context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>()).map(\.episodeID) == [prepared.episodeID])
+        #expect(fixture.presentation(for: prepared) == .pausedInBackground)
+
+        mayRun = true
+        fixture.coordinator.resumeLifecycleHoldIfAllowed()
+
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.completed(zoneCount: 1)])
+        #expect(transcriber.requestCount == 2)
+    }
+
+    @Test("A lifecycle hold that lands while the item may run again resumes at once")
+    func lifecycleHoldResumesAtLanding() async throws {
+        let transcriber = FirstRunHoldingTranscriber(heldRunCount: 1)
+        let fixture = try await makeFixture(
+            downloader: ScriptedEpisodeAudioDownloader(contents: nil),
+            transcriber: transcriber,
+            loadsStores: false
+        )
+        let episode = makeEpisode(episodeID: "unattended-hold-landing")
+        try insertCompletedDownload(
+            for: episode,
+            fileStore: fixture.downloadFileStore,
+            context: fixture.context,
+            isHashed: true
+        )
+        await fixture.loadStores()
+        var mayRun = true
+        fixture.coordinator.allowsUnattendedWork = { mayRun }
+        var terminals: [AdFreePassQueueTerminalOutcome] = []
+        fixture.coordinator.onQueueTerminal = { terminals.append($0) }
+
+        fixture.enqueue(episode, origin: .auto)
+        #expect(await waitUntil { transcriber.requestCount == 1 })
+        mayRun = false
+        fixture.coordinator.holdActiveItemForLifecycle(modelContext: fixture.context)
+        // Playback came back while the run was still stopping.
+        mayRun = true
+
+        #expect(await fixture.waitForDrain())
+        #expect(terminals == [.interrupted, .drained(completedCount: 1, failedCount: 0)])
+        #expect(transcriber.requestCount == 2)
+        // The held drain's retention ended before the next drain opened its
+        // own, so the next drain ran with its retention open.
+        #expect(transcriber.drainRetentionAtRequests == [true, true])
+    }
+
+    @Test("A hold after a compute failure waits for the app: neither the playback entry point nor its landing resumes it")
+    func computeFailureHoldWaitsForTheApp() async throws {
+        let transcriber = ComputeFailureEpisodeTranscriber(failingRequestCount: 2)
+        let fixture = try await makeFixture(
+            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
+            transcriber: transcriber,
+            failureEnvironment: EpisodeTranscriptionFailureEnvironment(
+                sceneState: .background,
+                isProtectedDataAvailable: true
+            )
+        )
+        let episode = makeEpisode(episodeID: "unattended-compute-hold")
+        var terminals: [AdFreePassQueueTerminalOutcome] = []
+        fixture.coordinator.onQueueTerminal = { terminals.append($0) }
+
+        fixture.enqueue(episode, origin: .auto)
+
+        #expect(await waitUntil { fixture.coordinator.queueState == .pausedInterrupted })
+        #expect(fixture.coordinator.isHoldingUnattendedItem)
+        #expect(terminals == [.interrupted])
+        fixture.coordinator.resumeLifecycleHoldIfAllowed()
+        #expect(fixture.coordinator.queueState == .pausedInterrupted)
+
+        fixture.coordinator.resumeQueueForEnvironmentalAutoResume()
+
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.completed(zoneCount: 1)])
+    }
+
+    @Test(
+        "A new episode's item without its trusted download leaves the queue with no outcome and never downloads",
+        arguments: PreparedDownloadDefect.allCases
+    )
+    func preparedWithoutTrustedDownloadIsDropped(defect: PreparedDownloadDefect) async throws {
+        let downloader = ScriptedEpisodeAudioDownloader(contents: Data("downloaded audio".utf8))
+        let fixture = try await makeFixture(downloader: downloader, loadsStores: false)
+        let prepared = makeEpisode(episodeID: "unattended-drop-\(defect)")
+        let next = makeEpisode(episodeID: "unattended-drop-next-\(defect)")
+        try insertCompletedDownload(for: next, fileStore: fixture.downloadFileStore, context: fixture.context, isHashed: true)
+        var driftedRecord: EpisodeDownloadRecord?
+        switch defect {
+        case .noRecord:
+            break
+        case .paused:
+            try insertPausedDownload(for: prepared, partial: Data("part".utf8), fixture: fixture)
+        case .drifted:
+            driftedRecord = try insertCompletedDownload(
+                for: prepared,
+                fileStore: fixture.downloadFileStore,
+                context: fixture.context,
+                isHashed: true
+            )
+        }
+        await fixture.loadStores()
+        if let driftedRecord {
+            // After load, as a file replaced under a kept record is.
+            try DownloadFileDefect.drifted.apply(
+                to: fixture.downloadFileStore.fileURL(relativePath: try #require(driftedRecord.localRelativePath))
+            )
+        }
+        var terminals: [AdFreePassQueueTerminalOutcome] = []
+        fixture.coordinator.onQueueTerminal = { terminals.append($0) }
+
+        fixture.enqueue(prepared, origin: .prepared)
+        fixture.enqueue(next)
+
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.episodeID) == [next.episodeID])
+        #expect(terminals == [.drained(completedCount: 1, failedCount: 0)])
+        #expect(downloader.requestCount == 0)
+        #expect(fixture.coordinator.queueStatus(for: prepared.episodeID) == .notQueued)
+        #expect(try fixture.context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>()).isEmpty)
+        switch defect {
+        case .noRecord:
+            #expect(fixture.downloads.record(for: prepared.episodeID) == nil)
+        case .paused:
+            #expect(fixture.downloads.record(for: prepared.episodeID)?.state == .paused)
+        case .drifted:
+            #expect(fixture.downloads.record(for: prepared.episodeID)?.state == .completed)
+        }
+    }
+
+    @Test("A new episode's item that needs the speech model fails with the usual message, and the drain goes on")
+    func preparedNeverWaitsOnModelConsent() async throws {
+        let fixture = try await makeFixture(
+            downloader: ScriptedEpisodeAudioDownloader(contents: nil),
+            modelInstalled: false,
+            loadsStores: false
+        )
+        let prepared = makeEpisode(episodeID: "unattended-consent-prepared")
+        let manual = makeEpisode(episodeID: "unattended-consent-manual")
+        for episode in [prepared, manual] {
+            try insertCompletedDownload(
+                for: episode,
+                fileStore: fixture.downloadFileStore,
+                context: fixture.context,
+                isHashed: true
+            )
+        }
+        await fixture.loadStores()
+
+        fixture.enqueue(prepared, origin: .prepared)
+        fixture.enqueue(manual)
+
+        #expect(await waitUntil { fixture.coordinator.queueState == .awaitingModelConsent })
+        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [
+            .failed(message: EpisodeTranscriptionError.missingSpeechModel.localizedDescription),
+        ])
+        #expect(fixture.coordinator.drainOutcomes.map(\.origin) == [.prepared])
+        #expect(fixture.coordinator.pendingModelConsentEpisodeID == manual.episodeID)
+        #expect(fixture.coordinator.queueItems.map(\.episodeID) == [manual.episodeID])
+        #expect(fixture.modelInstaller.installCallCount == 0)
+    }
+
+    @Test(
+        "Unattended items transcribe at utility priority; a manual item keeps the inherited one",
+        arguments: TestQueueOrigin.allCases
+    )
+    func unattendedTranscriptionRunsAtUtility(origin: TestQueueOrigin) async throws {
+        let transcriber = CompletingEpisodeTranscriber()
+        let fixture = try await makeFixture(
+            downloader: ScriptedEpisodeAudioDownloader(contents: nil),
+            transcriber: transcriber,
+            loadsStores: false
+        )
+        let episode = makeEpisode(episodeID: "unattended-priority-\(origin)")
+        try insertCompletedDownload(
+            for: episode,
+            fileStore: fixture.downloadFileStore,
+            context: fixture.context,
+            isHashed: true
+        )
+        await fixture.loadStores()
+
+        fixture.enqueue(episode, origin: origin.origin)
+
+        #expect(await fixture.waitForDrain())
+        #expect(fixture.coordinator.drainOutcomes.map(\.origin) == [origin.origin])
+        let request = try #require(transcriber.lastRequest)
+        if origin == .manual {
+            #expect(request.priority == nil)
+        } else {
+            #expect(request.priority == .utility)
+            #expect(transcriber.lastBasePriority == .utility)
+        }
+    }
+
     // MARK: - Fixture
 
     @MainActor
@@ -2933,6 +3372,38 @@ enum CancelledTranscription: CaseIterable, Sendable {
     case replacement
 }
 
+/// Where a lifecycle hold stops the queue's own transcription: a first run
+/// with its record, a replacement of a transcript of other bytes, or a start
+/// stopped before its record existed.
+enum HeldTranscription: CaseIterable, Sendable {
+    case fresh
+    case replacement
+    case beforeRecord
+}
+
+enum TestQueueOrigin: CaseIterable, Sendable {
+    case manual
+    case auto
+    case prepared
+
+    static let unattended: [TestQueueOrigin] = [.auto, .prepared]
+
+    var origin: AdFreePassQueueOrigin {
+        switch self {
+        case .manual: .manual
+        case .auto: .auto
+        case .prepared: .prepared
+        }
+    }
+}
+
+/// A new episode's download that cannot be trusted as it is.
+enum PreparedDownloadDefect: CaseIterable, Sendable {
+    case noRecord
+    case paused
+    case drifted
+}
+
 /// Runs an action, once, at the transcript document read it accepts: the
 /// reader is suspended in the read meanwhile, as at any document load.
 @MainActor
@@ -3141,12 +3612,15 @@ private final class AdFreePassTranscriptionModelInstaller: TranscriptionModelIns
 private final class CompletingEpisodeTranscriber: EpisodeTranscribing, @unchecked Sendable {
     var requestCount = 0
     var lastRequest: EpisodeTranscriptionRunRequest?
+    /// The store's run task, as created: never raised by a waiter.
+    var lastBasePriority: TaskPriority?
 
     func transcribe(
         _ request: EpisodeTranscriptionRunRequest
     ) -> AsyncThrowingStream<EpisodeTranscriptionRunEvent, Error> {
         requestCount += 1
         lastRequest = request
+        lastBasePriority = Task.basePriority
         return Self.completingStream(for: request)
     }
 

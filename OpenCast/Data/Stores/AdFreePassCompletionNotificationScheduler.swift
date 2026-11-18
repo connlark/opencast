@@ -17,12 +17,17 @@ struct AdFreePassCompletionNotificationScheduler {
     func scheduleIfNeeded(
         terminal: AdFreePassQueueTerminalOutcome,
         outcomes: [AdFreePassQueueItemOutcome],
-        isSceneActive: Bool
+        isSceneActive: Bool,
+        isHoldingUnattendedItem: Bool = false
     ) async -> CompletionDeliveryDecision {
         guard !isSceneActive else {
             return .suppressed(.sceneActive)
         }
-        guard let content = AdFreePassCompletionNotificationContent(terminal: terminal, outcomes: outcomes) else {
+        guard let content = AdFreePassCompletionNotificationContent(
+            terminal: terminal,
+            outcomes: outcomes,
+            isHoldingUnattendedItem: isHoldingUnattendedItem
+        ) else {
             return .suppressed(.silentOutcome)
         }
         guard Self.allowsLocalDelivery(await center.authorizationStatus()) else {

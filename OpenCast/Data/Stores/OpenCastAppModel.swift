@@ -226,6 +226,12 @@ final class OpenCastAppModel {
     // Internal for the `+DownloadSettings` extension.
     @ObservationIgnored let downloadCleanup: DownloadCleanupCoordinator
     @ObservationIgnored let autoDownloads: PodcastAutoDownloadCoordinator
+    // Lazy: its closures need the finished app model, and its enqueue the
+    // private context and skip zones.
+    @ObservationIgnored private(set) lazy var newEpisodeAdDetection = makeNewEpisodeAdDetection(
+        enqueueContext: adFreePassEnqueueContext,
+        skipZones: skipZones
+    )
     @ObservationIgnored let upNextAutoAdd: UpNextAutoAddCoordinator
     private(set) var lastAnalysisServicesDeregistrationErrorMessage: String?
     @ObservationIgnored private let appAttestSuspension: AppAttestSuspension
@@ -589,6 +595,8 @@ final class OpenCastAppModel {
             self?.chapters.refreshIfCurrentEpisode(episodeID: episodeID)
         }
         self.downloads.onDownloadCompleted = { [weak self] record, modelContext in
+            // First: a queue entry made now keeps the download from the trim.
+            self?.newEpisodeAdDetection.downloadCompleted(episodeID: record.episodeID, modelContext: modelContext)
             self?.downloadCleanup.deferTrim(forPodcastID: record.podcastID, modelContext: modelContext)
         }
         self.transcriptAnalyses.producer = makeChaptersSummaryProducer()
@@ -680,11 +688,16 @@ final class OpenCastAppModel {
             guard let self else {
                 return
             }
+            // Read before the session notes the terminal, which ends its card.
+            let wasCardArmed = self.adFreePassBackgroundSession.isArmed
             self.adFreePassBackgroundSession.noteQueueTerminal(outcome)
-            self.scheduleAdFreePassCompletionNotificationIfNeeded(terminal: outcome)
+            self.scheduleAdFreePassCompletionNotificationIfNeeded(terminal: outcome, wasCardArmed: wasCardArmed)
         }
         self.adFreePass.isBackgroundProtected = { [weak self] in
             self?.adFreePassBackgroundSession.isProtectingBackgroundExecution ?? false
+        }
+        self.adFreePass.allowsUnattendedWork = { [weak self] in
+            self?.unattendedQueueWorkPolicy.allowsUnattendedWork ?? false
         }
         self.adFreePass.onKeyRequired = { [weak self] reason in
             self?.presentAnalysisKeyRequired(feature: .adDetection, reason: reason)
@@ -746,6 +759,7 @@ final class OpenCastAppModel {
 
     deinit {
         siriMediaUserContextObservationTask?.cancel()
+        unattendedQueueWorkObservationTask?.cancel()
     }
 
     func ensureCoreStoresLoaded(modelContext: ModelContext) async {
@@ -2363,6 +2377,14 @@ final class OpenCastAppModel {
         return protectsLocalPass || transcriptGenerationBackgroundSession.isProtectingBackgroundExecution
     }
 
+    /// Read at each decision about unattended queue work, never kept.
+    @ObservationIgnored var isLowPowerModeEnabled: @MainActor () -> Bool = {
+        ProcessInfo.processInfo.isLowPowerModeEnabled
+    }
+    /// Stands in for `playback.state` in those decisions; tests only.
+    @ObservationIgnored var unattendedQueueWorkPlaybackStateOverride: PlaybackState?
+    @ObservationIgnored var unattendedQueueWorkObservationTask: Task<Void, Never>?
+
     func armBackgroundContinuationForActiveQueue() {
         guard adFreePass.queueState == .running,
               !adFreePassBackgroundSession.isArmed,
@@ -2537,10 +2559,16 @@ final class OpenCastAppModel {
     /// The remote-job trail records the decisions that concern a remote
     /// job: the parked cloud head's notification, and each remote-owned
     /// outcome the local summary left out.
-    private func scheduleAdFreePassCompletionNotificationIfNeeded(terminal: AdFreePassQueueTerminalOutcome) {
+    private func scheduleAdFreePassCompletionNotificationIfNeeded(
+        terminal: AdFreePassQueueTerminalOutcome,
+        wasCardArmed: Bool
+    ) {
         let scheduler = AdFreePassCompletionNotificationScheduler(center: adFreePassNotificationCenter)
         let outcomes = adFreePass.drainOutcomes
         let isSceneActive = isSceneActive
+        // A held item is quiet only when no card ended with it: the system
+        // posts its own banner for an ended card, and the pause answers it.
+        let isHoldingUnattendedItem = adFreePass.isHoldingUnattendedItem && !wasCardArmed
         let jobStore = remoteTranscription.store
         let diagnostics = jobStore.diagnostics
         let parkedHead: (episodeID: String, reference: RemoteTranscriptionJobReference?)? =
@@ -2562,7 +2590,8 @@ final class OpenCastAppModel {
             let decision = await scheduler.scheduleIfNeeded(
                 terminal: terminal,
                 outcomes: outcomes,
-                isSceneActive: isSceneActive
+                isSceneActive: isSceneActive,
+                isHoldingUnattendedItem: isHoldingUnattendedItem
             )
             if let parkedHead {
                 diagnostics.record(decision.diagnosticEvent(
@@ -2686,18 +2715,31 @@ final class OpenCastAppModel {
         skipZones.undoLastAutoSkip()
     }
 
+    /// The scene-exit interrupt. The queue's own transcription for an item
+    /// nobody tapped runs on while the rule allows it and is otherwise held
+    /// to resume by itself; every other transcription (a manual item's, one
+    /// the queue joined, Generate, Improve) takes the plain interrupt.
     func interruptActiveTranscriptionForLifecycleExit(modelContext: ModelContext) {
-        transcriptionRequests.prepareForLifecycleExit(modelContext: modelContext)
+        guard adFreePass.ownsUnattendedActiveTranscription else {
+            transcriptionRequests.prepareForLifecycleExit(modelContext: modelContext)
+            return
+        }
+        guard !unattendedQueueWorkPolicy.allowsUnattendedWork else {
+            return
+        }
+        adFreePass.holdActiveItemForLifecycle(modelContext: modelContext)
     }
 
+    /// A card expiration takes the plain interrupt for every origin: the
+    /// session cancels the drain first, which is never a hold.
     func configureBackgroundSessionExpirations(modelContext: ModelContext) {
         adFreePassBackgroundSession.onExpiration = { [weak self] in
             // The run stays resumable with the replies it kept.
             self?.adFreePass.cancelActiveAnalysisRun(reason: .expiration)
-            self?.interruptActiveTranscriptionForLifecycleExit(modelContext: modelContext)
+            self?.transcriptionRequests.prepareForLifecycleExit(modelContext: modelContext)
         }
         transcriptGenerationBackgroundSession.onExpiration = { [weak self] in
-            self?.interruptActiveTranscriptionForLifecycleExit(modelContext: modelContext)
+            self?.transcriptionRequests.prepareForLifecycleExit(modelContext: modelContext)
         }
         // The server keeps working: expiration only stops local polling and
         // keeps the reference for Resume. It never touches local

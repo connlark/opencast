@@ -18,7 +18,6 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
     @State private var autoDownloadSceneID = UUID()
 
     private static let postNowPlayingDismissMaintenanceDelay: TimeInterval = 0.75
-    private static let inactiveTranscriptionInterruptionDelay: Duration = .seconds(2)
     private static let foregroundSyncedDataRefreshInterval: Duration = .seconds(60)
 
     let performInitialSetup: () async -> Void
@@ -32,6 +31,7 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
             .task {
                 appModel.setAutoDownloadsScene(autoDownloadSceneID, isActive: scenePhase == .active)
                 appModel.configureBackgroundSessionExpirations(modelContext: modelContext)
+                appModel.startUnattendedQueueWorkObservation(modelContext: modelContext)
                 await performInitialSetup()
             }
             .onDisappear {
@@ -85,6 +85,7 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
             appModel.setAutoDownloadsScene(autoDownloadSceneID, isActive: true)
             appModel.resumeEnvironmentalAdFreePassIfNeeded(modelContext: modelContext)
             appModel.reattachRemoteJobsIfNeeded(modelContext: modelContext, trigger: .sceneActivated)
+            appModel.sweepNewEpisodeAdDetection(modelContext: modelContext)
             appModel.resumeInterruptedTranscriptAnalyses(modelContext: modelContext)
             appModel.transcriptIntelligence.refreshAvailability()
             appModel.analysisUsage.refreshCurrentMonth()
@@ -101,7 +102,7 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
     private func scheduleTranscriptionInterruptionIfInactivePersists() {
         deferredTranscriptionInterruptionTask?.cancel()
         deferredTranscriptionInterruptionTask = Task {
-            try? await Task.sleep(for: Self.inactiveTranscriptionInterruptionDelay)
+            try? await Task.sleep(for: AdFreePassLifecycleInterruptionPolicy.inactiveInterruptionDelay)
 
             guard !Task.isCancelled else {
                 return

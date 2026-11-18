@@ -425,6 +425,72 @@ struct PodcastAutoDownloadCoordinatorTests {
         #expect(appModel.downloadSettings.autoDownloadWatermark(forPodcastID: feedURL) == nil)
         appModel.setAutoDownloadsScene(UUID(), isActive: false)
     }
+
+    @Test("Each download a pass starts for a show with Detect Ads in New Episodes leaves a marker")
+    func passMarksDetectAdsDownloads() async throws {
+        let fixture = try await AutoDownloadFixture.make(releaseDays: [1, 2, 3])
+        defer { fixture.tearDown() }
+        fixture.coordinator.enableAutoDownload(forPodcastID: fixture.feedURL, modelContext: fixture.context)
+        #expect(fixture.settings.setDetectsAdsInNewEpisodes(true, forPodcastID: fixture.feedURL, modelContext: fixture.context))
+
+        await fixture.coordinator.runPass(modelContext: fixture.context)
+
+        #expect(fixture.startedEpisodeIDs == [fixture.id(2)])
+        #expect(fixture.settings.detectAdsPendingPodcastIDsByEpisodeID == [fixture.id(2): fixture.feedURL])
+
+        try await fixture.publish(releaseDays: [1, 2, 3, 4, 5])
+        await fixture.coordinator.runPass(modelContext: fixture.context)
+
+        let expected = Dictionary(uniqueKeysWithValues: fixture.startedEpisodeIDs.map { ($0, fixture.feedURL) })
+        #expect(fixture.startedEpisodeIDs == [fixture.id(2), fixture.id(3), fixture.id(4)])
+        #expect(fixture.settings.detectAdsPendingPodcastIDsByEpisodeID == expected)
+        let reloaded = DownloadSettingsStore()
+        reloaded.load(modelContext: fixture.context)
+        #expect(reloaded.detectAdsPendingPodcastIDsByEpisodeID == expected)
+    }
+
+    @Test("A show without Detect Ads in New Episodes gets no marker for the downloads a pass starts")
+    func passWithoutDetectAdsLeavesNoMarker() async throws {
+        let fixture = try await AutoDownloadFixture.make(releaseDays: [1, 2, 3])
+        defer { fixture.tearDown() }
+        fixture.coordinator.enableAutoDownload(forPodcastID: fixture.feedURL, modelContext: fixture.context)
+
+        await fixture.coordinator.runPass(modelContext: fixture.context)
+
+        #expect(fixture.startedEpisodeIDs == [fixture.id(2)])
+        #expect(fixture.settings.detectAdsPendingPodcastIDsByEpisodeID.isEmpty)
+        let reloaded = DownloadSettingsStore()
+        reloaded.load(modelContext: fixture.context)
+        #expect(reloaded.detectAdsPendingPodcastIDsByEpisodeID.isEmpty)
+    }
+
+    @Test("Detect Ads in New Episodes turns Download New Episodes on, and Download New Episodes off turns it off")
+    func appModelDetectAdsFollowsDownloadNewEpisodes() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let appModel = OpenCastAppModel(
+            library: LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            currentNetworkPath: { AutoDownloadFixture.wiFi }
+        )
+        defer { appModel.setAutoDownloadsScene(UUID(), isActive: false) }
+        let feedURL = "https://example.com/app-model-detect-ads.xml"
+        #expect(!appModel.downloadSettings.autoDownloadsNewEpisodes(forPodcastID: feedURL))
+
+        #expect(appModel.setDetectsAdsInNewEpisodes(true, forPodcastID: feedURL, modelContext: context))
+
+        #expect(appModel.downloadSettings.detectsAdsInNewEpisodes(forPodcastID: feedURL))
+        #expect(appModel.downloadSettings.autoDownloadsNewEpisodes(forPodcastID: feedURL))
+        #expect(appModel.downloadSettings.autoDownloadWatermark(forPodcastID: feedURL) == .distantPast)
+
+        #expect(appModel.setAutoDownloadsNewEpisodes(false, forPodcastID: feedURL, modelContext: context))
+
+        #expect(!appModel.downloadSettings.autoDownloadsNewEpisodes(forPodcastID: feedURL))
+        #expect(!appModel.downloadSettings.detectsAdsInNewEpisodes(forPodcastID: feedURL))
+        let reloaded = DownloadSettingsStore()
+        reloaded.load(modelContext: context)
+        #expect(reloaded.detectAdsPodcastIDs.isEmpty)
+        #expect(reloaded.autoDownloadPodcastIDs.isEmpty)
+    }
 }
 
 @MainActor

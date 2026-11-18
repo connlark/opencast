@@ -11,13 +11,18 @@ public actor AppleSpeechTranscriptionService {
 
     private let requiresInstalledAssets: Bool
     private let allowsAssetInstallation: Bool
+    private let analyzerPriority: TaskPriority?
 
+    /// `analyzerPriority` is the analyzer's own work priority; nil keeps
+    /// `.userInitiated`.
     public init(
         requiresInstalledAssets: Bool = true,
-        allowsAssetInstallation: Bool = false
+        allowsAssetInstallation: Bool = false,
+        analyzerPriority: TaskPriority? = nil
     ) {
         self.requiresInstalledAssets = requiresInstalledAssets
         self.allowsAssetInstallation = allowsAssetInstallation
+        self.analyzerPriority = analyzerPriority
     }
 
     public nonisolated static func modelIdentifier(localeIdentifier: String) -> String {
@@ -101,7 +106,7 @@ public actor AppleSpeechTranscriptionService {
         try await prepareAssets(for: transcriber, locale: locale)
         let analyzer = SpeechAnalyzer(
             modules: [transcriber],
-            options: SpeechAnalyzer.Options(priority: .userInitiated, modelRetention: .whileInUse)
+            options: SpeechAnalyzer.Options(priority: analyzerPriority ?? .userInitiated, modelRetention: .whileInUse)
         )
         try await analyzer.prepareToAnalyze(in: audioFile.processingFormat)
         let modelLoading = preparationStart.duration(to: clock.now).timeInterval

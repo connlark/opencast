@@ -13,4 +13,7 @@ struct EpisodeTranscriptionRunRequest: Sendable, Equatable {
     var modelVersion: String
     var modelTreeSHA256: String
     var computeProfile: OpenCastTranscriptionComputeProfile = .backgroundSafe
+    /// The run's task priority, which the Apple analyzer takes as its own;
+    /// nil keeps the analyzer's default.
+    var priority: TaskPriority?
 }

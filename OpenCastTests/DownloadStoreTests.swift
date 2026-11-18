@@ -1815,6 +1815,47 @@ struct DownloadStoreTests {
         #expect(transcriptions.record(for: "matched-1")?.state == .completed)
     }
 
+    @Test(
+        "Detect Ads in New Episodes makes Keep Downloaded hard for an unplayed scanned download; a download in use stays either way",
+        arguments: [true, false]
+    )
+    func keepLimitIsHardForDetectAdsShows(detectsAds: Bool) async throws {
+        let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
+        let transcriptions = EpisodeTranscriptionStore(fileStore: transcriptFileStore)
+        let fixture = try await KeepLimitFixture.make(transcriptions: transcriptions)
+        let show = KeepLimitFixture.showA
+        let scanned = try fixture.insert("hard-scanned-1", podcastID: show, completedDay: 1)
+        let playing = try fixture.insert("hard-playing-2", podcastID: show, completedDay: 2)
+        try fixture.insert("hard-newest-3", podcastID: show, completedDay: 3)
+        for record in [scanned, playing] {
+            try writeCompletedTranscript(for: record, fileStore: transcriptFileStore, context: fixture.context)
+        }
+        try await fixture.reload()
+        transcriptions.load(modelContext: fixture.context)
+        try #require(transcriptions.record(for: "hard-scanned-1")?.state == .completed)
+        try #require(transcriptions.record(for: "hard-playing-2")?.state == .completed)
+        #expect(fixture.library.progressRecord(for: "hard-scanned-1")?.isPlayed != true)
+        let settings = fixture.appModel.downloadSettings
+        #expect(settings.setAutoDownloadsNewEpisodes(true, forPodcastID: show, watermark: .distantPast, modelContext: fixture.context))
+        if detectsAds {
+            #expect(settings.setDetectsAdsInNewEpisodes(true, forPodcastID: show, modelContext: fixture.context))
+        }
+        try fixture.appModel.playDownloadedEpisode(
+            fixture.episode("hard-playing-2", podcastID: show),
+            downloadRecord: playing,
+            modelContext: fixture.context
+        )
+        defer { fixture.appModel.playback.unload() }
+
+        #expect(fixture.appModel.setKeepLimitOverride(.one, forPodcastID: show, modelContext: fixture.context))
+
+        #expect(fixture.episodeIDs(for: show) == (
+            detectsAds
+                ? ["hard-newest-3", "hard-playing-2"]
+                : ["hard-newest-3", "hard-playing-2", "hard-scanned-1"]
+        ))
+    }
+
     @Test("Only the trim keeps a transcript's audio, and only an unplayed episode's exact hash match")
     func transcriptAudioNeedsAnExactHashMatchAndOnlyTheTrimKeepsIt() async throws {
         func makeFixture() async throws -> KeepLimitFixture {
