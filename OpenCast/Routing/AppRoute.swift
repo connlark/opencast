@@ -18,6 +18,13 @@ enum AppRoute: Hashable {
     case downloadStorage
     case podcastDownloadSettings(feedURL: String)
 
+    var isSettingsScreen: Bool {
+        if case .settings = self {
+            return true
+        }
+        return false
+    }
+
     /// Whether `other` leads to the screen this route does. A show is the
     /// same screen whichever list settings it was opened under.
     func opensSameScreen(as other: AppRoute) -> Bool {

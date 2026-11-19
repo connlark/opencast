@@ -6,8 +6,8 @@ import SwiftUI
 /// to remove, Clear and the queue's error alerts. Its host decides what a
 /// row does and supplies the stack: the sheet and the Now Playing pane wrap
 /// it in their own `NavigationStack` and play the row (`UpNextQueueView`);
-/// the Up Next tab hands it to its two-pane root, where a row opens the
-/// episode.
+/// the Up Next tab hands it to its two-pane root (`UpNextRootContent`,
+/// whose `rowAction` plays the row or opens the episode).
 struct UpNextQueueContent: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext

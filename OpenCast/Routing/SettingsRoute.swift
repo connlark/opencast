@@ -1,6 +1,8 @@
 import Foundation
 
 enum SettingsRoute: Hashable {
+    /// The Settings hub itself, for a stack other than the Settings tab's.
+    case hub
     case playback
     case sleepTimer
     case autoAddToUpNext

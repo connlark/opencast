@@ -5817,20 +5817,22 @@ final class OpenCastUITests: XCTestCase {
         attachSmokeScreenshot(named: "episode_actions_up_next_pair_current_episode")
     }
 
-    /// The page's Add to Up Next toolbar control. With another episode queued
-    /// first, a tap that takes the head is Play Next, with no menu; touch and
-    /// hold offers the pair alone and queues nothing until one is chosen. Once
-    /// queued, a tap opens the menu with Remove from Up Next. The queue is read
-    /// from the Up Next accessory, as above, and the control's state from its
-    /// label: a toolbar item drops `accessibilityValue`. The page of the
-    /// episode in the player shows the control disabled.
+    /// The page's Add to Up Next toolbar control. A tap only opens its menu:
+    /// not queued, Play Next and Play Last; queued, Remove from Up Next too.
+    /// Touch and hold opens the same menu and queues nothing by itself.
+    /// With another episode queued first, Play Last leaves that one at the
+    /// head and Play Next takes it. The queue is read from the Up Next
+    /// accessory, as above, and the control's state from its label: a toolbar
+    /// item drops `accessibilityValue`. The page of the episode in the player
+    /// shows the control disabled.
     @MainActor
-    func testEpisodeAddToUpNextQueuesOnTapAndOpensItsMenuOnceQueued() throws {
+    func testEpisodeAddToUpNextOpensItsMenuOnTapAndQueuesOnlyFromIt() throws {
         let app = makeSeededApp(extraFeedCount: 1)
         app.launch()
         openInbox(in: app)
         let upNextAccessory = app.buttons["Open Up Next"]
         let otherEpisodeQueued = "Extra Deterministic Episode 1, UI Test Extra Show 1; 1 episode queued"
+        let episodeQueuedLast = "Extra Deterministic Episode 1, UI Test Extra Show 1; 2 episodes queued"
         tapTrailingSwipeAction(
             "Play Next",
             on: seededExtraEpisodeRow(in: app, index: 1),
@@ -5841,6 +5843,9 @@ final class OpenCastUITests: XCTestCase {
         openEpisodeDetailFromContextMenu(seededEpisodeRow(in: app), in: app, named: "seeded inbox episode")
 
         let control = episodeUpNextControl(in: app)
+        let playNext = app.buttons["Play Next"].firstMatch
+        let playLast = app.buttons["Play Last"].firstMatch
+        let remove = app.buttons["Remove from Up Next"].firstMatch
         assertHittable(control, named: "Add to Up Next")
         XCTAssertEqual(control.label, "Add to Up Next")
         XCTAssertTrue(control.isEnabled, "Add to Up Next should be enabled for an episode that is not in the player")
@@ -5848,22 +5853,21 @@ final class OpenCastUITests: XCTestCase {
         attachSmokeScreenshot(named: "episode_add_to_up_next_not_queued")
 
         control.tap()
-        assertValue(
-            of: upNextAccessory,
-            becomes: "Deterministic UI Episode, UI Test Show; 2 episodes queued",
-            named: "Up Next accessory after the tap, which is Play Next"
-        )
-        assertLabel(of: control, becomes: "In Up Next", named: "the control after the tap")
-        assertDoesNotExist(app.buttons["Play Last"].firstMatch, named: "a menu after the tap that queues")
+        assertHittable(playNext, named: "the menu's Play Next after a tap")
+        assertHittable(playLast, named: "the menu's Play Last after a tap")
+        assertDoesNotExist(remove, named: "Remove from Up Next before the episode is queued")
+        assertValue(of: upNextAccessory, becomes: otherEpisodeQueued, named: "Up Next accessory while the menu is open")
+        attachSmokeScreenshot(named: "episode_add_to_up_next_not_queued_menu")
+        playLast.tap()
+        assertValue(of: upNextAccessory, becomes: episodeQueuedLast, named: "Up Next accessory after Play Last")
+        assertLabel(of: control, becomes: "In Up Next", named: "the control after Play Last")
         attachSmokeScreenshot(named: "episode_add_to_up_next_queued")
 
         control.tap()
-        let playNext = app.buttons["Play Next"].firstMatch
-        let playLast = app.buttons["Play Last"].firstMatch
-        let remove = app.buttons["Remove from Up Next"].firstMatch
         assertHittable(playNext, named: "the queued menu's Play Next")
         assertHittable(playLast, named: "the queued menu's Play Last")
         assertHittable(remove, named: "the queued menu's Remove from Up Next")
+        assertValue(of: upNextAccessory, becomes: episodeQueuedLast, named: "Up Next accessory while the queued menu is open")
         attachSmokeScreenshot(named: "episode_add_to_up_next_queued_menu")
         remove.tap()
         assertValue(of: upNextAccessory, becomes: otherEpisodeQueued, named: "Up Next accessory after Remove from Up Next")
@@ -5874,13 +5878,14 @@ final class OpenCastUITests: XCTestCase {
         assertHittable(playLast, named: "the held menu's Play Last")
         assertDoesNotExist(remove, named: "Remove from Up Next in the held menu")
         assertValue(of: upNextAccessory, becomes: otherEpisodeQueued, named: "Up Next accessory while the held menu is open")
-        playLast.tap()
+        attachSmokeScreenshot(named: "episode_add_to_up_next_held_menu")
+        playNext.tap()
         assertValue(
             of: upNextAccessory,
-            becomes: "Extra Deterministic Episode 1, UI Test Extra Show 1; 2 episodes queued",
-            named: "Up Next accessory after the held Play Last"
+            becomes: "Deterministic UI Episode, UI Test Show; 2 episodes queued",
+            named: "Up Next accessory after Play Next"
         )
-        assertLabel(of: control, becomes: "In Up Next", named: "the control after the held Play Last")
+        assertLabel(of: control, becomes: "In Up Next", named: "the control after Play Next")
 
         let currentApp = makeSeededApp()
         currentApp.launch()

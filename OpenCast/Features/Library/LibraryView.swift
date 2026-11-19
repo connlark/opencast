@@ -19,6 +19,8 @@ struct LibraryView: View {
     let onOpenUpNext: () -> Void
     let onOpenPlaylist: (String) -> Void
     let onOpenNotes: () -> Void
+    /// Nil while the Settings tab is on the bar: no button.
+    let onOpenSettings: (() -> Void)?
 
     private var displaySettings: LibraryDisplaySettingsStore {
         appModel.libraryDisplaySettings
@@ -53,6 +55,12 @@ struct LibraryView: View {
                 await appModel.library.refreshAll(modelContext: modelContext)
             }
             .toolbar {
+                if let onOpenSettings {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Settings", systemImage: "gearshape", action: onOpenSettings)
+                    }
+                }
+
                 if !subscriptions.isEmpty {
                     ToolbarItem(placement: .topBarTrailing) {
                         LibraryViewOptionsMenu(resolvedLayout: layout)

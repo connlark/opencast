@@ -100,8 +100,9 @@ struct EpisodeDetailView: View {
         }
         // Outside the toolbar so its Episode Actions menu reads the gate.
         .environment(noticeGate)
-        // On the page, not the toolbar button: the tap that queues replaces
-        // the button's branch, and a replaced view has no change to play.
+        // On the page, not the toolbar button: the toolbar does not carry
+        // every modifier of its items over (it drops `accessibilityValue`),
+        // and the page does not change with the queue.
         .sensoryFeedback(.success, trigger: upNextEnqueueFeedback)
         .confirmationDialog(
             "Clear progress for \(episode?.title ?? "this episode")?",

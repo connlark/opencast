@@ -51,6 +51,7 @@ struct OpenCastRootView: View {
             OpenCastTabRootView(
                 selectedTab: $selectedTab,
                 navigationPaths: $navigationPaths,
+                upNextTabSwitch: appModel.appearanceSettings.showsUpNextTab,
                 onAdd: presentAddPodcast,
                 onOpenUpNext: presentUpNextQueue,
                 onPresentNowPlaying: presentNowPlaying
@@ -308,8 +309,12 @@ struct OpenCastRootView: View {
     }
 
     private func openAIServicesSettings() {
-        selectedTab = .settings
-        navigationPaths[.settings] = [.settings(.aiServices)]
+        let opening = SettingsOpening.opening(
+            .aiServices,
+            showsUpNextTab: appModel.appearanceSettings.showsUpNextTab
+        )
+        selectedTab = opening.section
+        navigationPaths[opening.section] = opening.path
     }
 
     private func consumeRemoteEpisodeNotificationRoutes() async {

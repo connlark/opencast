@@ -5,6 +5,9 @@ struct SettingsRouteDestinationView: View {
 
     var body: some View {
         switch route {
+        case .hub:
+            SettingsView()
+                .navigationBarTitleDisplayMode(.large)
         case .playback:
             SettingsPlaybackView()
         case .sleepTimer:

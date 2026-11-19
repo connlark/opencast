@@ -24,6 +24,12 @@ struct SettingsLookAndFeelView: View {
                     SettingsTabBarMinimizeToggleRow()
                 }
             }
+
+            Section {
+                SettingsUpNextTabToggleRow()
+            } footer: {
+                Text("Up Next takes the place of Settings on the tab bar. Settings opens from the Library.")
+            }
         }
         .settingsSubscreen(title: "Look & Feel")
     }

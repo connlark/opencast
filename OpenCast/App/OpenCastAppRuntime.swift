@@ -70,6 +70,9 @@ final class OpenCastAppRuntime {
             if launchConfiguration.seedsAnalysisKeyNoticeSeen {
                 try AnalysisUITestFixtures.seedKeyNoticeSeen(in: modelContainer)
             }
+            if launchConfiguration.seedsUpNextTab {
+                try OpenCastUITestSeedData.seedUpNextTab(in: modelContainer)
+            }
             if launchConfiguration.schedulesNotificationLookFixture {
                 UITestNotificationLookFixtureScheduler.schedule()
             }
@@ -154,6 +157,7 @@ final class OpenCastAppRuntime {
                 uiTestSeededChapters: launchConfiguration.seedsChapters ? OpenCastUITestSeedData.seededChapters : nil,
                 legacyLocalPlaylists: stores.legacyLocalPlaylists
             )
+            Self.prepareFirstScene(appModel, modelContainer: modelContainer)
             #if DEBUG
             if launchConfiguration.seedsUITestData {
                 UITestNowPlayingCompletionFixture.installIfRequested(
@@ -165,6 +169,13 @@ final class OpenCastAppRuntime {
         } catch {
             fatalError("Unable to create OpenCast model container: \(error)")
         }
+    }
+
+    /// What the first scene needs from the stores before it is built: the
+    /// launch's settings load runs only after the root view appears, and the
+    /// first tab bar follows the Up Next Tab switch.
+    static func prepareFirstScene(_ appModel: OpenCastAppModel, modelContainer: ModelContainer) {
+        appModel.appearanceSettings.loadShowsUpNextTab(modelContext: modelContainer.mainContext)
     }
 
     /// Everything that must happen before the container opens, in order: the

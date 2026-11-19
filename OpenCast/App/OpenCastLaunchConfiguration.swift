@@ -80,6 +80,9 @@ struct OpenCastLaunchConfiguration {
     /// Seen unless a test forces the notice, so the Detect Ads and Generate
     /// flows run as before.
     var seedsAnalysisKeyNoticeSeen: Bool
+    /// UI-test seam: the Up Next Tab switch stored on before launch, so a
+    /// test sees the launch a listener with it on gets.
+    var seedsUpNextTab = false
     // Search cold-start probe flags are Release-capable benchmark seams, so
     // unlike the seams above they are deliberately not gated on UI testing.
     var runsSearchColdStartProbe = false
@@ -198,6 +201,8 @@ struct OpenCastLaunchConfiguration {
         let shouldForceAnalysisKeyNotice = arguments.contains("--opencast-force-analysis-key-notice")
             || environment["OPENCAST_FORCE_ANALYSIS_KEY_NOTICE"] == "1"
         let shouldGateAnalysisKeyTest = arguments.contains("--opencast-seed-analysis-key-test-gated")
+        let shouldSeedUpNextTab = arguments.contains("--opencast-seed-up-next-tab")
+            || environment["OPENCAST_SEED_UP_NEXT_TAB"] == "1"
         let seededAnalysisKeyProviders: [AnalysisProvider] = isUITesting
             ? AnalysisProvider.allCases.filter { provider in
                 switch provider {
@@ -332,6 +337,7 @@ struct OpenCastLaunchConfiguration {
                 ? chaptersSummarySession.flatMap(UITestAnalysisContinuedTaskScheduler.Mode.init(rawValue:))
                 : nil,
             seedsAnalysisKeyNoticeSeen: isUITesting && !shouldForceAnalysisKeyNotice,
+            seedsUpNextTab: isUITesting && shouldSeedUpNextTab,
             runsSearchColdStartProbe: arguments.contains(
                 SearchColdStartProbe.probeArgument
             ),

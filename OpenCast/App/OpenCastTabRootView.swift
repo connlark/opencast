@@ -19,13 +19,14 @@ struct OpenCastTabRootView: View {
     @State private var playlistsTabSizeClass: UserInterfaceSizeClass?
     /// Set once this scene shows a rail, and never cleared.
     @State private var sceneHasShownRail = false
-    @State private var showsUpNextTab = false
-    /// Counts the steps that handed a selected Up Next to the Library. Its
-    /// observer acknowledges each one after the update that carried it (a
-    /// count always changes, so the acknowledgement cannot be lost) and only
-    /// then schedules the next step; until then no step runs.
-    @State private var upNextHandoverCount = 0
-    @State private var acknowledgedUpNextHandoverCount = 0
+    @State private var showsUpNextTab: Bool
+    @State private var showsSettingsTab: Bool
+    /// Counts the steps that handed a selected Up Next or Settings to the
+    /// Library. Its observer acknowledges each one after the update that
+    /// carried it (a count always changes, so the acknowledgement cannot be
+    /// lost) and only then schedules the next step; until then no step runs.
+    @State private var handoverCount = 0
+    @State private var acknowledgedHandoverCount = 0
     /// The selection as its observer last saw it, i.e. as it has landed in
     /// an update. A withdrawal waits until the live selection has landed,
     /// so it never shares an update with a selection change.
@@ -53,6 +54,26 @@ struct OpenCastTabRootView: View {
     let onOpenUpNext: () -> Void
     let onPresentNowPlaying: () -> Void
 
+    /// `upNextTabSwitch` is the Up Next Tab switch as this scene's tab root
+    /// is created (read before the first frame at launch), so the first tab
+    /// set already follows it; later flips go through the deferred steps.
+    init(
+        selectedTab: Binding<AppSection>,
+        navigationPaths: Binding<AppNavigationPaths>,
+        upNextTabSwitch: Bool,
+        onAdd: @escaping () -> Void,
+        onOpenUpNext: @escaping () -> Void,
+        onPresentNowPlaying: @escaping () -> Void
+    ) {
+        _selectedTab = selectedTab
+        _navigationPaths = navigationPaths
+        _showsUpNextTab = State(initialValue: upNextTabSwitch)
+        _showsSettingsTab = State(initialValue: !upNextTabSwitch)
+        self.onAdd = onAdd
+        self.onOpenUpNext = onOpenUpNext
+        self.onPresentNowPlaying = onPresentNowPlaying
+    }
+
     var body: some View {
         ZStack {
             // A sibling of the tab view, above every tab's container, so the
@@ -70,10 +91,13 @@ struct OpenCastTabRootView: View {
             // The latch can arrive without a size-class change.
             updateUpNextTab(horizontalSizeClass: horizontalSizeClass)
         }
-        .onChange(of: upNextHandoverCount) { _, count in
+        .onChange(of: appModel.appearanceSettings.showsUpNextTab) {
+            scheduleTabSetStep()
+        }
+        .onChange(of: handoverCount) { _, count in
             // The update that carried the handover has landed.
-            acknowledgedUpNextHandoverCount = count
-            scheduleUpNextTabStep()
+            acknowledgedHandoverCount = count
+            scheduleTabSetStep()
         }
         .onChange(of: installedTabSections, initial: true) { _, installed in
             updateTabInstallations(installed)
@@ -108,7 +132,8 @@ struct OpenCastTabRootView: View {
                         onOpenPlaylists: { openFromRoot(on: .library)(.playlists) },
                         onOpenUpNext: openUpNext,
                         onOpenPlaylist: { openFromRoot(on: .library)(.playlistDetail(id: $0)) },
-                        onOpenNotes: { openFromRoot(on: .library)(.notes) }
+                        onOpenNotes: { openFromRoot(on: .library)(.notes) },
+                        onOpenSettings: showsSettingsTab ? nil : { openFromRoot(on: .library)(.settings(.hub)) }
                     )
                 }
                 .publishesActiveTabBarPlacement()
@@ -132,9 +157,9 @@ struct OpenCastTabRootView: View {
                 }
             }
 
-            // The queue as a section on the inner display only
-            // (`offersUpNextTab`); inserted and withdrawn by
-            // `updateUpNextTab`'s deferred update, as Playlists is.
+            // The queue as a section on the inner display, and everywhere
+            // while the Up Next Tab switch is on (`offersUpNextTab`);
+            // inserted and withdrawn by the deferred tab-set steps.
             if showsUpNextTab {
                 sectionTab(.upNext) {
                     TwoPaneRoot(
@@ -147,6 +172,9 @@ struct OpenCastTabRootView: View {
                         onOpenPlaylist: openPlaylist(on: .upNext)
                     ) {
                         UpNextRootContent(
+                            rowAction: UpNextRootContent.rowAction(
+                                isFoldableScene: inheritedSceneLayouts?.isFoldable == true
+                            ),
                             onOpenEpisode: { openFromRoot(on: .upNext)(UpNextRootContent.route(forQueuedEpisode: $0)) }
                         )
                     }
@@ -188,12 +216,16 @@ struct OpenCastTabRootView: View {
             }
             .badge(appModel.downloads.activeDownloadCount)
 
-            sectionTab(.settings) {
-                NavigationStack(path: $navigationPaths[.settings]) {
-                    SettingsView()
-                        .withOpenCastDestinations()
+            // Withdrawn while the Up Next Tab switch is on: the Library's
+            // Settings button opens the hub instead.
+            if showsSettingsTab {
+                sectionTab(.settings) {
+                    NavigationStack(path: $navigationPaths[.settings]) {
+                        SettingsView()
+                            .withOpenCastDestinations()
+                    }
+                    .publishesActiveTabBarPlacement()
                 }
-                .publishesActiveTabBarPlacement()
             }
 
             sectionTab(.search, role: .search) {
@@ -230,7 +262,7 @@ struct OpenCastTabRootView: View {
             isSearchPresented = selectedTab == .search
             leavePlaylistsTabIfCompact()
             observedSelection = selectedTab
-            scheduleUpNextTabStep()
+            scheduleTabSetStep()
         }
         .onChange(of: horizontalSizeClass, initial: true) { _, sizeClass in
             updatePlaylistsTab(horizontalSizeClass: sizeClass, hasRail: toolbarVerticalEdge != nil)
@@ -275,7 +307,10 @@ struct OpenCastTabRootView: View {
     }
 
     private var installedTabSections: Set<AppSection> {
-        var sections: Set<AppSection> = [.library, .inbox, .downloads, .settings, .search]
+        var sections: Set<AppSection> = [.library, .inbox, .downloads, .search]
+        if showsSettingsTab {
+            sections.insert(.settings)
+        }
         if showsPlaylistsTab {
             sections.insert(.playlists)
         }
@@ -289,7 +324,7 @@ struct OpenCastTabRootView: View {
     /// its hosted label until the declarations are next evaluated, and nothing
     /// need evaluate them after an insertion. This runs after the update that
     /// carried it; recording a generation the helper reads is that evaluation.
-    /// Separate from `scheduleUpNextTabStep`: nothing here selects, installs
+    /// Separate from `scheduleTabSetStep`: nothing here selects, installs
     /// or withdraws, and a refresh changes no form.
     private func updateTabInstallations(_ installed: Set<AppSection>) {
         let change = tabRefreshes.observe(installed)
@@ -447,47 +482,76 @@ struct OpenCastTabRootView: View {
         }
     }
 
-    /// Up Next is a section only where the scene has reported a fold (the
-    /// division-derived latch) and the width is regular: the iPhone Duo's
-    /// inner display in every open pose. Never in Closed, never on another
-    /// iPhone (no fold), never on an iPad (no fold); a rail is not the signal.
+    /// Up Next is a section on every device and pose while the Up Next Tab
+    /// switch is on (Look & Feel). With it off, only where the scene has
+    /// reported a fold (the division-derived latch) and the width is regular:
+    /// the iPhone Duo's inner display in every open pose. Never in Closed,
+    /// never on another iPhone (no fold), never on an iPad (no fold); a rail
+    /// is not the signal. `isSwitchOn` is off unless passed.
     nonisolated static func offersUpNextTab(
         isFoldableScene: Bool,
-        horizontalSizeClass: UserInterfaceSizeClass?
+        horizontalSizeClass: UserInterfaceSizeClass?,
+        isSwitchOn: Bool = false
     ) -> Bool {
-        isFoldableScene && horizontalSizeClass == .regular
+        isSwitchOn || (isFoldableScene && horizontalSizeClass == .regular)
+    }
+
+    /// Settings gives Up Next its place while the switch is on, on every
+    /// device, so no bar ever holds more tabs than it does with it off.
+    nonisolated static func offersSettingsTab(isUpNextTabSwitchOn: Bool) -> Bool {
+        !isUpNextTabSwitchOn
     }
 
     /// Records the size class and schedules the tab set's next step.
     private func updateUpNextTab(horizontalSizeClass: UserInterfaceSizeClass?) {
         upNextTabSizeClass = horizontalSizeClass
-        scheduleUpNextTabStep()
+        scheduleTabSetStep()
     }
 
-    /// Applies `upNextTabStep` on the next update, as `updatePlaylistsTab`
+    /// Applies `tabSetStep` on the next update, as `updatePlaylistsTab`
     /// does: a tab set rebuilt inside UIKit's trait transition aborts. The
     /// task decides from the inputs and the selection as they are when it
     /// runs, never from the ones that scheduled it, so redundant tasks do
-    /// nothing. Withdrawing a selected Up Next takes two updates: this one
-    /// hands the selection to the Library; the handover count's observer then
-    /// acknowledges it and schedules the next step (the withdrawal, or
-    /// another handover if Up Next was selected again meanwhile), and until
-    /// it does no queued task installs or withdraws anything.
-    private func scheduleUpNextTabStep() {
-        // Also when the tab set already matches eligibility but Up Next is
-        // selected without its tab (a selection that raced the withdrawal):
-        // the step hands it to the Library.
-        guard showsUpNextTab != isUpNextTabOffered || (selectedTab == .upNext && !showsUpNextTab) else {
+    /// nothing. Withdrawing a selected Up Next or Settings takes two updates:
+    /// this one hands the selection to the Library; the handover count's
+    /// observer then acknowledges it and schedules the next step (the
+    /// withdrawal, or another handover if the tab was selected again
+    /// meanwhile), and until it does no queued task installs or withdraws
+    /// anything.
+    private func scheduleTabSetStep() {
+        // Also when the tab set already matches eligibility but a tab is
+        // selected without being installed (a selection that raced its
+        // withdrawal): the step hands it to the Library.
+        guard showsUpNextTab != isUpNextTabOffered
+            || showsSettingsTab != isSettingsTabOffered
+            || (selectedTab == .upNext && !showsUpNextTab)
+            || (selectedTab == .settings && !showsSettingsTab)
+        else {
             return
         }
         Task { @MainActor in
-            switch Self.upNextTabStep(
-                isOffered: isUpNextTabOffered,
-                isShown: showsUpNextTab,
-                selection: selectedTab,
-                observedSelection: observedSelection,
-                isHandoverPending: upNextHandoverCount != acknowledgedUpNextHandoverCount
-            ) {
+            let isHandoverPending = handoverCount != acknowledgedHandoverCount
+            let step = Self.tabSetStep(
+                upNext: Self.upNextTabStep(
+                    isOffered: isUpNextTabOffered,
+                    isShown: showsUpNextTab,
+                    selection: selectedTab,
+                    observedSelection: observedSelection,
+                    isHandoverPending: isHandoverPending
+                ),
+                settings: Self.settingsTabStep(
+                    isOffered: isSettingsTabOffered,
+                    isShown: showsSettingsTab,
+                    selection: selectedTab,
+                    observedSelection: observedSelection,
+                    isHandoverPending: isHandoverPending
+                )
+            )
+            let paths = Self.paths(after: step, in: navigationPaths)
+            if paths != navigationPaths {
+                navigationPaths = paths
+            }
+            switch step {
             case .none:
                 break
             case .awaitSelectionUpdate:
@@ -497,17 +561,31 @@ struct OpenCastTabRootView: View {
                 // look a settle later decides again. Not a spin: each look
                 // waits longer than a frame.
                 try? await Task.sleep(for: Self.selectionSettle)
-                scheduleUpNextTabStep()
+                scheduleTabSetStep()
             case .handOverToLibrary:
-                // Closed: the explicit exception to keeping the visible page.
-                // Both paths are kept; reopening does not reselect Up Next.
-                upNextHandoverCount += 1
+                // Closed (Up Next): the explicit exception to keeping the
+                // visible page; both paths are kept and reopening does not
+                // reselect Up Next. Settings: the same screen stays in front,
+                // now in the Library over the hub.
+                handoverCount += 1
                 selectedTab = .library
-            case .install:
-                showsUpNextTab = true
-            case .withdraw:
-                showsUpNextTab = false
+            case .install(let tab):
+                setInstalled(tab, true)
+            case .withdraw(let tab):
+                setInstalled(tab, false)
+            case .replace(let withdrawn, let installed):
+                setInstalled(withdrawn, false)
+                setInstalled(installed, true)
             }
+        }
+    }
+
+    private func setInstalled(_ tab: ManagedTab, _ isInstalled: Bool) {
+        switch tab {
+        case .upNext:
+            showsUpNextTab = isInstalled
+        case .settings:
+            showsSettingsTab = isInstalled
         }
     }
 
@@ -515,17 +593,18 @@ struct OpenCastTabRootView: View {
     /// update by the time it ends.
     static let selectionSettle: Duration = .milliseconds(50)
 
-    /// One step of the Up Next tab set toward the current eligibility.
+    /// One step of one tab the tab root installs and withdraws (Up Next's,
+    /// and under the Up Next Tab switch Settings') toward its eligibility.
     enum UpNextTabStep: Equatable {
         case none
         /// The live selection has not landed in an update yet: look again
         /// once it has.
         case awaitSelectionUpdate
-        /// Up Next is selected and no longer offered: select the Library
+        /// The tab is selected and no longer offered: select the Library
         /// first, in its own update.
         case handOverToLibrary
         case install
-        /// Up Next is not selected and no longer offered.
+        /// The tab is not selected and no longer offered.
         case withdraw
     }
 
@@ -536,10 +615,45 @@ struct OpenCastTabRootView: View {
         observedSelection: AppSection?,
         isHandoverPending: Bool
     ) -> UpNextTabStep {
+        tabStep(
+            of: .upNext,
+            isOffered: isOffered,
+            isShown: isShown,
+            selection: selection,
+            observedSelection: observedSelection,
+            isHandoverPending: isHandoverPending
+        )
+    }
+
+    static func settingsTabStep(
+        isOffered: Bool,
+        isShown: Bool,
+        selection: AppSection,
+        observedSelection: AppSection?,
+        isHandoverPending: Bool
+    ) -> UpNextTabStep {
+        tabStep(
+            of: .settings,
+            isOffered: isOffered,
+            isShown: isShown,
+            selection: selection,
+            observedSelection: observedSelection,
+            isHandoverPending: isHandoverPending
+        )
+    }
+
+    private static func tabStep(
+        of tab: ManagedTab,
+        isOffered: Bool,
+        isShown: Bool,
+        selection: AppSection,
+        observedSelection: AppSection?,
+        isHandoverPending: Bool
+    ) -> UpNextTabStep {
         guard !isHandoverPending else {
             return .none
         }
-        if !isShown, !isOffered, selection == .upNext {
+        if !isShown, !isOffered, selection == tab.section {
             // Selected without its tab: never left there.
             return .handOverToLibrary
         }
@@ -549,11 +663,93 @@ struct OpenCastTabRootView: View {
         if isOffered {
             return .install
         }
-        if selection == .upNext {
+        if selection == tab.section {
             return .handOverToLibrary
         }
-        // Withdraw only once the selection that is not Up Next has landed.
+        // Withdraw only once a selection that is not this tab has landed.
         return selection == observedSelection ? .withdraw : .awaitSelectionUpdate
+    }
+
+    /// The tabs the tab-set steps install and withdraw.
+    enum ManagedTab: Equatable {
+        case upNext
+        case settings
+
+        var section: AppSection {
+            switch self {
+            case .upNext:
+                .upNext
+            case .settings:
+                .settings
+            }
+        }
+    }
+
+    /// One update of the tab set: both tabs' steps, ordered so that no
+    /// update holds more tabs than the set before or after the transition.
+    enum TabSetStep: Equatable {
+        case none
+        case awaitSelectionUpdate
+        case handOverToLibrary(from: ManagedTab)
+        case install(ManagedTab)
+        case withdraw(ManagedTab)
+        /// One update withdraws a tab and installs the other. Probed on the
+        /// pinned iPhone (iOS 27.2): the bar goes from one five-tab set to
+        /// the other with no sixth tab and no More in any frame.
+        case replace(ManagedTab, with: ManagedTab)
+    }
+
+    /// A selection first (either tab's handover, or a wait for a selection
+    /// to land), then withdrawals before installations, a withdrawal and an
+    /// installation sharing one update.
+    static func tabSetStep(upNext: UpNextTabStep, settings: UpNextTabStep) -> TabSetStep {
+        if settings == .handOverToLibrary {
+            return .handOverToLibrary(from: .settings)
+        }
+        if upNext == .handOverToLibrary {
+            return .handOverToLibrary(from: .upNext)
+        }
+        if upNext == .awaitSelectionUpdate || settings == .awaitSelectionUpdate {
+            return .awaitSelectionUpdate
+        }
+        switch (upNext, settings) {
+        case (.withdraw, .install):
+            return .replace(.upNext, with: .settings)
+        case (.install, .withdraw):
+            return .replace(.settings, with: .upNext)
+        case (.withdraw, _):
+            return .withdraw(.upNext)
+        case (_, .withdraw):
+            return .withdraw(.settings)
+        case (.install, _):
+            return .install(.upNext)
+        case (_, .install):
+            return .install(.settings)
+        default:
+            return .none
+        }
+    }
+
+    /// The paths after a step. Handing Settings to the Library moves its
+    /// screens there over the hub (the Library's own path gives way). A
+    /// Settings tab withdrawn without a handover (another tab selected, in
+    /// this scene or another window) drops its path, so a Settings tab that
+    /// returns, perhaps weeks later, never reopens on an old screen. Up Next
+    /// keeps its path through a handover and a withdrawal (Closed, then open).
+    static func paths(after step: TabSetStep, in paths: AppNavigationPaths) -> AppNavigationPaths {
+        var paths = paths
+        switch step {
+        case .handOverToLibrary(from: .settings):
+            paths[.library] = SettingsOpening.libraryPath(continuing: paths[.settings])
+            paths[.settings] = []
+        case .withdraw(.settings), .replace(.settings, with: _):
+            if !paths[.settings].isEmpty {
+                paths[.settings] = []
+            }
+        default:
+            break
+        }
+        return paths
     }
 
     /// What the Library's Up Next row and the accessory's queue action do.
@@ -571,14 +767,19 @@ struct OpenCastTabRootView: View {
     private var isUpNextTabOffered: Bool {
         Self.offersUpNextTab(
             isFoldableScene: inheritedSceneLayouts?.isFoldable == true,
-            horizontalSizeClass: upNextTabSizeClass
+            horizontalSizeClass: upNextTabSizeClass,
+            isSwitchOn: appModel.appearanceSettings.showsUpNextTab
         )
     }
 
+    private var isSettingsTabOffered: Bool {
+        Self.offersSettingsTab(isUpNextTabSwitchOn: appModel.appearanceSettings.showsUpNextTab)
+    }
+
     /// The Library's Up Next row and the accessory's queue action: the Up
-    /// Next tab where it is installed and offered (the inner display), the
-    /// existing queue sheet everywhere else. The card's own Up Next is not
-    /// routed here.
+    /// Next tab where it is installed and offered (the inner display, or
+    /// anywhere with the switch on), the existing queue sheet everywhere
+    /// else. The card's own Up Next is not routed here.
     private func openUpNext() {
         switch Self.upNextOpening(isTabInstalled: showsUpNextTab, isTabOffered: isUpNextTabOffered) {
         case .selectTab:
@@ -673,6 +874,14 @@ struct OpenCastTabRootView: View {
     /// inside the scroll callback, 40–55 ms main-thread stalls on an iPhone
     /// SE, felt as a stutter when a scroll starts or reaches the top.
     private var tabBarMinimizeBehavior: TabBarMinimizeBehavior {
-        appModel.appearanceSettings.minimizesTabBarOnScroll && selectedTab != .settings ? .onScrollDown : .never
+        appModel.appearanceSettings.minimizesTabBarOnScroll && !showsSettingsScreen ? .onScrollDown : .never
+    }
+
+    /// Settings keeps the full tab bar wherever it is shown: its own tab, or
+    /// with the Settings tab withdrawn, a Settings screen on top of the
+    /// Library. The Library's path is read only in that case.
+    private var showsSettingsScreen: Bool {
+        selectedTab == .settings
+            || (!showsSettingsTab && selectedTab == .library && navigationPaths[.library].last?.isSettingsScreen == true)
     }
 }

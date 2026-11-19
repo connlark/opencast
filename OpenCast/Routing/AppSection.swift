@@ -1,8 +1,9 @@
 enum AppSection: String, CaseIterable, Identifiable {
     case library
     case playlists
-    /// The Up Next queue as a section: offered only on the iPhone Duo's inner
-    /// display (`OpenCastTabRootView.offersUpNextTab`).
+    /// The Up Next queue as a section: offered on the iPhone Duo's inner
+    /// display, and everywhere while the Up Next Tab switch is on
+    /// (`OpenCastTabRootView.offersUpNextTab`).
     case upNext
     case inbox
     case downloads

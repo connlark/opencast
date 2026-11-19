@@ -11,9 +11,11 @@ import SwiftData
 final class AppearanceSettingsStore {
     private static let modeKey = "appearance.mode"
     private static let minimizesTabBarOnScrollKey = "appearance.minimizesTabBarOnScroll"
+    static let showsUpNextTabPreferenceKey = "appearance.showsUpNextTab"
 
     private(set) var mode = AppAppearanceMode.system
     private(set) var minimizesTabBarOnScroll = false
+    private(set) var showsUpNextTab = false
     private(set) var lastErrorMessage: String?
 
     @ObservationIgnored private let save: (ModelContext) throws -> Void
@@ -30,10 +32,23 @@ final class AppearanceSettingsStore {
                 .flatMap(AppAppearanceMode.init(rawValue:)) ?? .system
             minimizesTabBarOnScroll = try storedValue(forKey: Self.minimizesTabBarOnScrollKey, context: context)
                 .flatMap(Bool.init) ?? false
+            publishShowsUpNextTab(try storedShowsUpNextTab(context: context))
             lastErrorMessage = nil
         } catch {
             mode = .system
             minimizesTabBarOnScroll = false
+            publishShowsUpNextTab(false)
+            lastErrorMessage = "Unable to load appearance settings: \(error.localizedDescription)"
+        }
+    }
+
+    /// The Up Next Tab switch alone, read before the first frame
+    /// (`OpenCastAppRuntime`) so the first tab bar is already the right one;
+    /// the launch's `load` reads it again with the rest.
+    func loadShowsUpNextTab(modelContext: ModelContext) {
+        do {
+            publishShowsUpNextTab(try storedShowsUpNextTab(context: ModelContext(modelContext.container)))
+        } catch {
             lastErrorMessage = "Unable to load appearance settings: \(error.localizedDescription)"
         }
     }
@@ -74,6 +89,24 @@ final class AppearanceSettingsStore {
         return true
     }
 
+    @discardableResult
+    func setShowsUpNextTab(_ showsUpNextTab: Bool, modelContext: ModelContext) -> Bool {
+        guard self.showsUpNextTab != showsUpNextTab else {
+            return true
+        }
+        guard persist(
+            String(showsUpNextTab),
+            forKey: Self.showsUpNextTabPreferenceKey,
+            modelContext: modelContext,
+            failureDescription: "Unable to update the tab bar setting"
+        ) else {
+            return false
+        }
+
+        self.showsUpNextTab = showsUpNextTab
+        return true
+    }
+
     func clearLastError() {
         lastErrorMessage = nil
     }
@@ -94,6 +127,19 @@ final class AppearanceSettingsStore {
         } catch {
             lastErrorMessage = "\(failureDescription): \(error.localizedDescription)"
             return false
+        }
+    }
+
+    private func storedShowsUpNextTab(context: ModelContext) throws -> Bool {
+        try storedValue(forKey: Self.showsUpNextTabPreferenceKey, context: context).flatMap(Bool.init) ?? false
+    }
+
+    /// Writes only a change: the root view reads the switch to start each
+    /// scene's tab set, and an unchanged write at the launch's `load` would
+    /// cost every listener an update of it.
+    private func publishShowsUpNextTab(_ showsUpNextTab: Bool) {
+        if self.showsUpNextTab != showsUpNextTab {
+            self.showsUpNextTab = showsUpNextTab
         }
     }
 

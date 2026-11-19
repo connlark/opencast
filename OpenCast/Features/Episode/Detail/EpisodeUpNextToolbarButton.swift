@@ -2,9 +2,9 @@ import SwiftData
 import SwiftUI
 
 /// The episode page's Add to Up Next toolbar control, beside Episode Actions.
-/// Not queued, a tap queues the episode next and touch and hold offers Play
-/// Next / Play Last. Once queued, a tap opens the menu, which adds Remove from
-/// Up Next, so a tap never moves a queued episode.
+/// A tap always opens its menu, Play Next and Play Last, plus Remove from Up
+/// Next once the episode is queued, so a tap alone never queues, moves or
+/// removes anything.
 struct EpisodeUpNextToolbarButton: View {
     static let accessibilityIdentifier = "Episode Up Next Control"
 
@@ -18,33 +18,22 @@ struct EpisodeUpNextToolbarButton: View {
 
     var body: some View {
         let state = appModel.upNextMenuState(for: episode)
-        // A toolbar item drops `accessibilityValue`, so the label carries
-        // the queued state.
-        Group {
+        Menu {
+            EpisodeUpNextMenuButtons(state: state, onPlayNext: playNext, onPlayLast: playLast)
             if state.isQueued {
-                Menu {
-                    queueButtons(state)
-                    Button("Remove from Up Next", systemImage: "minus.circle", role: .destructive, action: remove)
-                } label: {
-                    Label("In Up Next", systemImage: "text.badge.checkmark")
-                }
-            } else {
-                Menu {
-                    queueButtons(state)
-                } label: {
-                    Label("Add to Up Next", systemImage: "text.badge.plus")
-                } primaryAction: {
-                    playNext()
-                }
+                Button("Remove from Up Next", systemImage: "minus.circle", role: .destructive, action: remove)
             }
+        } label: {
+            // A toolbar item drops `accessibilityValue`, so the label carries
+            // the queued state.
+            Label(
+                state.isQueued ? "In Up Next" : "Add to Up Next",
+                systemImage: state.isQueued ? "text.badge.checkmark" : "text.badge.plus"
+            )
         }
         .disabled(!state.canEnqueue)
         .accessibilityInputLabels(["Add to Up Next", "In Up Next"])
         .accessibilityIdentifier(Self.accessibilityIdentifier)
-    }
-
-    private func queueButtons(_ state: EpisodeUpNextMenuState) -> some View {
-        EpisodeUpNextMenuButtons(state: state, onPlayNext: playNext, onPlayLast: playLast)
     }
 
     private func playNext() {

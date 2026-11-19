@@ -9,6 +9,9 @@ final class OpenCastPadUITests: XCTestCase {
     private static let playlistsSymbol = "list.bullet.rectangle"
     /// `AppSection.library.systemImage`.
     private static let librarySymbol = "books.vertical"
+    /// `AppSection.upNext.systemImage` and `AppSection.settings.systemImage`.
+    private static let upNextSymbol = "play.square.stack"
+    private static let settingsSymbol = "gearshape"
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -62,6 +65,33 @@ final class OpenCastPadUITests: XCTestCase {
 
         openInbox(in: app)
         assertScreen("Inbox", named: "Inbox navigation title", in: app)
+    }
+
+    /// The Up Next Tab switch (Look & Feel) on: Up Next is a section,
+    /// Settings is not, and Settings opens from the Library's navigation bar.
+    @MainActor
+    func testSeededPadUpNextTabSwitchShowsUpNextAndTheLibrarySettingsButton() throws {
+        try skipUnlessPad()
+
+        let app = makeSeededApp(seedsUpNextTab: true)
+        app.launch()
+
+        XCTAssertTrue(
+            waitForNavigationItem("Up Next", symbol: Self.upNextSymbol, toExist: true, in: app, timeout: 10),
+            "Up Next is a section"
+        )
+        openLibrary(in: app)
+        assertScreen("Library", named: "Library navigation title", in: app)
+        let settingsButton = app.navigationBars["Library"].buttons["Settings"]
+        assertHittable(settingsButton, named: "Library Settings button")
+        // With the Library's Settings button on screen: the query finds the
+        // Up Next section, and no section is Settings.
+        XCTAssertFalse(sectionControls("Up Next", symbol: Self.upNextSymbol, in: app).isEmpty, "Up Next section control")
+        XCTAssertTrue(sectionControls("Settings", symbol: Self.settingsSymbol, in: app).isEmpty, "No Settings section control")
+        attachSmokeScreenshot(named: "pad_up_next_tab_switch_library")
+
+        settingsButton.tap()
+        assertScreen("Settings", named: "the Settings hub in the Library", in: app)
     }
 
     @MainActor
@@ -747,7 +777,8 @@ final class OpenCastPadUITests: XCTestCase {
     @MainActor
     private func makeSeededApp(
         seedsLibraryNewEpisodes: Bool = false,
-        seedsPlaylists: Bool = false
+        seedsPlaylists: Bool = false,
+        seedsUpNextTab: Bool = false
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -763,6 +794,9 @@ final class OpenCastPadUITests: XCTestCase {
         }
         if seedsPlaylists {
             app.launchEnvironment["OPENCAST_SEED_PLAYLISTS"] = "1"
+        }
+        if seedsUpNextTab {
+            app.launchEnvironment["OPENCAST_SEED_UP_NEXT_TAB"] = "1"
         }
         return app
     }
@@ -808,6 +842,27 @@ final class OpenCastPadUITests: XCTestCase {
     @MainActor
     private func tabButton(_ title: String, in app: XCUIApplication) -> XCUIElement {
         visibleTabButton(title, in: app) ?? app.buttons[title].firstMatch
+    }
+
+    /// A section's controls in the tab bar itself: the compact bar's
+    /// button, the sidebar's cell, or the floating bar's button, which
+    /// iPadOS 27.2 identifies by the tab's symbol (`navigationItemExists`).
+    /// A navigation bar's own button with that title, such as the Library's
+    /// Settings button, is not one.
+    @MainActor
+    private func sectionControls(_ title: String, symbol: String, in app: XCUIApplication) -> [XCUIElement] {
+        let titled = NSPredicate(format: "label == %@", title)
+        let navigationBarFrames = app.navigationBars.buttons.matching(titled)
+            .allElementsBoundByIndex
+            .filter(\.exists)
+            .map(\.frame)
+        let tabBarButtons = app.tabBars.buttons.matching(titled).allElementsBoundByIndex.filter(\.exists)
+        let sidebarCells = app.cells.matching(titled).allElementsBoundByIndex.filter(\.exists)
+        let floatingBarButtons = app.buttons
+            .matching(NSPredicate(format: "identifier == %@ AND label == %@", symbol, title))
+            .allElementsBoundByIndex
+            .filter { $0.exists && !navigationBarFrames.contains($0.frame) }
+        return tabBarButtons + sidebarCells + floatingBarButtons
     }
 
     @MainActor
