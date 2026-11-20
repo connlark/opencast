@@ -43,7 +43,11 @@ struct ShowNotesChaptersCorpusTests {
             (FeedCorpus.businessWithoutBS, "flightcast:01M5FBFTXFQT3CS8N2M81RXZHA", 17, 0, "Cold open", 4_744, "Business or Hocus Pocus?"),
             (FeedCorpus.hrCoffeeTime, "10f38ce2-a6c1-4673-891d-4c987dbc7c17", 21, 0, "Introduction: Hidden Strengths", 2_626, "Wrap Up"),
             (FeedCorpus.buildYourSaaS, "b34e7e5b-750f-43e1-ab2e-3cc93f7fb5fd", 10, 133, "What did Helen do before she joined Transistor?", 2_021, "How do future generations learn how to be on a team?"),
-            (FeedCorpus.buzzcast, "Buzzsprout-18382925", 6, 440, "Wander Worldschool", 2_913, "This Is How You Think")
+            (FeedCorpus.buzzcast, "Buzzsprout-18382925", 6, 440, "Wander Worldschool", 2_913, "This Is How You Think"),
+            (FeedCorpus.jacobShapiro, "9c92524e-97d4-4250-8235-e98d6885fc54", 4, 96, "Italian domestic politics, relations with France/Germany", 2_560, "Brazil/democracy"),
+            (FeedCorpus.jacobShapiro, "35727965-6996-4832-8f60-1d6bb26981d6", 5, 0, "Intro", 2_571, "Mexico’s judicial reforms"),
+            (FeedCorpus.theMinimalists, "5e9018fb-fc5f-43a7-be2a-2665153102b0", 4, 52, "After letting go of several fantasy selves, Julia asks how to keep the version of herself who celebrates small moments.", 2_037, "What are the best minimalist cleaning products for your home?"),
+            (FeedCorpus.newHeights, "51065322-e102-11ee-9b51-df608b0fae4b", 9, 116, "But first, Jason and Travis react to the news that they won \"Podcast of the Year\" and \"Best Ensemble\" at the 2024 iHeart Podcast Awards", 3_576, "Jason then weighs in on the news coming out of Philadelphia, highlighting Fletcher Cox's retirement and the Eagles signing Saquon Barkley")
         ] as [(FeedCorpus, String, Int, TimeInterval, String, TimeInterval, String)]
     )
     func wholeLists(
@@ -253,13 +257,14 @@ struct ShowNotesChaptersCorpusTests {
         #expect(try chapters(feed, guid: guid).isEmpty)
     }
 
-    @Test("Title-first lines are not entries: The Audacity to Podcast 452 yields nothing")
-    func titleFirstLines() throws {
+    @Test("Title-first headings with link bullets between them read as one list: The Audacity to Podcast 452")
+    func titleFirstHeadings() throws {
         // Its GUID is a URL, and feed hosts stay out of Swift.
         let episode = try FeedCorpus.audacityToPodcast.episode(titled: "452. Why You Should Use PodChapters to Chapter and Transcribe Your Podcast")
+        let chapters = Self.chapters(in: episode.showNotesHTML, duration: episode.duration)
 
-        #expect(HTMLPlainText.structuredText(from: episode.showNotesHTML ?? "").contains("Introduction [00:00]"))
-        #expect(Self.chapters(in: episode.showNotesHTML, duration: episode.duration).isEmpty)
+        #expect(chapters.map(\.startTime) == [0, 104, 483, 826, 1_558, 1_944, 2_039, 2_185])
+        #expect(chapters.prefix(2).map(\.title) == ["Introduction", "Drive action with PodChapters"])
     }
 
     @Test("A run D1 accepts that is not a chapter list: Podcasting 2.0 episode 272's 24-hour post times, two on its last line")
@@ -308,7 +313,7 @@ struct ShowNotesChaptersCorpusTests {
     }
 
     private static let census: [String: (episodes: Int, chapters: Int)] = [
-        "audacitytopodcast": (0, 0),
+        "audacitytopodcast": (50, 369),
         "backupwrapup": (33, 466),
         "buildyoursaas": (32, 361),
         "businesswithoutbs": (187, 2_798),
@@ -318,10 +323,13 @@ struct ShowNotesChaptersCorpusTests {
         "dwarkeshpodcast": (132, 1_489),
         "hrcoffeetime": (122, 1_420),
         "investlikethebest": (561, 11_443),
+        "jacobshapiro": (319, 3_223),
+        "newheights": (58, 637),
         "nopriors": (187, 2_237),
         "podcasting20": (1, 4),
         "podcastinsider": (0, 0),
-        "pragmaticengineer": (81, 1_632)
+        "pragmaticengineer": (81, 1_632),
+        "theminimalists": (160, 675)
     ]
 
     @Test("Census: how many episodes in each feed yield show-notes chapters, and how many chapters in all", arguments: FeedCorpus.all)

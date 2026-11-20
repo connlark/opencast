@@ -15,10 +15,13 @@ struct FeedCorpusTests {
         "dwarkeshpodcast": 145,
         "hrcoffeetime": 191,
         "investlikethebest": 606,
+        "jacobshapiro": 350,
+        "newheights": 230,
         "nopriors": 188,
         "podcasting20": 210,
         "podcastinsider": 524,
-        "pragmaticengineer": 82
+        "pragmaticengineer": 82,
+        "theminimalists": 167
     ]
 
     @Test("Each feed loads and parses whole into its pinned episode count", arguments: FeedCorpus.all)

@@ -59,10 +59,13 @@ struct FeedCorpus: CustomTestStringConvertible, Sendable {
     static let dwarkeshPodcast = FeedCorpus(resource: "dwarkeshpodcast")
     static let hrCoffeeTime = FeedCorpus(resource: "hrcoffeetime")
     static let investLikeTheBest = FeedCorpus(resource: "investlikethebest")
+    static let jacobShapiro = FeedCorpus(resource: "jacobshapiro")
+    static let newHeights = FeedCorpus(resource: "newheights")
     static let noPriors = FeedCorpus(resource: "nopriors")
     static let podcasting20 = FeedCorpus(resource: "podcasting20")
     static let podcastInsider = FeedCorpus(resource: "podcastinsider")
     static let pragmaticEngineer = FeedCorpus(resource: "pragmaticengineer")
+    static let theMinimalists = FeedCorpus(resource: "theminimalists")
 
     static let all: [FeedCorpus] = [
         audacityToPodcast,
@@ -75,9 +78,12 @@ struct FeedCorpus: CustomTestStringConvertible, Sendable {
         dwarkeshPodcast,
         hrCoffeeTime,
         investLikeTheBest,
+        jacobShapiro,
+        newHeights,
         noPriors,
         podcasting20,
         podcastInsider,
-        pragmaticEngineer
+        pragmaticEngineer,
+        theMinimalists
     ]
 }

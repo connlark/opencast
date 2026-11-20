@@ -314,15 +314,13 @@ struct ShowNotesChaptersParserTests {
         "Lines that carry timestamps without leading with an entry yield nothing",
         arguments: [
             ["at 12:34 she explains the plan", "and at 15:00 he disagrees", "by 20:00 they settle it"],
-            ["Introduction [00:00]", "Drive action with chapters [01:44]", "Wrap up [08:03]"],
             ["Intro \u{2014} 0:00", "Topic \u{2014} 5:00", "Outro \u{2014} 10:00"],
-            ["0:00 \u{2013} 5:12 Intro", "5:12 \u{2013} 10:00 Topic", "10:00 \u{2013} 15:00 Outro"],
-            ["0:00-5:12 Intro", "5:12-10:00 Topic", "10:00-15:00 Outro"],
-            ["(0:00) - (5:12) Intro", "(5:12) - (10:00) Topic", "(10:00) - (15:00) Outro"],
-            ["[0:00 - 5:12] Intro", "[5:12 - 10:00] Topic", "[10:00 - 15:00] Outro"],
+            ["Host 0:06", "Guest 0:20", "Host 0:23"],
+            ["\u{25B6} (08:01)", "\u{25B6} (10:49)", "\u{25B6} (15:30)"],
             ["8:30 pm doors open", "9:00 pm first set", "10:15 pm encore"],
             ["00:00", "Intro", "05:00", "Topic", "10:00", "Outro"],
-            ["00:00", "", "05:00", "", "10:00"]
+            ["00:00", "", "05:00", "", "10:00"],
+            ["0:00 - 1:00", "1:00 - 2:00", "2:00 - 3:00"]
         ]
     )
     func nonEntries(lines: [String]) {
@@ -330,24 +328,121 @@ struct ShowNotesChaptersParserTests {
     }
 
     @Test(
-        "A dash or the word to before a second time makes the line a range, whatever follows that time, so it is not an entry",
+        "A range line is an entry that starts at its first time, whatever joins the two times and follows the second",
         arguments: [
+            ["0:00 - 1:00 Intro", "1:00 \u{2013} 2:00 Topic", "2:00 \u{2014} 3:00 Outro"],
             ["0:00 - 1:00: Intro", "1:00 - 2:00: Topic", "2:00 - 3:00: Outro"],
-            ["0:00 to 1:00 Intro", "1:00 to 2:00 Topic", "2:00 to 3:00 Outro"],
-            ["0:00 TO 1:00 Intro", "1:00 To 2:00 Topic", "2:00 tO 3:00 Outro"],
-            ["(0:00) - (1:00): Intro", "(1:00) - (2:00): Topic", "(2:00) - (3:00): Outro"],
-            ["(0:00) to (1:00) Intro", "(1:00) to (2:00) Topic", "(2:00) to (3:00) Outro"],
-            ["00:00 - 9:30pm Doors", "05:00 - 10:00pm Set", "10:00 - 11:15 pm Encore"],
-            ["0:00:00 \u{2013} 0:10:00: Intro", "0:10:00 \u{2013} 01:00:00.5 Topic", "1:00:00 \u{2013} 1:30:000 Outro"],
-            ["(0:00 - 1:00) Intro", "(1:00 - 2:00) Topic", "(2:00 - 3:00) Outro"],
-            ["[00:00 \u{2013} 05:12] Intro", "[05:12 \u{2013} 10:00] Topic", "[10:00 \u{2013} 15:00] Outro"],
-            ["0:00-1:00 Intro", "1:00-2:00 Topic", "2:00-3:00 Outro"],
-            ["( 0:00 ) - ( 1:00 ) Intro", "( 1:00 ) - ( 2:00 ) Topic", "( 2:00 ) - ( 3:00 ) Outro"],
-            ["0:00 -- 1:00 Intro", "1:00 -- 2:00 Topic", "2:00 -- 3:00 Outro"]
+            ["0:00 - 1:00 | Intro", "1:00 - 2:00 | Topic", "2:00 - 3:00 | Outro"],
+            ["0:00 to 1:00 Intro", "1:00 To 2:00 Topic", "2:00 tO 3:00 Outro"],
+            ["(0:00) - (1:00): Intro", "(1:00) to (2:00) Topic", "( 2:00 ) - ( 3:00 ) Outro"],
+            ["(0:00 - 1:00) Intro", "[1:00 \u{2013} 2:00] Topic", "- 2:00 - 3:00 Outro"],
+            ["0:00-1:00 Intro", "1:00 -- 2:00 Topic", "2:00 - 1:03:00 Outro"]
         ]
     )
-    func rangesWhateverFollowsTheirEnd(lines: [String]) {
-        #expect(parse(lines).isEmpty)
+    func ranges(lines: [String]) {
+        let chapters = parse(lines)
+
+        #expect(chapters.map(\.startTime) == [0, 60, 120])
+        #expect(chapters.map(\.title) == ["Intro", "Topic", "Outro"])
+        #expect(chapters.allSatisfy { $0.endTime == nil })
+    }
+
+    @Test(
+        "A dash or the word to before digits that are not a time makes the line neither a range nor an entry",
+        arguments: [
+            "1:00 - 9:30pm Topic",
+            "1:00 - 11:15 pm Topic",
+            "1:00 \u{2013} 01:00:00.5 Topic",
+            "1:00 \u{2013} 1:30:000 Topic",
+            "1:00 to 90:00 Topic"
+        ]
+    )
+    func malformedRangeEnd(line: String) {
+        #expect(parse(["0:00 Intro", line, "2:00 Outro", "3:00 End"]).isEmpty)
+    }
+
+    @Test("The word end closes a range only where it cannot be the first word of the title")
+    func rangeEndingAtEnd() {
+        let chapters = parse([
+            "0:00 - ENDGAME spoilers", "1:00 - End of an era", "2:00 - END OF AN ERA", "3:00 - END",
+            "4:00 - END Credits", "5:00 - End - Outro", "(6:00 - end) Thanks", "7:00 to END NBA roundup"
+        ])
+
+        #expect(chapters.map(\.title) == ["ENDGAME spoilers", "End of an era", "END OF AN ERA", "END", "Credits", "Outro", "Thanks", "NBA roundup"])
+    }
+
+    @Test("Running prose that follows each item with its time in brackets reads as a list of the items alone")
+    func titleFirstProse() {
+        let chapters = parse([
+            "The hosts are back from holiday. In this week\u{2019}s news: the council votes on the budget: round two (0:52); a storm closes the port (3:27), while the ferry strike ends* (6:06);",
+            "the U.S. team wins gold (8:08); and iPhone sales fall [10:38]. Thanks for listening!"
+        ])
+
+        #expect(chapters.map(\.startTime) == [52, 207, 366, 488, 638])
+        #expect(chapters.map(\.title) == [
+            "The council votes on the budget: round two",
+            "A storm closes the port",
+            "While the ferry strike ends",
+            "The U.S. team wins gold",
+            "iPhone sales fall"
+        ])
+    }
+
+    @Test("A colon or a semicolon inside a title is kept where the line does not divide its items with semicolons")
+    func titleFirstSentences() {
+        let chapters = parse(["The hosts recap the week. They review \u{2018}Alien: Earth\u{2019}; it missed the mark (2:53). Then the mailbag (37:19), and goodbyes (42:07)."])
+
+        #expect(chapters.map(\.title) == ["They review \u{2018}Alien: Earth\u{2019}; it missed the mark", "Then the mailbag", "Goodbyes"])
+    }
+
+    @Test("A sentence end inside the first title, after the lead-in's colon, does not cut it")
+    func leadInBeforeATitleWithASentenceEnd() {
+        let chapters = parse(["Film reviews: Who Framed Roger Rabbit? (1988) (0:00); Prof. Chen on Alien (1:00); Heat (2:00)."])
+
+        #expect(chapters.map(\.title) == ["Who Framed Roger Rabbit? (1988)", "Prof. Chen on Alien", "Heat"])
+    }
+
+    @Test("A bracketed time in digits that do not convert stays in the title it sits in")
+    func fullwidthDigits() {
+        let chapters = parse(["Intro (0:00), Topic (\u{FF11}:00) (1:00), Outro (2:00)."])
+
+        #expect(chapters.map(\.title) == ["Intro", "Topic (\u{FF11}:00)", "Outro"])
+    }
+
+    @Test("Title-first lines make one list across the paragraphs between them, without their bullets and numbers")
+    func titleFirstHeadings() {
+        let chapters = parse(["INTERVIEW: Slow technology [3:20]", "A paragraph about the guest.", "INBOX:", "- A book about sloth [1:03:49]", "2. Reader mail (1:05:22)"])
+
+        #expect(chapters.map(\.startTime) == [200, 3_829, 3_922])
+        #expect(chapters.map(\.title) == ["INTERVIEW: Slow technology", "A book about sloth", "Reader mail"])
+    }
+
+    @Test("A line whose bracketed times lead their titles is not read as title-first")
+    func timesThatLeadTheirTitles() {
+        #expect(parse(["EPISODE NOTES: [00:15] Host intro [01:30] Guest intro [02:42] What is happiness?"]).isEmpty)
+        #expect(parse(["Last week, (4:30) a motion was filed.", "Also on the show (8:30) a record is exposed.", "Plus, (26:50) new video is released."]).isEmpty)
+    }
+
+    @Test("A title-first list may step backwards once in eight entries, and a repeated time is not a step")
+    func titleFirstOrder() {
+        #expect(parse(["A (1:00)", "B (2:00)", "C (3:00)", "X (9:00)", "D (4:00)", "E (5:00)", "F (6:00)", "G (7:00)"]).map(\.title) == ["A", "B", "C", "D", "E", "F", "G"])
+        #expect(parse(["A (1:00)", "B (2:00)", "X (9:00)", "C (3:00)", "D (4:00)", "E (5:00)", "F (6:00)"]).isEmpty)
+        #expect(parse(["A (1:00)", "B (2:00)", "C (2:00)", "D (3:00)"]).map(\.title) == ["A", "B", "D"])
+    }
+
+    @Test("When the title-first entries of the whole text are out of order, the longest run of lines in order is the list")
+    func titleFirstRun() {
+        let chapters = parse(["The guys rank sleepers (3:12) and answer email (57:08).", "Sponsored by a mattress company", "- Dad Nap (3:12)", "- REM (12:24)", "- Comatose (48:02)"])
+
+        #expect(chapters.map(\.title) == ["Dad Nap", "REM", "Comatose"])
+    }
+
+    @Test("A timestamp-first list in a later text wins over a title-first list in an earlier one")
+    func timestampFirstWinsAcrossTexts() {
+        let titleFirst = "Intro (0:00)\nTopic (5:00)\nOutro (10:00)"
+
+        #expect(ShowNotesChaptersParser.chapters(in: [titleFirst, "0:00 Cold open\n2:15 The pitch\n9:40 The pivot"], duration: nil).map(\.title) == ["Cold open", "The pitch", "The pivot"])
+        #expect(ShowNotesChaptersParser.chapters(in: [titleFirst, "Nothing timed here."], duration: nil).map(\.title) == ["Intro", "Topic", "Outro"])
     }
 
     @Test(
@@ -461,6 +556,8 @@ struct ShowNotesChaptersParserTests {
         #expect(parse(["0:00 (to" + spaces + "(" + spaces + "x"]).isEmpty)
         #expect(parse(["0:00" + spaces + "-" + spaces + "x"]).isEmpty)
         #expect(parse(["0:00" + spaces + ")" + spaces + "to" + spaces + "(" + spaces + "x"]).isEmpty)
+
+        #expect(parse(["x" + spaces + "(1:00)", "y" + filler + "(2:00)", "z (3:00)"]).map(\.startTime) == [60, 120, 180])
 
         let chapters = parse(["00:00 Intro", "05:00 x" + filler, "10:00 Outro"])
         #expect(chapters.map(\.startTime) == [0, 300, 600])

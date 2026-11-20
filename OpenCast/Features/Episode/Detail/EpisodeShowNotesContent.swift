@@ -54,15 +54,9 @@ nonisolated struct EpisodeShowNotesContent: Equatable, Sendable {
         duration: TimeInterval?
     ) -> [EpisodeChapter] {
         let texts = summaryHTML == showNotesHTML ? [showNotesHTML] : [showNotesHTML, summaryHTML]
-        for html in texts.compactMap({ $0 }) {
-            let chapters = ShowNotesChaptersParser.chapters(
-                in: HTMLPlainText.structuredText(from: html),
-                duration: duration
-            )
-            if !chapters.isEmpty {
-                return chapters
-            }
-        }
-        return []
+        return ShowNotesChaptersParser.chapters(
+            in: texts.lazy.compactMap { $0 }.map(HTMLPlainText.structuredText),
+            duration: duration
+        )
     }
 }
