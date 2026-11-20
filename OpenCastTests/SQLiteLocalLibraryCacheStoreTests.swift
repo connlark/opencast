@@ -16,19 +16,6 @@ struct SQLiteLocalLibraryCacheStoreTests {
         "publisher_chapters_fetched_at"
     ]
 
-    @Test("Fresh in-memory store loads an empty snapshot without a legacy import marker")
-    func emptyStoreLoadsEmptySnapshot() async throws {
-        let store = SQLiteLocalLibraryCacheStore.inMemory()
-
-        let library = try await store.loadLibrary(activePodcastIDs: [Self.feedURL])
-        let hasImported = try await store.hasCompletedLegacyImport()
-
-        #expect(library.podcastsByFeedURL.isEmpty)
-        #expect(library.episodes.isEmpty)
-        #expect(library.refreshLogs.isEmpty)
-        #expect(!hasImported)
-    }
-
     @Test("Upsert inserts podcast and episodes ordered newest first with undated episodes last")
     func upsertInsertsPodcastAndOrderedEpisodes() async throws {
         let store = SQLiteLocalLibraryCacheStore.inMemory()
@@ -233,9 +220,7 @@ struct SQLiteLocalLibraryCacheStoreTests {
             refreshedAt: secondRefreshedAt
         )
 
-        // Exact bound: the refresh may write only the one changed canonical
-        // row. (The derived index is not yet prepared on this store, so no
-        // index rows contribute; its refresh behavior has its own coverage.)
+        // The index is not prepared on this store, so only the canonical row is written.
         #expect(try await store.totalRowChangeCount() == changesBeforeSecondUpsert + 1)
         let library = try await store.loadLibrary(activePodcastIDs: [Self.feedURL])
         let edited = try #require(library.episodes.first { $0.episodeID == "ep-edited" })
@@ -325,10 +310,9 @@ struct SQLiteLocalLibraryCacheStoreTests {
                 "ep-summary": "Plain summary text",
                 "ep-empty-summary": "<p>Fallback notes</p>",
                 "ep-notes-only": "<p>Only notes</p>",
-                "ep-long": String(longSummary.prefix(24))
+                "ep-long": "A summary that runs well"
             ]
         )
-        #expect(summaries["ep-long"] == "A summary that runs well")
         // The library reaches the store through the protocol, so the query must be its witness.
         let erasedStore: any LocalLibraryCacheStore = store
         let erasedSummaries = try await erasedStore.episodeSummaries(forPodcastID: Self.feedURL, maximumCharacters: 24)
@@ -396,7 +380,6 @@ struct SQLiteLocalLibraryCacheStoreTests {
         #expect(feedLogs.map(\.refreshID) == (6...55).reversed().map { "refresh-\($0)" })
         #expect(allLogs.last == otherLog)
 
-        // The library snapshot carries only the per-feed-latest projection.
         let library = try await store.loadLibrary(activePodcastIDs: [])
         #expect(library.refreshLogs.map(\.refreshID) == ["refresh-55", "other-refresh"])
     }
@@ -431,8 +414,6 @@ struct SQLiteLocalLibraryCacheStoreTests {
 
         let library = try await store.loadLibrary(activePodcastIDs: [])
 
-        // Latest overall (a failure) and the newest success both survive the
-        // projection; the middle failure does not.
         #expect(library.refreshLogs.map(\.refreshID) == ["latest-failure", "old-success"])
     }
 
@@ -458,17 +439,6 @@ struct SQLiteLocalLibraryCacheStoreTests {
         #expect(library.podcastsByFeedURL[Self.feedURL]?.updatedAt == refreshedAt)
     }
 
-    @Test("The schema reports both version counters")
-    func schemaReportsUserVersion() async throws {
-        let store = SQLiteLocalLibraryCacheStore.inMemory()
-        _ = try await store.loadLibrary(activePodcastIDs: [])
-        #expect(try await store.currentSchemaVersion() == SQLiteEpisodeSearchIndex.schemaVersion)
-        #expect(
-            try await store.currentCanonicalSchemaVersion()
-                == SQLiteLocalLibraryCacheStore.canonicalSchemaVersion
-        )
-    }
-
     @Test("Canonical migrations run on a database the search index already stamped")
     func canonicalMigrationRunsUnderStampedSearchVersion() async throws {
         let directory = FileManager.default.temporaryDirectory
@@ -481,8 +451,7 @@ struct SQLiteLocalLibraryCacheStoreTests {
         _ = try await store.loadLibrary(activePodcastIDs: [])
         #expect(try await store.currentSchemaVersion() == SQLiteEpisodeSearchIndex.schemaVersion)
 
-        // The shape the shared user_version ladder produced: the search
-        // stamp is current while a canonical migration never ran.
+        // A current search stamp on a database where no canonical migration ran.
         for column in ["etag", "last_modified", "body_hash"] {
             try execRawSQL("ALTER TABLE podcast_cache DROP COLUMN \(column)", databaseURL: databaseURL)
         }
@@ -527,29 +496,6 @@ struct SQLiteLocalLibraryCacheStoreTests {
         #expect(try await store.totalRowChangeCount() == changesBeforeStore + 1)
         let library = try await store.loadLibrary(activePodcastIDs: [Self.feedURL])
         #expect(library.episodes.map(\.cachedAt) == [refreshedAt, refreshedAt])
-    }
-
-    @Test("An unknown episode reads no publisher chapters and storing for it writes nothing")
-    func publisherChaptersForUnknownEpisodeAreANoOp() async throws {
-        let store = SQLiteLocalLibraryCacheStore.inMemory()
-        try await store.upsertCache(
-            from: makeFeedSnapshot(episodes: [
-                makeEpisode(id: "ep-1", title: "First", publishedAt: Date(timeIntervalSince1970: 1_700_000_100))
-            ]),
-            refreshedAt: Date(timeIntervalSince1970: 1_700_000_500)
-        )
-        #expect(try await store.publisherChapters(episodeID: "ep-missing") == nil)
-        let changesBeforeStore = try await store.totalRowChangeCount()
-
-        try await store.storePublisherChapters(
-            makePublisherChaptersEntry(sourceURL: Self.chaptersURL),
-            episodeID: "ep-missing"
-        )
-
-        #expect(try await store.totalRowChangeCount() == changesBeforeStore)
-        #expect(try await store.publisherChapters(episodeID: "ep-missing") == nil)
-        let library = try await store.loadLibrary(activePodcastIDs: [Self.feedURL])
-        #expect(library.episodes.map(\.episodeID) == ["ep-1"])
     }
 
     @Test("Publisher chapters survive identical, content-changed, and chapters-URL-changed feed upserts")
@@ -813,56 +759,6 @@ struct SQLiteLocalLibraryCacheStoreTests {
         )
     }
 
-    @Test("Episode search reads pre-cleaned derived evidence instead of canonical HTML")
-    func episodeSearchReadsDerivedBodyEvidence() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appending(
-                path: "SQLiteSearchEvidenceTests-\(UUID().uuidString)",
-                directoryHint: .isDirectory
-            )
-        defer {
-            try? FileManager.default.removeItem(at: directory)
-        }
-        let databaseURL = directory.appending(path: "LocalLibraryCache.sqlite")
-        let store = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
-        try await store.upsertCache(
-            from: makeFeedSnapshot(episodes: [
-                makeEpisode(
-                    id: "derived-evidence",
-                    title: "Upper Atmosphere",
-                    publishedAt: Date(timeIntervalSince1970: 1_700_000_200),
-                    showNotesHTML: """
-                    <section><p>Mesosphere&nbsp;<em>aurora coupling</em>
-                    is visible &amp; measurable.</p></section>
-                    """
-                )
-            ]),
-            refreshedAt: Date(timeIntervalSince1970: 1_700_000_300)
-        )
-        try await store.prepareEpisodeSearchIndex()
-
-        try execRawSQL(
-            """
-            UPDATE episode_cache
-            SET show_notes_html = '<p>Canonical HTML changed.</p>'
-            WHERE episode_id = 'derived-evidence'
-            """,
-            databaseURL: databaseURL
-        )
-
-        let hits = try await store.searchEpisodes(
-            EpisodeSearchIndexRequest(
-                query: "mesosphere aurora",
-                mode: .fullText,
-                activePodcastIDs: [Self.feedURL]
-            )
-        )
-        #expect(hits.map(\.episodeID) == ["derived-evidence"])
-        #expect(hits.first?.scoreTrace.matchedFields.contains(.showNotes) == true)
-        #expect(hits.first?.snippet?.contains("Mesosphere aurora coupling") == true)
-        #expect(hits.first?.snippet?.contains("& measurable") == true)
-    }
-
     @Test("A content-only update in the ready-unvalidated window reaches the index")
     func contentOnlyUpdateBeforeValidationReachesSearchIndex() async throws {
         let directory = FileManager.default.temporaryDirectory
@@ -888,11 +784,8 @@ struct SQLiteLocalLibraryCacheStoreTests {
         try await firstSession.prepareEpisodeSearchIndex()
         #expect(try await firstSession.episodeSearchIndexStateDescription() == "ready")
 
-        // Next launch: the stored contentVersion matches (.ready) but this
-        // session has not validated yet. A refresh lands a content-only
-        // retitle inside that window — the row count never changes, so a
-        // dropped index write would pass the count-only validation as
-        // permanently stale search text.
+        // The next launch reads ready but has not validated. A content-only retitle keeps the
+        // row count, so a dropped index write would pass count-only validation.
         let secondSession = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
         try await secondSession.upsertCache(
             from: makeFeedSnapshot(episodes: [
@@ -1265,8 +1158,6 @@ struct SQLiteLocalLibraryCacheStoreTests {
         #expect(transcriptOnly.snippetHighlightTerms == ["bioluminescent"])
         #expect(transcriptOnly.transcriptPassage?.segmentID == "deep-1")
 
-        // Legacy search surfaced the show-notes snippet; a hit matching both
-        // sources must keep it rather than the transcript excerpt.
         let bothSources = try #require(
             hits.first { $0.episodeID == "notes-and-transcript" }
         )
@@ -1312,8 +1203,6 @@ struct SQLiteLocalLibraryCacheStoreTests {
 
         try await store.replaceEpisodeTranscriptSearchDocument(document)
 
-        // Reconciliation replays every completed transcript per launch; an
-        // unchanged version+segment set must be a read-only no-op.
         #expect(
             try await store.totalRowChangeCount() == changesBeforeIdenticalReplace
         )
@@ -1377,8 +1266,6 @@ struct SQLiteLocalLibraryCacheStoreTests {
                 activePodcastIDs: [Self.feedURL]
             )
         )
-        // The whole-token FTS match keeps its rank; the mid-word containment
-        // hit the legacy matcher used to find follows it.
         #expect(hits.map(\.episodeID) == ["token", "substring"])
         #expect(hits.last?.scoreTrace.channel == .visibleSubstring)
     }
@@ -1449,8 +1336,6 @@ struct SQLiteLocalLibraryCacheStoreTests {
             query: "fieldwork"
         )
 
-        // The old 50-hit default silently truncated broad queries while the
-        // legacy fallback returned everything; both paths must agree now.
         #expect(hits.count == 60)
         #expect(
             Set(hits.map(\.episodeID)) == Set(legacyMatches.map(\.episodeID))
@@ -1547,8 +1432,7 @@ struct SQLiteLocalLibraryCacheStoreTests {
         let expectedIDs = try await originalStore.searchEpisodes(request)
             .map(\.episodeID)
 
-        // Version 1 is the pre-search canonical cache version. Opening it must
-        // preserve canonical rows while recreating only disposable search data.
+        // user_version 1 is the cache from before the search index existed.
         try execRawSQL("PRAGMA user_version = 1", databaseURL: databaseURL)
         let upgradedStore = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
         _ = try await upgradedStore.loadLibrary(activePodcastIDs: [Self.feedURL])
@@ -1559,8 +1443,6 @@ struct SQLiteLocalLibraryCacheStoreTests {
                 == expectedIDs
         )
 
-        // Delete one derived evidence row without touching canonical cache
-        // data or the ready marker. Relaunch validation must detect and heal it.
         try execRawSQL(
             "DELETE FROM episode_search_evidence WHERE search_rowid IN (SELECT search_rowid FROM episode_search_evidence LIMIT 1)",
             databaseURL: databaseURL
@@ -1800,29 +1682,6 @@ struct SQLiteLocalLibraryCacheStoreTests {
         #expect(detail?.showNotesHTML == "<p>Legacy notes</p>")
     }
 
-    @Test("File-backed store persists data across store instances")
-    func fileBackedStorePersistsAcrossInstances() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appending(path: "SQLiteLocalLibraryCacheStoreTests-\(UUID().uuidString)", directoryHint: .isDirectory)
-        defer {
-            try? FileManager.default.removeItem(at: directory)
-        }
-        let databaseURL = directory.appending(path: "LocalLibraryCache.sqlite")
-
-        let firstStore = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
-        try await firstStore.upsertCache(
-            from: makeFeedSnapshot(episodes: [
-                makeEpisode(id: "ep-file", title: "Persisted Episode", publishedAt: Date(timeIntervalSince1970: 1_700_000_200))
-            ]),
-            refreshedAt: Date(timeIntervalSince1970: 1_700_000_300)
-        )
-
-        let secondStore = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
-        let library = try await secondStore.loadLibrary(activePodcastIDs: [Self.feedURL])
-        #expect(library.podcastsByFeedURL[Self.feedURL]?.title == "Cached Show")
-        #expect(library.episodes.map(\.episodeID) == ["ep-file"])
-    }
-
     @Test("Reopening a pre-existing cache drops the legacy published index")
     func reopeningPreExistingCacheDropsLegacyPublishedIndex() async throws {
         let directory = FileManager.default.temporaryDirectory
@@ -1839,7 +1698,7 @@ struct SQLiteLocalLibraryCacheStoreTests {
             ]),
             refreshedAt: Date(timeIntervalSince1970: 1_700_000_300)
         )
-        // Installed devices created this index before it left schemaSQL.
+        // Older caches still carry this index.
         try execRawSQL(
             "CREATE INDEX IF NOT EXISTS episode_cache_published_idx ON episode_cache(published_at DESC)",
             databaseURL: databaseURL

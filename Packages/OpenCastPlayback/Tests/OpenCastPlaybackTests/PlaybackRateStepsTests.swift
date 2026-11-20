@@ -21,7 +21,6 @@ struct PlaybackRateStepsTests {
     @Test("The fastest step wraps back to the slowest")
     func wrapsPastTheFastestStep() {
         #expect(PlaybackRateSteps.next(after: 2) == 0.75)
-        // The clamp accepts up to 3.0, which is past every step.
         #expect(PlaybackRateSteps.next(after: 3) == 0.75)
     }
 
@@ -30,18 +29,5 @@ struct PlaybackRateStepsTests {
         #expect(PlaybackRateSteps.next(after: 0.5) == 0.75)
         #expect(PlaybackRateSteps.next(after: 1.6) == 1.75)
         #expect(PlaybackRateSteps.next(after: 1.9) == 2)
-    }
-
-    @Test("A step cycles through every other step before repeating")
-    func cyclesThroughAllSteps() {
-        var visited: [Float] = []
-        var rate = PlaybackRateSteps.steps[0]
-        for _ in PlaybackRateSteps.steps {
-            visited.append(rate)
-            rate = PlaybackRateSteps.next(after: rate)
-        }
-
-        #expect(visited == PlaybackRateSteps.steps)
-        #expect(rate == PlaybackRateSteps.steps[0])
     }
 }

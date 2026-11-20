@@ -1,11 +1,5 @@
 import Foundation
 
-/// Pure merge of Apple and Podcast Index search results. Apple order is
-/// preserved and Apple display metadata wins; Podcast Index fills
-/// missing fields, contributes feed candidates, and appends unmatched
-/// results after all Apple results. Merging happens only on strong
-/// identity — Apple ID, then podcast GUID, then canonical feed URL —
-/// never on title, author, artwork, or fuzzy similarity.
 public enum DirectoryResultMerger {
     public static func merge(
         appleResults: [DirectoryPodcastResult],
@@ -86,8 +80,6 @@ public enum DirectoryResultMerger {
         return sources.filter { seen.insert($0).inserted }
     }
 
-    /// First occurrence per canonical URL wins its slot; later
-    /// duplicates only backfill missing hints.
     public static func mergedCandidates(_ candidates: [DirectoryFeedCandidate]) -> [DirectoryFeedCandidate] {
         var indexByCanonicalURL: [String: Int] = [:]
         var merged: [DirectoryFeedCandidate] = []

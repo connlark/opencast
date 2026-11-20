@@ -1,4 +1,3 @@
-/// A provider answer reduced to what validation needs.
 public struct AdParsedAnswer: Sendable, Hashable {
     public var output: AdModelOutput?
     public var usage: AnalysisUsage?
@@ -6,15 +5,11 @@ public struct AdParsedAnswer: Sendable, Hashable {
     public var issue: String?
 }
 
-/// Reads one provider answer the way the ad-analysis service does: never
-/// accept a syntactically valid prefix of truncated output, require exactly
-/// one non-thought answer text, and count usage even when the answer is
-/// unusable.
+/// A truncated answer can still be valid JSON, so any finish other than STOP rejects it.
 public enum AdAnswerParser {
     /// Largest answer text accepted, in UTF-8 bytes.
     public static let maxAnswerBytes = 100_000
 
-    /// A raw Gemini `generateContent` response body.
     public static func parse(geminiBody body: String) -> AdParsedAnswer {
         var result = AdParsedAnswer(output: nil, usage: nil, issue: "v3_malformed_response")
         guard let response = try? GeminiResponse(text: body, readsThought: true) else { return result }
@@ -34,7 +29,6 @@ public enum AdAnswerParser {
         return finish(texts: texts, usage: result.usage)
     }
 
-    /// An answer a provider transport has already normalized.
     public static func parse(answer: AnalysisProviderAnswer) -> AdParsedAnswer {
         let usage = answer.usage.map(\.guardedTotal)
         guard RustText.same(answer.finishReason, "STOP") else {

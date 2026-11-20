@@ -1,10 +1,8 @@
 import Foundation
 import StoreKit
 
-/// StoreKit 2 implementation of the purchase seam. Verified and unverified
-/// transactions both surface their raw JWS — the server's Apple-library
-/// verification is authoritative — except at purchase time, where a locally
-/// unverified result is refused outright.
+/// Unverified transactions still surface their JWS because the server's verification is
+/// authoritative; only a purchase refuses a locally unverified result.
 nonisolated struct LiveRemoteTranscriptionStoreKitClient: RemoteTranscriptionStoreKitClient {
     func environment() async throws -> RemoteTranscriptionStoreEnvironment {
         try await RemoteTranscriptionAppTransactionProvider.currentEnvironment()

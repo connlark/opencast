@@ -1,8 +1,6 @@
 import Foundation
 import OpenCastAnalysisProviders
 
-/// Reads one trial service reply whole, capped, and keeps only the parsed
-/// headers the classifiers read.
 nonisolated enum TrialProxyHTTPReading {
     static func read(
         _ request: URLRequest,

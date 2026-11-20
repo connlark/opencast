@@ -1,5 +1,4 @@
-/// Response of `jobs/{id}/poll`. Clients wait `pollAfterSeconds` (plus their
-/// own jitter) before the next poll; the server owns pacing.
+/// The server owns pacing: wait `pollAfterSeconds`, plus jitter, before the next poll.
 public struct OpenCastRemoteTranscriptionPollResponse: Codable, Sendable, Equatable {
     public var schemaVersion: Int
     public var job: OpenCastRemoteTranscriptionJobStatus

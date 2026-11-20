@@ -2,10 +2,6 @@
 import Foundation
 import SwiftData
 
-/// DEBUG probe for the episode transcript panel path: invokes the exact
-/// app-model action behind the panel's Generate button
-/// (`transcribeDownloadedEpisode`) for a downloaded episode, so the panel's
-/// engine resolution can be device-proven without physical taps.
 enum EpisodePanelTranscribeProbe {
     nonisolated static let episodeTitleArgument = "--opencast-panel-transcribe-episode-title"
     nonisolated static let episodeTitleEnvironmentKey = "OPENCAST_PANEL_TRANSCRIBE_EPISODE_TITLE"

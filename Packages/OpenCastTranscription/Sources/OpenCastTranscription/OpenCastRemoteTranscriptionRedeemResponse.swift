@@ -1,5 +1,3 @@
-/// Response of `purchases/redeem`: the applied outcome and the account's
-/// authoritative balance after it.
 public struct OpenCastRemoteTranscriptionRedeemResponse: Codable, Sendable, Equatable {
     public var schemaVersion: Int
     public var outcome: OpenCastRemoteTranscriptionRedeemOutcome

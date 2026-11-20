@@ -18,25 +18,20 @@ struct NowPlayingSoundLabArtwork: View {
     let onTranscribeRemotely: () -> Void
     let onTranscriptAction: () -> Void
     let onAdFreePassBackgroundProbe: () -> Void
-    /// Below the panel's inline floor the reveal asks the player for the
-    /// Sound Lab sheet instead.
     let onRequestSoundLabSheet: () -> Void
     @Binding var isSoundLabInteractionActive: Bool
     let isCardDismissDragActive: Bool
-    /// The card around the square. Without one the panel keeps the square.
+    /// Nil keeps the panel to the square.
     var openContext: NowPlayingSoundLabOpenPanel.CardContext?
 
     @State private var interactionState = NowPlayingSoundLabInteractionState.closed
     @State private var revealProgress: CGFloat = 0
     @State private var ignoresCurrentDrag = false
-    /// Which gesture an invalidation consumed. A reference, because a gesture
-    /// writes it from its own delivery, where nothing may redraw.
+    /// A reference: a gesture writes it from its own delivery, where nothing may redraw.
     @State private var dragOwnership = DragOwnershipBox()
     @State private var feedbackTrigger = false
     @State private var imageState = ArtworkImageState()
-    /// The square in the card's coordinates, and the heading's whole height:
-    /// what a closed panel resolves from. They stay measured while it is open,
-    /// to tell whether its key still holds.
+    /// In the card's coordinates. Measured while open too, to tell whether the kept key holds.
     @State private var squareFrame: CGRect?
     @State private var headingReading: HeadingReading?
     /// What the panel opened with, from before the first frame of a reveal to
@@ -45,17 +40,12 @@ struct NowPlayingSoundLabArtwork: View {
     /// Whether the last capture was legacy: the reveal layer then draws the
     /// artwork, closed included, until the next capture.
     @State private var keepsLegacyArtwork = false
-    /// An opening request waiting for the measurements a titled panel needs.
     @State private var waitsToOpen = false
-    /// Tells a settle's completion from a later reveal's.
     @State private var settleGeneration = 0
-    /// The space the drag in progress began reading, kept for that drag.
     @GestureState private var dragReadsFootprint: Bool? = nil
 
-    /// Consumption belongs to a gesture. The gesture that was revealing an
-    /// invalidated panel does nothing more, its end included; any later one
-    /// takes its own identity in its own first delivery, so its first update
-    /// is handled with nothing having to let it through.
+    /// The gesture revealing an invalidated panel does nothing more, its end included; a later
+    /// gesture takes its own identity in its first delivery, so nothing has to let it through.
     struct DragOwnership {
         /// Kept past the gesture's flight: its end can follow its latch's reset.
         private var latest = 0
@@ -92,8 +82,7 @@ struct NowPlayingSoundLabArtwork: View {
         let key: NowPlayingSoundLabOpenPanel.ShapeKey
     }
 
-    /// A height, and the environment it was measured in: an environment that
-    /// happens to give the same height still reads as a new measurement.
+    /// Carries its environment, so a new environment with the same height still reads as new.
     private nonisolated struct HeadingReading: Equatable {
         let height: CGFloat
         let dynamicTypeSize: DynamicTypeSize
@@ -102,12 +91,9 @@ struct NowPlayingSoundLabArtwork: View {
 
     private let cornerRadius: CGFloat = 8
     private let edgeStrokeWidth: CGFloat = 1
-    /// A titled panel's drags read this space: the target moves between the
-    /// square and the open rectangle, and a space that moved with it would
-    /// feed the drag. The square's drags read `.local`, as they always have.
+    /// A titled panel's drags read this space: the target moves between the square and the open
+    /// rectangle, and a space that moved with it would feed the drag.
     private static let footprintCoordinateSpace = "NowPlayingSoundLabFootprint"
-    /// A release opens the panel past this much of the reveal, or past
-    /// `openingPredictedProgress` of it by the drag's predicted end.
     private static let openingProgress: CGFloat = 0.22
     private static let openingPredictedProgress: CGFloat = 0.30
 
@@ -133,30 +119,17 @@ struct NowPlayingSoundLabArtwork: View {
         let measuresSquare = opensBeyondSquare
         let gestureMode = presented?.mode ?? (resolvedOpenPanel ?? .legacy(side: size)).mode
 
-        // Two layers, so that a closing reveal can go at once while the
-        // square keeps the layout's own motion: a single view's old rectangle
-        // would be the reveal's. Only the visibility skips animation. A legacy
-        // capture is never invalidated by a shape-key change; reset can still
-        // close it immediately, so `keepsLegacyArtwork` leaves the drawing to
-        // the reveal layer from a legacy capture until the next capture.
-        //
-        // The square never unmounts: a view mounted during a resize starts at
-        // the model's value, and showing it would cut the resize short. After
-        // a legacy capture it shares no drawn frame with the reveal layer,
-        // because a layer on a legacy panel's exact frame, accessibility-hidden
-        // or not, puts the panel ahead of the artwork in the accessibility
-        // order. A render-only move restored the order and padding the layout
-        // frame did not, so it is the drawn geometry. That is observed, not
-        // understood, and the amount is arbitrary. The move is keyed to the
-        // capture and not to visibility because an offset rides any animation
-        // its update carries: it must not change in the update that shows the
-        // square.
+        // Two layers, so a closing reveal can go at once while the square keeps the layout's own
+        // motion. The square never unmounts: one mounted mid-resize would cut the resize short.
         ZStack(alignment: .bottom) {
             framedArtwork(width: size, height: size, strokeInset: 0) {
                 NowPlayingArtworkImageView(title: title, image: artworkImage)
                     .frame(width: size, height: size)
             }
             .animation(nil) { $0.opacity(displaysRevealArtwork ? 0 : 1) }
+            // Sharing a legacy panel's exact frame puts the panel ahead of the artwork in the
+            // accessibility order; this render-only move avoids it (observed, amount arbitrary).
+            // Keyed to the capture, not visibility: an offset rides its update's animation.
             .offset(y: keepsLegacyArtwork ? 1 : 0)
             .allowsHitTesting(false)
 
@@ -260,8 +233,7 @@ struct NowPlayingSoundLabArtwork: View {
         }
     }
 
-    /// The image with its clip and edge, one construction for both layers:
-    /// the square draws exactly what the reveal draws before it has moved.
+    /// One construction for both layers, so the square draws exactly what the unmoved reveal draws.
     private func framedArtwork(
         width: CGFloat,
         height: CGFloat,
@@ -281,7 +253,6 @@ struct NowPlayingSoundLabArtwork: View {
             }
     }
 
-    /// The exact heading, in this environment, outside the artwork's layout.
     @ViewBuilder
     private var headingMeasurement: some View {
         if opensBeyondSquare {
@@ -327,7 +298,6 @@ struct NowPlayingSoundLabArtwork: View {
         resetInteraction()
     }
 
-    /// The artwork is going away: nothing of its interaction may outlive it.
     private func abandonInteraction() {
         guard keptPanel != nil || interactionState != .closed else {
             return
@@ -340,9 +310,8 @@ struct NowPlayingSoundLabArtwork: View {
         isSoundLabInteractionActive = false
     }
 
-    /// The gesture latch resets on success or cancellation.
-    /// Deferred cleanup revalidates the latch and reveal generation;
-    /// reset alone does not establish whether `onEnded` has run.
+    /// The latch resets on success and on cancellation, so its reset alone does not say whether
+    /// `onEnded` has run; this deferred cleanup revalidates the latch and the generation.
     private func settleEndedDrag() {
         ignoresCurrentDrag = false
         if isTrackingSoundLab {
@@ -350,8 +319,6 @@ struct NowPlayingSoundLabArtwork: View {
         }
     }
 
-    /// Takes the capture a reveal opens with, or reuses the one it has.
-    /// False when a titled panel's measurements are not there yet.
     private func holdKeptPanel() -> Bool {
         if keptPanel != nil {
             return true
@@ -408,8 +375,6 @@ struct NowPlayingSoundLabArtwork: View {
         keptDisposition == .invalidate
     }
 
-    /// What is on screen: the panel as it opened, the square for one that
-    /// opened as the square, and nil when closed or invalid.
     private var presentedPanel: NowPlayingSoundLabOpenPanel? {
         switch keptDisposition {
         case .keep:
@@ -454,9 +419,8 @@ struct NowPlayingSoundLabArtwork: View {
             )
     }
 
-    /// Nothing reveals until the open rectangle is known from measurements of
-    /// this square and this heading, so the panel never starts from a
-    /// provisional size or a stale one.
+    /// Nothing reveals before this square and this heading are measured, so the panel never
+    /// starts from a provisional or stale size.
     private var isOpenPanelReady: Bool {
         !opensBeyondSquare || (isSquareMeasured && isHeadingMeasured)
     }
@@ -473,8 +437,7 @@ struct NowPlayingSoundLabArtwork: View {
         headingReading?.dynamicTypeSize == dynamicTypeSize && headingReading?.displayScale == displayScale
     }
 
-    /// A closed panel's resolution. Nil only until the first measurements
-    /// arrive; never consulted for a panel that is open.
+    /// Nil only until the first measurements arrive; never consulted for an open panel.
     private var resolvedOpenPanel: NowPlayingSoundLabOpenPanel? {
         guard opensBeyondSquare else {
             return .legacy(side: size)
@@ -520,14 +483,8 @@ struct NowPlayingSoundLabArtwork: View {
         size * 0.54
     }
 
-    /// Whether a drag reads the footprint space: the space it latched, or
-    /// before it has latched one, the space of the panel's mode.
-    static func readsFootprint(latched: Bool?, mode: NowPlayingSoundLabOpenPanel.Mode) -> Bool {
-        latched ?? (mode != .legacy)
-    }
-
     private func soundLabGesture(mode: NowPlayingSoundLabOpenPanel.Mode) -> some Gesture {
-        let readsFootprint = Self.readsFootprint(latched: dragReadsFootprint, mode: mode)
+        let readsFootprint = dragReadsFootprint ?? (mode != .legacy)
         var drag = DragGesture(minimumDistance: 1, coordinateSpace: .local)
         if readsFootprint {
             drag.coordinateSpace = .named(Self.footprintCoordinateSpace)
@@ -608,9 +565,6 @@ struct NowPlayingSoundLabArtwork: View {
             return
         }
 
-        // Below the floor nothing tracks the drag, so a cancelled one leaves
-        // no state behind; a release that would have opened the panel asks
-        // for the sheet.
         guard showsInlinePanel else {
             if releaseOpensBelowFloor(value) {
                 onRequestSoundLabSheet()
@@ -693,7 +647,6 @@ struct NowPlayingSoundLabArtwork: View {
         snap(open: open)
     }
 
-    /// What a snap does from where the interaction stands.
     enum SnapStep {
         case leaveSettling
         case release

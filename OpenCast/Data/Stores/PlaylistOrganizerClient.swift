@@ -1,9 +1,6 @@
 import Foundation
 import FoundationModels
 
-/// One Make a Playlist request end to end: the token-budgeted episode list,
-/// a fresh structured PCC turn per attempt under the store's deadline, and
-/// validation of the returned indices against the list that was sent.
 final class PlaylistOrganizerClient {
     nonisolated static let maximumResponseTokens = 2_048
     nonisolated static let maximumProposals = 12
@@ -18,7 +15,6 @@ final class PlaylistOrganizerClient {
         self.deadline = deadline
     }
 
-    /// The sheet's call.
     func organize(
         _ request: PlaylistOrganizerRequest,
         episodes: [PlaylistOrganizerEpisode],
@@ -27,14 +23,7 @@ final class PlaylistOrganizerClient {
         await run(request, episodes: episodes, snapshotsByEpisodeID: snapshotsByEpisodeID).outcome
     }
 
-    /// The same request with its measurements; the evaluation runner forces `options`.
-    ///
-    /// A decline and an unreadable answer each get one silent retry with the
-    /// same input, because both are stochastic on PCC. The exception is a
-    /// recitation decline, which repeats on the same input: its retry sends
-    /// the same lines renumbered with gaps. A full context steps down to a
-    /// leaner line format (then a smaller budget) and rebuilds. A simpler answer is named on the device.
-    /// Nothing about the request, the show or its episodes is logged.
+    /// Logs nothing about the request, the show or its episodes.
     func run(
         _ request: PlaylistOrganizerRequest,
         episodes: [PlaylistOrganizerEpisode],
@@ -53,9 +42,7 @@ final class PlaylistOrganizerClient {
         return result
     }
 
-    /// How much of the show a request in `mode` looks through (the form's
-    /// footnote): the whole list for a typed request, which retrieval may
-    /// then narrow, and the capped list for suggestions. nil when counting fails.
+    /// nil when counting fails.
     func formScope(
         showTitle: String,
         episodes: [PlaylistOrganizerEpisode],
@@ -80,10 +67,6 @@ final class PlaylistOrganizerClient {
         }
     }
 
-    /// Keeps numbers that stand for a sent episode that still resolves to a
-    /// library episode, in the model's order (the prompt asks for
-    /// chronological order unless the request implies another); drops
-    /// repeats, and proposals too small to be worth saving.
     nonisolated static func validate(
         _ set: PlaylistProposalSet,
         input: PlaylistOrganizerInput,
@@ -212,9 +195,8 @@ final class PlaylistOrganizerClient {
                     if isModelTurn, !hasResentInput {
                         hasResentInput = true
                         result.retriedFailures.append(failure)
-                        // A long run of consecutive line numbers in the
-                        // answer reads as recitation every time; the same
-                        // lines with gapped numbers never form that run.
+                        // A run of consecutive line numbers in the answer reads as recitation
+                        // every time; gapped numbers never form that run.
                         if failure == .guardrailViolation(.recitation), options.lineNumbers == .index {
                             options.lineNumbers = .gapped(seed: nil)
                             retryInput = nil
@@ -265,8 +247,6 @@ final class PlaylistOrganizerClient {
         }
     }
 
-    /// A simpler answer comes back as proposals with no title or rationale,
-    /// so validation treats both answer styles alike.
     private func respond(to input: PlaylistOrganizerInput) async throws -> TranscriptIntelligenceResponse<PlaylistProposalSet> {
         let session = store.makeSession(instructions: input.instructions, tools: [])
         let prompt = input.prompt
@@ -298,8 +278,6 @@ final class PlaylistOrganizerClient {
         { [store] text in try await store.tokenCount(for: text) }
     }
 
-    /// The line formats below the one that overflowed; once none is left,
-    /// half the budget, so the builder keeps fewer episodes.
     private static func steppedDown(
         _ options: PlaylistOrganizerInputOptions,
         below rung: PlaylistOrganizerInput.Rung

@@ -2,10 +2,6 @@ import Foundation
 import Testing
 @testable import OpenCastVoiceBoost
 
-/// EBU Tech 3341 minimum-requirements test signals for true-peak meters
-/// (cases 15-23), synthesized per the table and measured against both the
-/// offline analyzer and the runtime streaming meter (which share the C
-/// Annex 2 polyphase FIR kernel). Tolerance is +0.2/-0.4 dB per case.
 struct VoiceBoostTruePeakConformanceTests {
     private struct SineCase {
         var name: String
@@ -70,9 +66,8 @@ struct VoiceBoostTruePeakConformanceTests {
                 sampleRate: sampleRate
             )
 
-            // A disabled processor passes the signal through (delayed), so
-            // the output meter measures the fixture itself across real block
-            // boundaries - the streaming path the limiter detector shares.
+            // Disabled, the processor passes the fixture through delayed, so the
+            // output meter reads the fixture itself across real block boundaries.
             let processor = VoiceBoostProcessor(
                 sampleRate: sampleRate,
                 channelCount: channelCount,
@@ -159,10 +154,9 @@ struct VoiceBoostTruePeakConformanceTests {
         return buffer
     }
 
-    /// Cases 20-23: an fs/6 sine at 0.5 containing one phase-continuous
-    /// period of an fs/4 sine at 1.0, synthesized at 4*fs, anti-alias
-    /// lowpass filtered, and downsampled to fs with the given sample offset
-    /// at the 4*fs rate.
+    /// Cases 20-23: an fs/6 sine at 0.5 holding one phase-continuous period of
+    /// an fs/4 sine at 1.0, built at 4*fs, low-pass filtered, and downsampled
+    /// to fs at the given 4*fs sample offset.
     private static func downsampledBurstFixture(
         sampleRate: Double,
         downsampleOffset: Int,
@@ -171,8 +165,7 @@ struct VoiceBoostTruePeakConformanceTests {
         let factor = 4
         let hiCount = Int(4 * sampleRate * 0.25)
         // At 4*fs the fs/6 tone advances 2π/24 per sample and the fs/4 tone
-        // 2π/16; the burst starts on an exact zero-phase sample of the base
-        // tone and spans one full period, so phase is continuous throughout.
+        // 2π/16; the burst starts at a zero of the base tone and spans one period.
         let baseIncrement = 2 * Double.pi / 24
         let burstIncrement = 2 * Double.pi / 16
         let burstStart = (hiCount / 2 / 24) * 24

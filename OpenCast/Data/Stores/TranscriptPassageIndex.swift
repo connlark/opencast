@@ -1,11 +1,6 @@
 import Foundation
 import OpenCastTranscription
 
-/// Immutable lexical retrieval over one transcript, built once per document
-/// beside `TranscriptSearchIndex`. Consecutive segments merge into passages
-/// of about ninety seconds or a hundred and twenty words; BM25 over folded
-/// tokens ranks them for the Ask tools. Building runs off the caller's actor
-/// with cancellation checkpoints, like the search index.
 nonisolated struct TranscriptPassageIndex: Sendable {
     static let maximumPassageDuration: TimeInterval = 90
     static let maximumPassageWordCount = 120
@@ -83,8 +78,6 @@ nonisolated struct TranscriptPassageIndex: Sendable {
         return TranscriptPassageIndex(passages: passages)
     }
 
-    /// Passages ranked by BM25 for the query's tokens; ties keep transcript
-    /// order. Empty when no passage shares a token with the query.
     func search(_ query: String, limit: Int) -> [TranscriptPassage] {
         let terms = Set(TranscriptPassageTokenizer.tokens(in: query))
         guard !terms.isEmpty, limit > 0 else {
@@ -116,7 +109,6 @@ nonisolated struct TranscriptPassageIndex: Sendable {
             .map(\.passage)
     }
 
-    /// Passages touching the time range, in transcript order.
     func passages(overlapping range: ClosedRange<TimeInterval>) -> [TranscriptPassage] {
         passages.filter { $0.overlaps(range) }
     }

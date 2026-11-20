@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Blurred artwork-preview glow pinned behind the top of the episode detail
-/// scroll view, extending under the navigation bar to the screen edge.
 struct EpisodeArtworkGlowBackground: View {
     @Environment(\.colorScheme) private var colorScheme
 

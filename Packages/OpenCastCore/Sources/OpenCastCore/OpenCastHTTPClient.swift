@@ -3,11 +3,9 @@ import Foundation
 public protocol OpenCastHTTPClient: Sendable {
     func feedFile(for request: URLRequest, maximumBodyByteCount: Int) async throws -> OpenCastHTTPFileResult
     func data(for request: URLRequest) async throws -> OpenCastHTTPResult
-    /// Fetches the body while enforcing `maximumBodyByteCount`, throwing
-    /// `OpenCastHTTPBodyTooLargeError` for an oversized response. Streaming
-    /// implementations fail fast on a declared oversized `Content-Length`
-    /// and cancel the transfer the moment the running byte count exceeds
-    /// the cap, so a chunked response never buffers unbounded data.
+    /// Throws `OpenCastHTTPBodyTooLargeError` past `maximumBodyByteCount`. A streaming
+    /// conformer stops reading as soon as the running count passes the cap, so a chunked
+    /// body never buffers unbounded data.
     func data(
         for request: URLRequest,
         maximumBodyByteCount: Int
@@ -23,8 +21,6 @@ public struct OpenCastHTTPBodyTooLargeError: Error, Equatable {
 }
 
 public extension OpenCastHTTPClient {
-    /// Fallback for conformers without streaming: buffers the whole body and
-    /// enforces the cap after the fact.
     func data(
         for request: URLRequest,
         maximumBodyByteCount: Int

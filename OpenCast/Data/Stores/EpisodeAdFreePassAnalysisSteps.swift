@@ -1,16 +1,10 @@
-/// How far an episode's ad detection has come, in steps, for its progress:
-/// each window's first request, each corrective request the run has needed
-/// so far, and while the run is going one more step still to come, so the
-/// band's end is reached only when the run ends. `stepBudgetSeconds` is how
-/// long the current step may take before it gives up.
 nonisolated struct EpisodeAdFreePassAnalysisSteps: Equatable, Sendable {
     let completed: Int
     let total: Int
+    /// How long the current step may take before it gives up.
     let stepBudgetSeconds: Double
-    /// The run record these steps belong to. A change means a handover: the
-    /// steps start over, and each mapper rebases on its own position.
+    /// A change means a handover: the steps start over.
     let attemptID: String?
-    /// The run uses the trial service because Google named the key free tier.
     let isFreeTierTrial: Bool
 
     init(
@@ -27,10 +21,8 @@ nonisolated struct EpisodeAdFreePassAnalysisSteps: Equatable, Sendable {
         self.isFreeTierTrial = isFreeTierTrial
     }
 
-    /// A running run's steps: its own, plus the one still to come. A
-    /// window whose answer needs a repair counts as answered before the
-    /// repair is known, so without the pending step a slow repair would
-    /// sit at the band's end.
+    /// Adds the step still to come: a window counts as answered before its repair is known, so
+    /// without it a slow repair would sit at the band's end.
     init(_ progress: AdAnalysisRunProgress) {
         self.init(
             completed: progress.completed,

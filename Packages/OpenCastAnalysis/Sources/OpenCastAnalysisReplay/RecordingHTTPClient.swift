@@ -3,20 +3,9 @@ import OpenCastAnalysis
 import OpenCastAnalysisProviders
 import Synchronization
 
-/// Wraps the live HTTP client: numbers and records every exchange under
-/// `exchanges/` as structured fields only (``AnalysisExchangeRecord``: the
-/// request's kind and body, the response's status, content type, parsed
-/// `Retry-After`, answer text, usage numbers and closed error fields; never
-/// a URL, a header, a provider message or anything else a body holds), and
-/// consults the spend hook before and after each one. Every file is
-/// verified whole for every fragment of the key in every supported decoding
-/// and written as built, or replaced by a placeholder, and the meta file
-/// says which. Settlement takes the billed counts from the response as it
-/// arrived. The hook runs inside the
-/// exchange's deadline: the time `reserve` takes comes out of what the
-/// provider call gets, and a hook still running at the deadline is stopped
-/// and the exchange fails as a timeout. The bookkeeping after an answer
-/// gets what is left of the deadline, at least ``bookkeepingFloorSeconds``.
+/// Records structured fields only, never a URL, a header or a provider message. The spend hook
+/// runs inside the exchange's deadline: `reserve` time comes out of the provider call, and a hook
+/// still running at the deadline fails the exchange as a timeout.
 final class RecordingHTTPClient: AnalysisHTTPClient {
     typealias Kind = AnalysisExchangeRecord.Kind
 
@@ -30,9 +19,7 @@ final class RecordingHTTPClient: AnalysisHTTPClient {
     private let context: [String: String]
     private let state = Mutex<(sequence: Int, generateSends: Int, refusal: String?)>((0, 0, nil))
 
-    /// The least time `settle`, `release` or `ambiguous` gets once the
-    /// provider has answered, so a call that answered at its deadline is
-    /// still recorded.
+    /// Lets `settle`, `release` or `ambiguous` run for a call that answered at its deadline.
     static let bookkeepingFloorSeconds = 2.0
 
     init(
@@ -56,7 +43,6 @@ final class RecordingHTTPClient: AnalysisHTTPClient {
         try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
     }
 
-    /// Why sends stopped, if the hook or the send cap refused one.
     var refusal: String? { state.withLock { $0.refusal } }
 
     func send(
@@ -150,9 +136,8 @@ final class RecordingHTTPClient: AnalysisHTTPClient {
         switch result {
         case .success(let response):
             let raw = String(decoding: response.body, as: UTF8.self)
-            // Settlement reads the billed counts from the response as it
-            // arrived, before any redaction, and gets them as numbers: a
-            // suppressed recording never stops the ledger settling.
+            // Billed counts come from the raw response, before redaction, so a suppressed
+            // recording never stops the ledger settling.
             let usage = kind == .generate && (200..<300).contains(response.status)
                 ? AnalysisBilledUsage.billed(provider: provider, body: raw)
                 : nil
@@ -207,9 +192,7 @@ final class RecordingHTTPClient: AnalysisHTTPClient {
         }
     }
 
-    /// Writes one structured artifact: verified whole for every fragment of
-    /// the key and written as built, or a placeholder. Whether it was
-    /// recorded.
+    /// Returns false when a placeholder replaced the artifact.
     @discardableResult
     private func write(_ name: String, _ value: JSONValue) -> Bool {
         let recording = key.verifiedRecording(value)
@@ -217,7 +200,6 @@ final class RecordingHTTPClient: AnalysisHTTPClient {
         return recording.recorded
     }
 
-    /// The billed counts as the spend hook takes them, numbers only.
     static func usageJSON(_ usage: AnalysisBilledUsage) -> String {
         JSONWriter.string(.object([
             JSONMember("input", .integer(Int(clamping: usage.input))),
@@ -228,17 +210,13 @@ final class RecordingHTTPClient: AnalysisHTTPClient {
         ]))
     }
 
-    /// A measured time as recorded: to the millisecond. A time at full
-    /// precision carries a dozen digits that mean nothing, and any four of
-    /// them in a row can equal a run of digits in the key, which fails the
-    /// whole file's verification by chance (the fragment check reads numbers
-    /// too). To the millisecond, a time under 1,000 s has no run of four.
+    /// Full precision carries digit runs that can match four digits of the key and fail the file's
+    /// fragment check by chance; to the millisecond, a time under 1,000 s has no run of four.
     static func milliseconds(_ seconds: Double) -> Double {
         guard seconds.isFinite else { return 0 }
         return (seconds * 1000).rounded() / 1000
     }
 
-    /// A reservation id the spend hook returned, kept only in this shape.
     static func isReservationID(_ id: String) -> Bool {
         (1...64).contains(id.utf8.count)
             && id.utf8.allSatisfy { (0x30...0x39).contains($0) || (0x41...0x5A).contains($0) || (0x61...0x7A).contains($0) || $0 == 0x2D || $0 == 0x5F || $0 == 0x2E || $0 == 0x3A }
@@ -250,7 +228,6 @@ extension RecordingHTTPClient: CustomStringConvertible, CustomReflectable {
     var customMirror: Mirror { Mirror(self, children: []) }
 }
 
-/// Appends redacted transport log lines to a file.
 final class FileLogSink: AnalysisLogSink {
     private let handle: Mutex<FileHandle?>
 

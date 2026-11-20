@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// The Storage screen's summary row: the bar, the downloads' total and the
-/// device's free space.
 struct DownloadsStorageSummaryView: View {
     @State private var availableByteCount: Int64?
 

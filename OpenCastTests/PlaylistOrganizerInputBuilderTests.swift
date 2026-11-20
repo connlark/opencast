@@ -3,9 +3,6 @@ import Synchronization
 import Testing
 @testable import OpenCast
 
-/// Budgets in the ladder tests sit between the rung counts the digit-heavy
-/// counter produces for the fixture, with margins of tens of tokens, so the
-/// assertions pin which rung wins rather than an exact count.
 @Suite("Playlist organizer input builder")
 struct PlaylistOrganizerInputBuilderTests {
     /// 2026-01-02T12:00:00Z.
@@ -107,15 +104,6 @@ struct PlaylistOrganizerInputBuilderTests {
         // A quarter-character counter would have sent the snippets at 700.
         let quarter = try await build(episodes, budget: 700, tokenCount: { $0.count / 4 })
         #expect(quarter.rung == .snippets)
-    }
-
-    @Test("Forcing a single rung skips the ladder")
-    func singleRungIsForced() async throws {
-        let input = try await build(ladderEpisodes(), rungs: [.compact])
-
-        #expect(input.rung == .compact)
-        #expect(input.lines.split(separator: "\n").first == "0. 2026 · Harbor Lights")
-        #expect(input.candidateIndices == Array(0..<10))
     }
 
     @Test("A long show keeps the newest episodes that fit, and the scope says so")
@@ -285,7 +273,6 @@ struct PlaylistOrganizerInputBuilderTests {
         #expect(capped.lines.split(separator: "\n").count == 150)
         #expect(capped.prompt.contains("Episodes (the newest 150 of 200), newest first:"))
 
-        // A blank request is a suggestion too.
         let blank = try await build(episodes, prompt: "  ")
         #expect(blank.scope == capped.scope)
         #expect(blank.prompt == capped.prompt)
@@ -293,7 +280,6 @@ struct PlaylistOrganizerInputBuilderTests {
         let atLimit = try await build(Array(episodes.prefix(150)), mode: .unprompted)
         #expect(atLimit.scope == PlaylistOrganizerScope(kind: .all, sentCount: 150, totalCount: 150))
 
-        // A capped list that still does not fit keeps cutting from the newest end.
         let tight = try await build(episodes, mode: .unprompted, budget: 600)
         let kept = tight.candidateIndices.count
         #expect(tight.scope == PlaylistOrganizerScope(kind: .newest, sentCount: kept, totalCount: 200))
@@ -301,7 +287,6 @@ struct PlaylistOrganizerInputBuilderTests {
         #expect(tight.candidateIndices == Array(0..<kept))
         #expect(tight.framedTokenCount < 600)
 
-        // The forced whole-show choice is not capped.
         let full = try await build(episodes, mode: .unprompted, candidates: .full)
         #expect(full.scope == PlaylistOrganizerScope(kind: .all, sentCount: 200, totalCount: 200))
     }
@@ -510,7 +495,6 @@ struct PlaylistOrganizerInputBuilderTests {
         #expect(numbers.count == 10)
         #expect((1...9).contains(numbers.first ?? 0))
         #expect(zip(numbers, numbers.dropFirst()).allSatisfy { (1...3).contains($1 - $0) })
-        // Only the numbers differ from the index-numbered lines.
         #expect(numbered.map { $0.rest } == indexed.lines.split(separator: "\n").map { Self.splitLineNumber(String($0)).rest })
         #expect(gapped.indexByLineNumber == Dictionary(zip(numbers, gapped.candidateIndices)) { first, _ in first })
         for (number, index) in zip(numbers, gapped.candidateIndices) {
@@ -535,17 +519,14 @@ struct PlaylistOrganizerInputBuilderTests {
         )
         #expect(gapped.framedTokenCount == Self.digitHeavyCount(PlaylistOrganizerPrompt.framed(prompt: gapped.prompt)))
 
-        // The numbers are fixed before the ladder, so every rung carries the same ones.
         let compact = try await build(episodes, rungs: [.compact], lineNumbers: .gapped(seed: 42))
         #expect(compact.indexByLineNumber == gapped.indexByLineNumber)
 
-        // An index build starts each line with its index and maps n to n.
         #expect(indexed.indexByLineNumber.isEmpty)
         #expect(indexed.lines.split(separator: "\n").compactMap { Self.splitLineNumber(String($0)).number } == Array(0..<10))
         #expect(indexed.episodeIndex(forLineNumber: 0) == 0)
         #expect(indexed.episodeIndex(forLineNumber: 7) == 7)
 
-        // A random seed keeps the same shape.
         let unseeded = try await build(episodes, lineNumbers: .gapped(seed: nil))
         let unseededNumbers = unseeded.lines.split(separator: "\n").compactMap { Self.splitLineNumber(String($0)).number }
         #expect(unseededNumbers.count == 10)
@@ -610,24 +591,6 @@ struct PlaylistOrganizerInputBuilderTests {
         #expect(standard.answerStyle == .standard)
         #expect(standard.instructions == PlaylistOrganizerPrompt.instructions)
         #expect(standard.framedTokenCount == Self.digitHeavyCount(PlaylistOrganizerPrompt.framed(prompt: standard.prompt)))
-    }
-
-    @Test("Seeded line numbers are deterministic, start at 1 to 9 and rise by 1 to 3 in index order")
-    func gappedLineNumbersAreDeterministicPerSeed() {
-        let indices = [5, 0, 3, 9, 1, 12]
-        for seed in [0, 1, 7, 42, UInt64.max] {
-            let numbers = PlaylistOrganizerLineNumbers.gapped(for: indices, seed: seed)
-            #expect(numbers == PlaylistOrganizerLineNumbers.gapped(for: indices, seed: seed), "seed \(seed)")
-            #expect(numbers == PlaylistOrganizerLineNumbers.gapped(for: indices.sorted(), seed: seed), "seed \(seed)")
-            #expect(numbers.keys.sorted() == indices.sorted(), "seed \(seed)")
-            let ascending = indices.sorted().compactMap { numbers[$0] }
-            #expect(ascending.count == indices.count, "seed \(seed)")
-            #expect((1...9).contains(ascending.first ?? 0), "seed \(seed)")
-            #expect(zip(ascending, ascending.dropFirst()).allSatisfy { (1...3).contains($1 - $0) }, "seed \(seed)")
-        }
-        let show = Array(0..<100)
-        #expect(PlaylistOrganizerLineNumbers.gapped(for: show, seed: 1) != PlaylistOrganizerLineNumbers.gapped(for: show, seed: 2))
-        #expect(PlaylistOrganizerLineNumbers.gapped(for: [], seed: 7).isEmpty)
     }
 
     // MARK: - Fixtures

@@ -1,8 +1,3 @@
-/// Server acknowledgement for a redeemed transaction. Every case is safe to
-/// finish against: `credited` and `alreadyCredited` mean the seconds are
-/// durably on the account; `refunded` means Apple revoked the purchase and
-/// no credit is owed. Unknown future outcomes are preserved and must NOT be
-/// finished (fail closed).
 public enum OpenCastRemoteTranscriptionRedeemOutcome: Sendable, Equatable, Hashable {
     case credited
     case alreadyCredited

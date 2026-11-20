@@ -1,13 +1,8 @@
 import Foundation
 import SwiftData
 
-/// The only spelling of a synced-store save. The save and the arbiter credit
-/// are one call, so a synced write cannot land without the credit that lets
-/// `SyncedStoreRemoteChangeArbiter` swallow the notification it round-trips
-/// (one credit per save). Saves that touch only the local store must not
-/// come through here: a credit with no matching synced-store notification
-/// swallows the next genuine remote change until the foreground backstop
-/// refresh, so in DEBUG the ledger asserts that a synced row is dirty.
+/// Every synced-store save goes through here, and nothing else does: a credit without a
+/// matching synced-store notification swallows the next genuine remote change.
 final class SyncedStoreSelfSaveLedger {
     private(set) var count = 0
     private let performSave: (ModelContext) throws -> Void

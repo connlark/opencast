@@ -1,12 +1,5 @@
 import SwiftUI
 
-/// The top of a playlist's detail screen: the cover, the name, a meta line,
-/// how much there is to hear, and Play. A manual playlist says when it last
-/// changed and puts Shuffle beside Play. A smart playlist wears its tint,
-/// shows its rule chips under the count line (or a footnote when the rule
-/// came from a newer version of the app) and has Play alone. With episodes
-/// already in Up Next, Play and Shuffle first ask whether to replace the
-/// queue or add the playlist after it.
 struct PlaylistHeroHeader: View {
     private static let coverSide = 160.0
 
@@ -19,14 +12,12 @@ struct PlaylistHeroHeader: View {
     let summary: PlaylistSummary
     let itemCount: Int
     let totalDuration: TimeInterval
-    /// Manual playlists only. A smart playlist passes nil so its line never
-    /// becomes "unplayed of": its rule already decides what it lists.
     let counts: PlaylistCounts?
     let sources: PlaylistCoverSources
     let primaryAction: PlaylistPrimaryAction
     let canPlay: Bool
     let onPlay: (PlaylistPlayMode) -> Void
-    /// Nil hides Shuffle: a smart playlist's rule decides its order.
+    /// Nil hides Shuffle.
     var onShuffle: ((PlaylistPlayMode) -> Void)?
     var onRuleChange: (PlaylistRule) -> Void = { _ in }
 

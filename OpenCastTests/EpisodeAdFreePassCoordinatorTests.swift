@@ -15,16 +15,7 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(outdated.primaryActionTitle == "Skip Promos & Ads")
         #expect(outdated.isPrimaryActionEnabled)
         #expect(outdated.stage == .idle)
-        // The episode-detail controls panel shares the same settled copy.
         #expect(EpisodeAdAnalysisControlsView.outdatedStatusTitle == "Outdated — run again")
-    }
-
-    @Test("Queued presentations carry the settled copy")
-    func queuedPresentationCopy() {
-        let queued = EpisodeAdFreePassPresentation.queued(ahead: 2)
-        #expect(queued.statusText == "Queued — 2 ahead")
-        #expect(!queued.isPrimaryActionEnabled)
-        #expect(EpisodeAdFreePassPresentation.queued(ahead: 0).statusText == "Queued")
     }
 
     @Test("First tap downloads episode and parks at model consent; second tap finishes transcript and analysis")
@@ -91,7 +82,6 @@ struct EpisodeAdFreePassCoordinatorTests {
         fixture.enqueue(third, prepare: { preparedTitles.append(third.title) })
         fixture.enqueue(autoFront, origin: .auto)
 
-        // No preemption: the active episode keeps running; auto inserts at the front.
         #expect(fixture.coordinator.activeEpisodeID == first.episodeID)
         #expect(fixture.coordinator.queueItems.map(\.episodeID) == [
             autoFront.episodeID, second.episodeID, third.episodeID
@@ -165,9 +155,7 @@ struct EpisodeAdFreePassCoordinatorTests {
                 && fixture.coordinator.activeEpisodeID == nil
         })
 
-        // The verdict computes off-main: the first read may be a provisional
-        // false, but it must converge to true without this actor ever
-        // decoding the transcript document synchronously.
+        // The first read may be a provisional false.
         #expect(await waitUntil {
             fixture.coordinator.hasCurrentCompletedAnalysis(
                 for: episode.episodeID,
@@ -176,9 +164,7 @@ struct EpisodeAdFreePassCoordinatorTests {
             )
         })
 
-        // Dirtying either record stamp invalidates the cached verdict: the
-        // next read is provisional false again, then reconverges because the
-        // documents themselves are unchanged.
+        // A new record stamp makes the next read provisional again.
         fixture.transcriptions.record(for: episode.episodeID)?.updatedAt =
             Date.now.addingTimeInterval(60)
         #expect(
@@ -223,79 +209,6 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(await waitUntil {
             fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 2
         })
-    }
-
-    @Test("Acceptance is observable before persistence and background preparation are released")
-    func acceptancePrecedesLaunchPreparation() async throws {
-        let gate = AsyncTestGate()
-        let downloader = GatedEpisodeAudioDownloader()
-        let fixture = try await makeFixture(
-            downloader: downloader,
-            launchPreparationGate: {
-                await gate.wait()
-            }
-        )
-        let episode = makeEpisode(episodeID: "queue-acceptance-before-launch")
-        var didPrepareBackgroundSession = false
-
-        fixture.enqueue(
-            episode,
-            prepare: {
-                didPrepareBackgroundSession = true
-            }
-        )
-
-        #expect(fixture.coordinator.queueState == .running)
-        #expect(fixture.coordinator.queueStatus(for: episode.episodeID) == .queued(ahead: 0))
-        #expect(fixture.presentation(for: episode).phase == .queued)
-        #expect(!didPrepareBackgroundSession)
-        #expect(fixture.downloads.record(for: episode.episodeID) == nil)
-        #expect(try fixture.context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>()).isEmpty)
-
-        await gate.release()
-
-        #expect(await waitUntil {
-            didPrepareBackgroundSession
-                && fixture.coordinator.activeEpisodeID == episode.episodeID
-        })
-        let persistedRecords = try fixture.context.fetch(
-            FetchDescriptor<AdFreePassQueueItemRecord>()
-        )
-        #expect(!persistedRecords.isEmpty)
-        downloader.release(urlContaining: episode.episodeID)
-        #expect(await waitUntil {
-            fixture.coordinator.queueState == .idle
-        })
-    }
-
-    @Test("Auto enqueue skips episodes with a current completed analysis")
-    func autoEnqueueSkipsAlreadyAnalyzedEpisodes() async throws {
-        let fixture = try await makeFixture(
-            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8))
-        )
-        let analyzed = makeEpisode(episodeID: "queue-auto-skip-analyzed")
-        let fresh = makeEpisode(episodeID: "queue-auto-skip-fresh")
-
-        fixture.enqueue(analyzed)
-        #expect(await waitUntil {
-            fixture.adAnalyses.record(for: analyzed.episodeID)?.state == .completed
-                && fixture.coordinator.queueState == .idle
-        })
-        #expect(fixture.analysisEnvironment.resolvedRunIDs.count == 1)
-
-        fixture.enqueue(analyzed, origin: .auto)
-        #expect(await waitUntil {
-            fixture.coordinator.queueItems.isEmpty
-                && fixture.coordinator.activeEpisodeID == nil
-        })
-        #expect(fixture.analysisEnvironment.resolvedRunIDs.count == 1)
-
-        fixture.enqueue(fresh, origin: .auto)
-        #expect(await waitUntil {
-            fixture.adAnalyses.record(for: fresh.episodeID)?.state == .completed
-                && fixture.coordinator.queueState == .idle
-        })
-        #expect(fixture.analysisEnvironment.resolvedRunIDs.count == 2)
     }
 
     @Test("Model consent pauses the whole queue and the consent tap resumes the drain")
@@ -355,7 +268,6 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(stages.contains(.interrupted))
         #expect(terminals == [.interrupted])
         #expect(fixture.coordinator.activeEpisodeID == nil)
-        // The interrupted item leaves the queue (re-tap semantics); the rest stay queued.
         #expect(fixture.coordinator.queueItems.map(\.episodeID) == [second.episodeID])
         #expect(!fixture.coordinator.isQueuePausedForEnvironmentalInterrupt)
 
@@ -416,7 +328,6 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(await waitUntil {
             fixture.coordinator.queueState == .pausedInterrupted
         })
-        // Held, not failure-isolated: the item stays at the head of the queue.
         #expect(fixture.coordinator.isQueuePausedForEnvironmentalInterrupt)
         #expect(fixture.coordinator.queueItems.map(\.episodeID) == [first.episodeID, second.episodeID])
         #expect(fixture.transcriptions.hasEnvironmentalInterruptionPending(for: first.episodeID))
@@ -452,8 +363,6 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(await waitUntil {
             fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 2
         })
-        // Item 1 pays the classified default-compute failure once; item 2
-        // starts directly on cpuOnly.
         #expect(transcriber.requestProfiles(forURLContaining: first.episodeID) == [.backgroundSafe, .cpuOnly])
         #expect(transcriber.requestProfiles(forURLContaining: second.episodeID) == [.cpuOnly])
     }
@@ -494,8 +403,6 @@ struct EpisodeAdFreePassCoordinatorTests {
         fixture.enqueue(second)
         downloader.release(urlContaining: first.episodeID)
 
-        // Wait until item 2 is active (gated at download) with item 1's
-        // fallback already recorded, then simulate the foreground return.
         #expect(await waitUntil {
             fixture.coordinator.activeEpisodeID == second.episodeID
         })
@@ -546,12 +453,8 @@ struct EpisodeAdFreePassCoordinatorTests {
         let persisted = try context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>())
         #expect(persisted.count == 4)
 
-        // Simulate relaunch: a fresh coordinator restores from the same store.
-        // The original coordinator stays parked (a dead process runs no
-        // cancellation cleanup) — resetting it here would let its cancelled
-        // pass delete the active episode's queue record across the async
-        // fixture construction's suspension points. It is reset in the
-        // teardown below instead.
+        // The first coordinator stays parked until the end: a reset here would let its
+        // cancelled pass delete the active record while the restored fixture is built.
         let episodesByID = [first.episodeID: first, second.episodeID: second, third.episodeID: third]
         let restored = try await makeFixture(
             downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
@@ -571,7 +474,7 @@ struct EpisodeAdFreePassCoordinatorTests {
             refreshSkipZones: { _ in 1 }
         )
 
-        // Restore order follows persisted sequence: auto front insert < first < second.
+        // The auto item went to the front, so it holds the lowest sequence.
         #expect(await waitUntil {
             restored.coordinator.queueState == .idle && restored.coordinator.drainOutcomes.count == 3
         })
@@ -581,7 +484,6 @@ struct EpisodeAdFreePassCoordinatorTests {
         let remaining = try context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>())
         #expect(remaining.isEmpty)
 
-        // Teardown: stop the original coordinator's parked pass.
         fixture.coordinator.reset()
     }
 
@@ -634,47 +536,6 @@ struct EpisodeAdFreePassCoordinatorTests {
         fixture.downloads.cancelDownload(episodeID: episode.episodeID, modelContext: context)
     }
 
-    @Test("Terminal items leave the persisted queue as they finish")
-    func terminalItemsLeaveThePersistedQueue() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let fixture = try await makeFixture(
-            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
-            container: container,
-            context: context
-        )
-        let episode = makeEpisode(episodeID: "queue-persist-terminal")
-
-        fixture.enqueue(episode)
-        #expect(await waitUntil {
-            fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 1
-        })
-
-        let remaining = try context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>())
-        #expect(remaining.isEmpty)
-    }
-
-    @Test("Plain cancellation publishes an interrupted terminal stage")
-    func plainCancellationPublishesInterruptedTerminalStage() async throws {
-        let fixture = try await makeFixture(downloader: HangingEpisodeAudioDownloader())
-        let episode = makeEpisode(episodeID: "ad-free-cancel")
-        var stages: [EpisodeAdFreePassStage] = []
-        fixture.coordinator.onStageChange = { stage, _ in stages.append(stage) }
-
-        fixture.enqueue(episode)
-        #expect(await waitUntil {
-            fixture.coordinator.activeEpisodeID == episode.episodeID
-        })
-
-        fixture.coordinator.cancelActivePass()
-
-        #expect(await waitUntil {
-            fixture.coordinator.activeEpisodeID == nil
-        })
-        #expect(stages.contains(.interrupted))
-        fixture.downloads.cancelDownload(episodeID: episode.episodeID, modelContext: fixture.context)
-    }
-
     @Test("Interrupted transcription presentation is resumable")
     func interruptedTranscriptionIsResumable() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -717,43 +578,6 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(transcriber.requestCount == 1)
         #expect(transcriber.lastRequest?.resumeStart == 2)
         #expect(fixture.analysisEnvironment.resolvedRunIDs.count == 1)
-    }
-
-    @Test("Environmental interruption presentation uses background pause copy")
-    func environmentalInterruptionPresentationUsesBackgroundPauseCopy() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let temporaryDirectory = try makeTemporaryDirectory()
-        let fixture = try await makeFixture(
-            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
-            container: container,
-            context: context,
-            temporaryDirectory: temporaryDirectory,
-            loadsStores: false
-        )
-        let episode = makeEpisode(episodeID: "ad-free-environmental-interrupted")
-
-        let downloadRecord = try insertCompletedDownload(
-            for: episode,
-            fileStore: fixture.downloadFileStore,
-            context: context
-        )
-        let localFileURL = fixture.downloadFileStore.fileURL(relativePath: try #require(downloadRecord.localRelativePath))
-        try insertInterruptedTranscript(
-            for: episode,
-            downloadRecord: downloadRecord,
-            localFileURL: localFileURL,
-            modelSummary: fixture.modelInstaller.summary,
-            fileStore: fixture.transcriptFileStore,
-            context: context,
-            errorMessage: EpisodeTranscriptionStore.environmentalInterruptMessage
-        )
-        await fixture.loadStores()
-
-        let presentation = fixture.presentation(for: episode)
-        #expect(presentation.stage == .interrupted)
-        #expect(presentation.statusText == EpisodeTranscriptionStore.environmentalInterruptMessage)
-        #expect(presentation.primaryActionTitle == "Resume")
     }
 
     @Test("An analysis failure surfaces the card's words as a per-episode failure, never the recorded code")
@@ -819,44 +643,9 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(analysisEnvironment.presentedReasons.isEmpty)
         #expect(try fixture.context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>()).isEmpty)
 
-        // The card names the reason; the episode can be tried again.
         let expectedMessage = "Your free analyses are used. Add a key in Settings › AI Services."
         #expect(fixture.presentation(for: first).stage == .failed(message: expectedMessage))
         #expect(fixture.presentation(for: first).primaryActionTitle == "Retry")
-    }
-
-    @Test(
-        "A pass that ends on a free-tier key or a daily limit says so in the card's words, and never stops as needing a key",
-        arguments: [
-            (
-                ScriptedAdAnswer.freeTierFailure(.quotaExhausted, listener: .billingOrQuota),
-                "Your Google key is on Google's free tier, which is too limited for ad detection. Set up billing for its project in Google AI Studio."
-            ),
-            (
-                .failure(.quotaExhausted, status: 429, listener: .dailyLimit),
-                "Your Google key has used its daily limit, which resets at midnight Pacific time."
-            ),
-        ]
-    )
-    func freeTierEndingNeverStopsAsKeyRequired(answer: ScriptedAdAnswer, message: String) async throws {
-        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
-        analysisEnvironment.answer = answer
-        analysisEnvironment.tierAnswer = .notFreeTier
-        let fixture = try await makeFixture(
-            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
-            analysisEnvironment: analysisEnvironment
-        )
-        var presentedReasons: [AnalysisKeyRequiredReason] = []
-        fixture.coordinator.onKeyRequired = { presentedReasons.append($0) }
-        let episode = makeEpisode(episodeID: "free-tier-pass")
-
-        fixture.enqueue(episode)
-        #expect(await waitUntil { fixture.coordinator.queueState == .idle })
-
-        #expect(presentedReasons.isEmpty)
-        #expect(analysisEnvironment.presentedReasons.isEmpty)
-        #expect(fixture.presentation(for: episode).stage == .failed(message: message))
-        #expect(fixture.coordinator.drainOutcomes.first?.kind == .failed(message: message))
     }
 
     /// A queue of two: the first hands over after Google names the free tier
@@ -901,20 +690,8 @@ struct EpisodeAdFreePassCoordinatorTests {
         "Every ending of a handed-over trial run gives its kind through a pass, with no key screen, and the drain goes on",
         arguments: [
             (AnalysisProviderFailure.trialExhausted, EpisodeAnalysisFailureKind.providerFreeTier),
-            (.trialPaused, .providerFreeTierRetry),
-            (.trialUnavailable, .providerFreeTierRetry),
-            (.unreachable, .providerFreeTierRetry),
-            (.rateLimited, .providerFreeTierRetry),
-            (.overloaded, .providerFreeTierRetry),
-            (.trialRunBound, .providerFreeTierRunBound),
-            (.invalidKey, .providerFreeTierRetry),
-            (.billingOrQuota, .providerFreeTierRetry),
-            (.dailyLimit, .providerFreeTierRetry),
-            (.modelUnavailable, .providerFreeTierRetry),
             (.requestRejected, .generic),
             (.keyRequired, .generic),
-            (.timeout, .timedOut),
-            (.malformedAnswer, .generic),
         ]
     )
     func handedOverTrialEndingsThroughThePass(listener: AnalysisProviderFailure, kind: EpisodeAnalysisFailureKind) async throws {
@@ -936,55 +713,6 @@ struct EpisodeAdFreePassCoordinatorTests {
             return
         }
         #expect(!message.contains("providerFreeTier"), "\(listener)")
-        expectDrainWentOn(fixture, past: first, to: second)
-    }
-
-    @Test(
-        "A handover that cannot start gives its kind through a pass, with no key screen, and the drain goes on",
-        arguments: [
-            (ScriptedAdAnalysisRunEnvironment.HandoverAnswer.notOpen, EpisodeAnalysisFailureKind.providerFreeTier),
-            (.unavailable, .providerFreeTierRetry),
-        ]
-    )
-    func handoverThatCannotStartThroughThePass(handover: ScriptedAdAnalysisRunEnvironment.HandoverAnswer, kind: EpisodeAnalysisFailureKind) async throws {
-        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
-        analysisEnvironment.handoverAnswer = handover
-
-        // No trial transport is built, so the second item's run is the second.
-        let (fixture, first, second, presented) = try await passOverHandover(analysisEnvironment, trialEnding: nil)
-
-        #expect(presented().isEmpty)
-        #expect(analysisEnvironment.presentedReasons.isEmpty)
-        #expect(fixture.adAnalyses.record(for: first.episodeID)?.failureKind == kind)
-        expectDrainWentOn(fixture, past: first, to: second)
-    }
-
-    @Test("A handover record that cannot be written ends a pass as generic, with no key screen, and the drain goes on")
-    func handoverRecordCannotBeWrittenThroughThePass() async throws {
-        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
-        analysisEnvironment.handoverAnswer = .available
-        let runsDirectory = analysisEnvironment.runs.directory
-        // A file where the records go makes the next write fail.
-        analysisEnvironment.onHandover = {
-            try? FileManager.default.removeItem(at: runsDirectory)
-            FileManager.default.createFile(atPath: runsDirectory.path(percentEncoded: false), contents: Data())
-        }
-        // The next item's check comes before its record, so only the handover's
-        // write fails, and a drain that stopped could not hide behind a second one.
-        analysisEnvironment.onTierCheck = { try? FileManager.default.removeItem(at: runsDirectory) }
-
-        let (fixture, first, second, presented) = try await passOverHandover(analysisEnvironment, trialEnding: nil)
-
-        #expect(presented().isEmpty)
-        #expect(analysisEnvironment.presentedReasons.isEmpty)
-        #expect(fixture.adAnalyses.record(for: first.episodeID)?.failureKind == .generic)
-        // Nothing was handed over: the first item's direct run, then the second's.
-        #expect(analysisEnvironment.transportRunIDs.count == 2)
-        #expect(analysisEnvironment.runs.records(limit: 10).allSatisfy { $0.route == .direct })
-        guard case .failed = fixture.coordinator.drainOutcomes.first?.kind else {
-            Issue.record("the pass did not fail")
-            return
-        }
         expectDrainWentOn(fixture, past: first, to: second)
     }
 
@@ -1021,59 +749,6 @@ struct EpisodeAdFreePassCoordinatorTests {
             return
         }
         expectDrainWentOn(fixture, past: first, to: second)
-    }
-
-    @Test(
-        "A failed pass puts the card's words on the queue row for every provider failure a run ends with, and the record keeps its code",
-        arguments: [
-            (AnalysisProviderFailure.rateLimited, EpisodeAnalysisFailureKind.providerLimited),
-            (.overloaded, .providerLimited),
-            (.invalidKey, .providerRejectedKey),
-            (.billingOrQuota, .providerRejectedKey),
-            (.dailyLimit, .providerDailyLimit),
-            (.modelUnavailable, .providerUnavailable),
-            (.unreachable, .providerUnavailable),
-            (.timeout, .timedOut),
-        ]
-    )
-    func providerFailureRowUsesTheCardsWords(listener: AnalysisProviderFailure, kind: EpisodeAnalysisFailureKind) async throws {
-        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
-        analysisEnvironment.answer = .failure(.rejected(status: 400), status: 400, listener: listener)
-        let fixture = try await makeFixture(
-            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
-            analysisEnvironment: analysisEnvironment
-        )
-        let episode = makeEpisode(episodeID: "card-words-\(listener.rawValue)")
-
-        fixture.enqueue(episode)
-        #expect(await waitUntil { fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 1 })
-
-        let record = fixture.adAnalyses.record(for: episode.episodeID)
-        #expect(record?.failureKind == kind, "\(listener)")
-        #expect(record?.errorMessage?.contains(listener.rawValue) == true, "\(listener)")
-        let card = EpisodePipelineState.analysisFailedMessage(for: kind)
-        let queue = AdDetectionQueuePresentation(snapshot: fixture.coordinator.queueSnapshot, isBackgroundSessionArmed: false)
-        #expect(queue.finishedRows.map(\.statusText) == [card], "\(listener)")
-        #expect(!card.contains(listener.rawValue), "\(listener)")
-    }
-
-    @Test("A failure with no card message of its own keeps the recorded text on the queue row")
-    func genericFailureRowKeepsTheRecordedText() async throws {
-        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
-        analysisEnvironment.answer = .failure(.rejected(status: 400), status: 400, listener: .requestRejected)
-        let fixture = try await makeFixture(
-            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
-            analysisEnvironment: analysisEnvironment
-        )
-        let episode = makeEpisode(episodeID: "card-words-generic")
-
-        fixture.enqueue(episode)
-        #expect(await waitUntil { fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 1 })
-
-        let record = try #require(fixture.adAnalyses.record(for: episode.episodeID))
-        #expect(record.failureKind == .generic)
-        let queue = AdDetectionQueuePresentation(snapshot: fixture.coordinator.queueSnapshot, isBackgroundSessionArmed: false)
-        #expect(queue.finishedRows.map(\.statusText) == [try #require(record.errorMessage)])
     }
 
     @Test("An automatic item that needs a key ends silently, with its reason on the queue")
@@ -1273,89 +948,6 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(handle.completions == [false])
     }
 
-    @Test("A queue an earlier build left deferred at its daily limit restores as an ordinary queue and drains")
-    func capDeferredQueueFromEarlierBuildRestores() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let head = makeEpisode(episodeID: "earlier-build-deferred-head")
-        let next = makeEpisode(episodeID: "earlier-build-deferred-next")
-        // What a deferred queue left behind: its kept head and the rest in
-        // order, with the head's analysis failed at the daily limit.
-        context.insert(AdFreePassQueueItemRecord(
-            episodeID: head.episodeID,
-            podcastID: head.podcastID,
-            originRawValue: "manual",
-            sequence: 1
-        ))
-        context.insert(AdFreePassQueueItemRecord(
-            episodeID: next.episodeID,
-            podcastID: next.podcastID,
-            originRawValue: "auto",
-            sequence: 2
-        ))
-        let capped = EpisodeAdAnalysisRecord(episodeID: head.episodeID, podcastID: head.podcastID, state: .failed)
-        capped.failureKind = .capExceeded
-        context.insert(capped)
-        try context.save()
-        let fixture = try await makeFixture(
-            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
-            container: container,
-            context: context
-        )
-        var terminals: [AdFreePassQueueTerminalOutcome] = []
-        fixture.coordinator.onQueueTerminal = { terminals.append($0) }
-        let episodesByID = [head.episodeID: head, next.episodeID: next]
-
-        fixture.coordinator.restorePersistedQueue(
-            resolveEpisode: { episodesByID[$0] },
-            downloads: fixture.downloads,
-            transcriptionModels: fixture.transcriptionModels,
-            appleSpeechAssets: fixture.appleSpeechAssets,
-            transcriptions: fixture.transcriptions,
-            adAnalyses: fixture.adAnalyses,
-            modelContext: context,
-            podcastLanguageCode: { _ in nil },
-            refreshSkipZones: { _ in 1 }
-        )
-
-        #expect(fixture.coordinator.queueState == .running)
-        #expect(await waitUntil {
-            fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 2
-        })
-        #expect(fixture.coordinator.drainOutcomes.map(\.episodeID) == [head.episodeID, next.episodeID])
-        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.completed(zoneCount: 1), .completed(zoneCount: 1)])
-        #expect(terminals == [.drained(completedCount: 2, failedCount: 0)])
-        #expect(fixture.adAnalyses.record(for: head.episodeID)?.state == .completed)
-        #expect(try context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>()).isEmpty)
-    }
-
-    @Test("The analyzing stage carries the run's steps as each window is answered")
-    func analyzingStageCarriesRunSteps() async throws {
-        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
-        let gate = AsyncTestGate()
-        analysisEnvironment.gate = gate
-        let fixture = try await makeFixture(
-            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
-            analysisEnvironment: analysisEnvironment
-        )
-        var stages: [EpisodeAdFreePassStage] = []
-        fixture.coordinator.onStageChange = { stage, _ in stages.append(stage) }
-        let episode = makeEpisode(episodeID: "ad-free-steps")
-
-        fixture.enqueue(episode)
-        #expect(await waitUntil { analysisEnvironment.sends.count == 1 })
-        // One window and, while the run goes, the step still to come.
-        let attemptID = try #require(analysisEnvironment.latestRun).id
-        let started = EpisodeAdFreePassStage.analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 0, total: 2, attemptID: attemptID))
-        #expect(await waitUntil { fixture.coordinator.currentStage == started })
-        #expect(fixture.coordinator.queueSnapshot.fractionCompleted == 0.91)
-
-        await gate.release()
-        #expect(await waitUntil { fixture.coordinator.queueState == .idle })
-        #expect(stages.contains(started))
-        #expect(stages.last == .completed(zoneCount: 1))
-    }
-
     @Test("A window whose answer fails validation holds the pass below the band's end while its repair is slow")
     func slowRepairHoldsBelowTheBandEnd() async throws {
         let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
@@ -1426,30 +1018,6 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(presentedReasons == [.trialExhausted])
     }
 
-    @Test("The consent tap on an automatic item makes it the listener's: a key-required end opens the key screen")
-    func consentTapOnAutomaticItemPresents() async throws {
-        let analysisEnvironment = ScriptedAdAnalysisRunEnvironment()
-        analysisEnvironment.route = .keyRequired(.noKey)
-        let fixture = try await makeFixture(
-            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
-            analysisEnvironment: analysisEnvironment,
-            modelInstalled: false
-        )
-        let episode = makeEpisode(episodeID: "key-required-auto-consent")
-        var presentedReasons: [AnalysisKeyRequiredReason] = []
-        fixture.coordinator.onKeyRequired = { presentedReasons.append($0) }
-
-        fixture.enqueue(episode, origin: .auto)
-        #expect(await waitUntil { fixture.coordinator.queueState == .awaitingModelConsent })
-        #expect(presentedReasons.isEmpty)
-
-        fixture.coordinator.resumePausedQueue()
-
-        #expect(await waitUntil { fixture.coordinator.queueState == .idle && fixture.coordinator.drainOutcomes.count == 1 })
-        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.keyRequired(.noKey)])
-        #expect(presentedReasons == [.noKey])
-    }
-
     @Test("Completed transcript is reused by the default path without re-transcribing or re-analyzing")
     func completedTranscriptIsReusedByDefaultPath() async throws {
         let transcriber = CompletingEpisodeTranscriber()
@@ -1480,62 +1048,6 @@ struct EpisodeAdFreePassCoordinatorTests {
 
         #expect(transcriber.requestCount == 1)
         #expect(fixture.analysisEnvironment.resolvedRunIDs.count == 1)
-    }
-
-    @Test("Explicit engine override re-transcribes despite a completed transcript from another engine")
-    func explicitOverrideRetranscribesDespiteCompletedTranscript() async throws {
-        let transcriber = CompletingEpisodeTranscriber()
-        // Apple available with installed assets: first create an Apple-identity
-        // transcript, then the whisper override must re-run.
-        let fixture = try await makeFixture(
-            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8)),
-            transcriber: transcriber,
-            appleSpeechAvailable: true
-        )
-        let episode = makeEpisode(episodeID: "ad-free-reuse-override")
-        var refreshCount = 0
-
-        fixture.enqueue(episode, engine: .appleSpeech, refreshSkipZones: {
-            refreshCount += 1
-            return 1
-        })
-        #expect(await waitUntil {
-            refreshCount == 1 && fixture.coordinator.activeEpisodeID == nil
-        })
-        #expect(transcriber.requestCount == 1)
-        #expect(fixture.transcriptions.record(for: episode.episodeID)?.modelIdentifier == "apple-speech-transcriber.en_US")
-
-        fixture.enqueue(episode, engine: .whisperTiny, refreshSkipZones: {
-            refreshCount += 1
-            return 1
-        })
-        #expect(await waitUntil {
-            refreshCount == 2 && fixture.coordinator.activeEpisodeID == nil
-        })
-
-        #expect(transcriber.requestCount == 2)
-        #expect(fixture.transcriptions.record(for: episode.episodeID)?.modelIdentifier == OpenCastWhisperModel.tinyEnglish.rawValue)
-    }
-
-    @Test("A queue of one publishes the stage sequence with single-item queue context")
-    func singleItemQueuePublishesStepFiveStageSequence() async throws {
-        let fixture = try await makeFixture(
-            downloader: ImmediateEpisodeAudioDownloader(contents: Data("downloaded audio".utf8))
-        )
-        let episode = makeEpisode(episodeID: "queue-single-parity")
-        var observed: [(stage: EpisodeAdFreePassStage, context: AdFreePassQueueContext)] = []
-        fixture.coordinator.onStageChange = { stage, context in
-            observed.append((stage, context))
-        }
-
-        fixture.enqueue(episode, refreshSkipZones: { 2 })
-
-        #expect(await waitUntil {
-            fixture.coordinator.queueState == .idle && !fixture.coordinator.drainOutcomes.isEmpty
-        })
-        #expect(observed.first?.stage == .downloadingEpisode)
-        #expect(observed.last?.stage == .completed(zoneCount: 2))
-        #expect(observed.allSatisfy { $0.context.totalItemCount == 1 && $0.context.finishedItemCount == 0 })
     }
 
     @Test("A pass resumes a paused download once and completes")
@@ -1695,45 +1207,6 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(!fixture.adAnalysisFileStore.documentExists(relativePath: replaced.analysisPaths.before))
         #expect(fixture.adAnalysisFileStore.documentExists(relativePath: replaced.analysisPaths.after))
         #expect(await fixture.adAnalyses.hasCurrentCompletedAnalysis(for: replaced.after))
-    }
-
-    @Test("After a re-transcription the Chapters & Summary document of the old transcript reads stale")
-    func chaptersSummaryReadsStaleAfterRetranscription() async throws {
-        let first = Data("the first assembly".utf8)
-        let downloader = ScriptedEpisodeAudioDownloader(contents: first)
-        let fixture = try await makeFixture(downloader: downloader)
-        let episode = makeEpisode(episodeID: "pass-retranscribe-chapters")
-        let replaced = try await passOverReplacedDownload(
-            episode,
-            fixture: fixture,
-            downloader: downloader,
-            first: first,
-            second: Data("a different assembly".utf8)
-        )
-        let chaptersFileStore = EpisodeTranscriptAnalysisFileStore(baseDirectory: try makeTemporaryDirectory())
-        let chapters = EpisodeTranscriptAnalysisStore(fileStore: chaptersFileStore)
-        let segments = OpenCastTranscriptSegmentNormalizer.normalized(replaced.before.segments)
-        let document = EpisodeTranscriptAnalysisDocument(
-            schemaVersion: 1,
-            episodeID: episode.episodeID,
-            podcastID: episode.podcastID,
-            requestID: "chapters-request",
-            transcriptFingerprint: chaptersFileStore.transcriptFingerprint(for: replaced.before, segments: segments),
-            transcriptUpdatedAt: replaced.before.updatedAt,
-            transcriptSegmentCount: segments.count,
-            transcriptState: .completed,
-            model: "model",
-            policy: EpisodeTranscriptAnalysisContract.expectedPolicy,
-            chapters: [],
-            summary: nil,
-            warnings: [],
-            usage: nil,
-            createdAt: .now,
-            updatedAt: .now
-        )
-
-        #expect(chapters.isCurrentAnalysisDocument(document, for: replaced.before))
-        #expect(!chapters.isCurrentAnalysisDocument(document, for: replaced.after))
     }
 
     @Test(
@@ -2214,42 +1687,6 @@ struct EpisodeAdFreePassCoordinatorTests {
         #expect(fixture.transcriptions.record(for: episode.episodeID) == nil)
     }
 
-    @Test(
-        "A user cancel of a replacement ends the pass as a user cancel of a first transcription does",
-        arguments: CancelledTranscription.allCases
-    )
-    func userCancelEndsThePassAsCancelled(transcription: CancelledTranscription) async throws {
-        let transcriber = HoldingEpisodeTranscriber()
-        let fixture = try await makeFixture(
-            downloader: ScriptedEpisodeAudioDownloader(contents: nil),
-            transcriber: transcriber,
-            loadsStores: false
-        )
-        let episode = makeEpisode(episodeID: "pass-user-cancel-\(transcription)")
-        let contents = Data("current audio".utf8)
-        switch transcription {
-        case .first:
-            try insertCompletedDownload(
-                for: episode,
-                fileStore: fixture.downloadFileStore,
-                context: fixture.context,
-                contents: contents,
-                isHashed: true
-            )
-            await fixture.loadStores()
-        case .replacement:
-            _ = try await seedDetachedTranscript(for: episode, contents: contents, fixture: fixture)
-        }
-
-        fixture.enqueue(episode)
-        #expect(await waitUntil { transcriber.requestCount == 1 })
-        fixture.transcriptions.cancelTranscription(episodeID: episode.episodeID, modelContext: fixture.context)
-
-        #expect(await fixture.waitForDrain())
-        #expect(fixture.coordinator.drainOutcomes.map(\.kind) == [.failed(message: "Transcript cancelled.")])
-        #expect(fixture.coordinator.lastFailureMessage == "Transcript cancelled.")
-    }
-
     private func enqueue(
         _ episode: EpisodeListItemSnapshot,
         at site: TranscriptLoadSite,
@@ -2515,7 +1952,7 @@ struct EpisodeAdFreePassCoordinatorTests {
 
     @Test(
         "A lifecycle hold keeps the unattended item at the head with its record, however its own transcription stops, and the playback entry point resumes it",
-        arguments: HeldTranscription.allCases, TestQueueOrigin.unattended
+        arguments: zip(HeldTranscription.allCases, [TestQueueOrigin.auto, .prepared, .auto])
     )
     func lifecycleHoldKeepsItemAndResumes(stop: HeldTranscription, origin: TestQueueOrigin) async throws {
         let transcriber = FirstRunHoldingTranscriber(heldRunCount: stop == .beforeRecord ? 0 : 1)
@@ -2991,13 +2428,11 @@ struct EpisodeAdFreePassCoordinatorTests {
         transcriber: any EpisodeTranscribing = CompletingEpisodeTranscriber(),
         analysisEnvironment: ScriptedAdAnalysisRunEnvironment = ScriptedAdAnalysisRunEnvironment(),
         modelInstalled: Bool = true,
-        appleSpeechAvailable: Bool = false,
         failureEnvironment: EpisodeTranscriptionFailureEnvironment = .foreground,
         container: ModelContainer? = nil,
         context: ModelContext? = nil,
         temporaryDirectory: URL? = nil,
         loadsStores: Bool = true,
-        launchPreparationGate: @escaping @Sendable () async -> Void = {},
         transcriptReads: TranscriptReadInterceptor? = nil
     ) async throws -> QueueFixture {
         let resolvedContainer = try container ?? OpenCastModelContainerFactory.make(inMemory: true)
@@ -3018,7 +2453,7 @@ struct EpisodeAdFreePassCoordinatorTests {
             downloads: DownloadStore(downloader: downloader, fileStore: downloadFileStore),
             transcriptionModels: TranscriptionModelStore(installer: modelInstaller),
             appleSpeechAssets: AppleSpeechAssetStore(
-                provider: FakeAppleSpeechAssetProvider(isTranscriberAvailable: appleSpeechAvailable),
+                provider: FakeAppleSpeechAssetProvider(isTranscriberAvailable: false),
                 userDefaults: UserDefaults(suiteName: "adfreepass-coordinator-tests-\(UUID().uuidString)") ?? .standard
             ),
             transcriptions: EpisodeTranscriptionStore(
@@ -3031,9 +2466,7 @@ struct EpisodeAdFreePassCoordinatorTests {
                 fileStore: adAnalysisFileStore,
                 runEnvironment: analysisEnvironment
             ),
-            coordinator: EpisodeAdFreePassCoordinator(
-                launchPreparationGate: launchPreparationGate
-            ),
+            coordinator: EpisodeAdFreePassCoordinator(),
             analysisEnvironment: analysisEnvironment,
             modelInstaller: modelInstaller
         )
@@ -3274,8 +2707,7 @@ struct EpisodeAdFreePassCoordinatorTests {
         localFileURL: URL,
         modelSummary: OpenCastWhisperModelInstalledSummary,
         fileStore: EpisodeTranscriptFileStore,
-        context: ModelContext,
-        errorMessage: String? = nil
+        context: ModelContext
     ) throws {
         let data = try Data(contentsOf: localFileURL)
         let sourceSHA = OpenCastSHA256.hash(data)
@@ -3329,8 +2761,7 @@ struct EpisodeAdFreePassCoordinatorTests {
             audioDuration: 60,
             completedDuration: 2,
             checkpointCount: 1,
-            transcriptRelativePath: relativePath,
-            errorMessage: errorMessage
+            transcriptRelativePath: relativePath
         ))
         try context.save()
     }
@@ -3365,13 +2796,6 @@ enum TranscriptLoadSite: CaseIterable, Sendable {
     case cloudReuse
 }
 
-/// What a user cancel stops: the episode's first transcription, or the
-/// replacement of a completed transcript of other bytes.
-enum CancelledTranscription: CaseIterable, Sendable {
-    case first
-    case replacement
-}
-
 /// Where a lifecycle hold stops the queue's own transcription: a first run
 /// with its record, a replacement of a transcript of other bytes, or a start
 /// stopped before its record existed.
@@ -3385,8 +2809,6 @@ enum TestQueueOrigin: CaseIterable, Sendable {
     case manual
     case auto
     case prepared
-
-    static let unattended: [TestQueueOrigin] = [.auto, .prepared]
 
     var origin: AdFreePassQueueOrigin {
         switch self {

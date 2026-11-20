@@ -1,10 +1,8 @@
 import Foundation
 
 extension OpenCastAppModel {
-    /// The trusted form, for every decision that starts or skips work and
-    /// every surface that enables an action: the download must still be a
-    /// completed, hashed file of its recorded size (one file stat), so a
-    /// file that went missing or drifted mid-session reads detached at once.
+    /// For every decision that starts or skips work and every surface that enables an action: one
+    /// file stat, so a file that went missing or drifted mid-session reads detached at once.
     func isAdAnalysisAttached(for episodeID: String) -> Bool {
         guard let transcriptSourceSHA256 = transcriptions.record(for: episodeID)?.sourceFileSHA256,
               !transcriptSourceSHA256.isEmpty
@@ -17,10 +15,8 @@ extension OpenCastAppModel {
         ) == .attached
     }
 
-    /// The display form, for passive display only: the download record's
-    /// stored state and hash, no I/O. Launch reconciliation keeps a drifted
-    /// or missing file from reading attached here after the next launch;
-    /// within a session only the trusted form sees it.
+    /// Passive display only: no I/O, so a file that went missing or drifted this session still
+    /// reads attached here until the next launch.
     func isAdAnalysisAttachedByRecord(for episodeID: String) -> Bool {
         let downloadRecord = downloads.record(for: episodeID)
         return EpisodeAdAnalysisAttachment.resolve(

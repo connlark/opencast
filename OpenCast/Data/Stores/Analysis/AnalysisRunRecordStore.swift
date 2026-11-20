@@ -3,12 +3,7 @@ import OpenCastAnalysis
 import OpenCastAnalysisProviders
 import Synchronization
 
-/// The run records, one JSON file per run under
-/// `Application Support/AnalysisRuns/<id>.json` (atomic replace, excluded
-/// from backup, sorted keys, ISO 8601 dates), plus each unfinished run's
-/// sidecar of provider replies (`<id>.replies.json`) that a resume answers
-/// windows from. Callable from any isolation: every read and write runs
-/// under one lock, and the files are small.
+/// Callable from any isolation: every read and write runs under one lock, and the files are small.
 nonisolated final class AnalysisRunRecordStore: Sendable {
     static let maximumRecords = 200
     static let retention: TimeInterval = 90 * 24 * 60 * 60
@@ -27,7 +22,6 @@ nonisolated final class AnalysisRunRecordStore: Sendable {
 
     // MARK: Records
 
-    /// Writes a new run's record before its first dispatch.
     func begin(_ record: AnalysisRunRecord) throws {
         try state.withLock { cache in
             var records = loaded(&cache)
@@ -37,13 +31,10 @@ nonisolated final class AnalysisRunRecordStore: Sendable {
         }
     }
 
-    /// The observer a run's transport reports its sends to; each send
-    /// updates the record's windows, tokens and seconds.
     func observer(runID: String) -> any AnalysisProviderSendObserver {
         AnalysisRunRecordSendObserver(store: self, runID: runID)
     }
 
-    /// Ends a run with its outcome.
     func finish(
         runID: String,
         outcome: AnalysisOutcome,
@@ -73,7 +64,6 @@ nonisolated final class AnalysisRunRecordStore: Sendable {
         deleteReplies(runID: runID)
     }
 
-    /// Ends a run the listener or the app stopped.
     func markCancelled(runID: String) {
         update(runID: runID) { record in
             record.state = .cancelled
@@ -83,22 +73,18 @@ nonisolated final class AnalysisRunRecordStore: Sendable {
         deleteReplies(runID: runID)
     }
 
-    /// Marks a run whose card expired; it stays resumable with its replies.
     func markExpired(runID: String) {
         update(runID: runID) { record in
             record.state = .expired
         }
     }
 
-    /// Notes that the run's totals so far are saved in the listener's usage.
     func markUsageRecorded(runID: String) {
         update(runID: runID) { record in
             record.usageRecorded = true
         }
     }
 
-    /// Direct runs of `feature` that ended with tokens their usage never
-    /// saved (the save failed, or the process stopped first), oldest first.
     func unaccountedDirectRuns(feature: AnalysisFeature) -> [AnalysisRunRecord] {
         state.withLock { cache in
             loaded(&cache).values
@@ -115,8 +101,7 @@ nonisolated final class AnalysisRunRecordStore: Sendable {
         state.withLock { cache in loaded(&cache)[id] }
     }
 
-    /// The newest run of `feature` on `episodeID` that may resume
-    /// (`dispatched` or `expired`).
+    /// Includes `expired` runs: both states may resume.
     func latestDispatched(feature: AnalysisFeature, episodeID: String) -> AnalysisRunRecord? {
         state.withLock { cache in
             loaded(&cache).values
@@ -125,10 +110,8 @@ nonisolated final class AnalysisRunRecordStore: Sendable {
         }
     }
 
-    /// Open runs of `feature` that an open handover record took over from.
-    /// A kill after the handover record was written can leave both open, and
-    /// nothing may pick between them by time: `startedAt` persists at ISO
-    /// 8601 precision and a clock change can reorder them.
+    /// A kill after the handover record was written can leave both open. Never pick between them by
+    /// time: `startedAt` persists at ISO 8601 precision and a clock change can reorder them.
     func runsTakenOverByOpenHandovers(feature: AnalysisFeature) -> [String] {
         state.withLock { cache in
             let records = loaded(&cache)
@@ -139,7 +122,6 @@ nonisolated final class AnalysisRunRecordStore: Sendable {
         }
     }
 
-    /// Ends a direct run a handover record already took over from.
     func finishTakenOver(runID: String) {
         update(runID: runID) { record in
             record.state = .failed
@@ -155,23 +137,19 @@ nonisolated final class AnalysisRunRecordStore: Sendable {
         record.state == .dispatched || record.state == .expired
     }
 
-    /// The newest records first.
     func records(limit: Int) -> [AnalysisRunRecord] {
         state.withLock { cache in
             Array(loaded(&cache).values.sorted { $0.startedAt > $1.startedAt }.prefix(max(limit, 0)))
         }
     }
 
-    /// Keeps the newest ``maximumRecords`` records younger than
-    /// ``retention``; called at load.
     func prune() {
         state.withLock { cache in
             cache = pruned(loaded(&cache))
         }
     }
 
-    /// `records` without those past retention, whose files (and sidecars)
-    /// are removed. Runs under the lock.
+    /// Call under the lock; removes the dropped records' files and sidecars.
     private func pruned(_ records: [String: AnalysisRunRecord]) -> [String: AnalysisRunRecord] {
         var kept = records
         let cutoff = now().addingTimeInterval(-Self.retention)
@@ -184,9 +162,7 @@ nonisolated final class AnalysisRunRecordStore: Sendable {
         return kept
     }
 
-    /// Ends a run whose document was installed before the process stopped
-    /// short of `finish`: the run counts as finished and its sidecar goes.
-    /// Does nothing to a run already ended.
+    /// For a run whose document was installed before the process stopped short of `finish`.
     func finishInstalled(runID: String) {
         update(runID: runID) { record in
             guard record.state == .dispatched || record.state == .expired else { return }
@@ -198,7 +174,6 @@ nonisolated final class AnalysisRunRecordStore: Sendable {
         deleteReplies(runID: runID)
     }
 
-    /// Removes every record and sidecar (Delete Data).
     func deleteAll() {
         state.withLock { cache in
             try? FileManager.default.removeItem(at: directory)
@@ -219,16 +194,13 @@ nonisolated final class AnalysisRunRecordStore: Sendable {
 
     // MARK: Replies
 
-    /// The replies an unfinished run kept, keyed by request.
     func replies(runID: String) -> [AnalysisRunReplyKey: AnalysisRunStoredReply] {
         state.withLock { _ in readReplies(runID) ?? [:] }
     }
 
-    /// Keeps one accepted reply for a resume of the same run.
     func saveReply(_ reply: AnalysisRunStoredReply, for key: AnalysisRunReplyKey, runID: String) {
         state.withLock { _ in
-            // A sidecar that exists but cannot be read is left as it is,
-            // never replaced by this one reply.
+            // An unreadable sidecar is left as it is, never replaced by this one reply.
             guard var replies = readReplies(runID) else { return }
             replies[key] = reply
             let entries = replies.map { AnalysisRunReplyEntry(key: $0.key, reply: $0.value) }
@@ -291,8 +263,7 @@ nonisolated final class AnalysisRunRecordStore: Sendable {
         try data.write(to: recordURL(record.id), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
-    /// The kept replies; empty when there is no sidecar, `nil` when one
-    /// exists but could not be read.
+    /// Empty when there is no sidecar; `nil` when one exists but cannot be read.
     private func readReplies(_ runID: String) -> [AnalysisRunReplyKey: AnalysisRunStoredReply]? {
         let url = repliesURL(runID)
         guard FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else { return [:] }
@@ -314,7 +285,6 @@ nonisolated final class AnalysisRunRecordStore: Sendable {
     }
 }
 
-/// Feeds a run's sends into its record.
 nonisolated struct AnalysisRunRecordSendObserver: AnalysisProviderSendObserver {
     let store: AnalysisRunRecordStore
     let runID: String

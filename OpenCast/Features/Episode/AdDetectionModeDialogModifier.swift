@@ -1,9 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// Shared first-tap "cloud or on this device?" dialog for Detect Ads entry
-/// points. Present by setting the bound episode; a choice is remembered
-/// device-locally and the selected pass starts immediately.
 struct AdDetectionModeDialogModifier: ViewModifier {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
@@ -13,8 +10,8 @@ struct AdDetectionModeDialogModifier: ViewModifier {
     func body(content: Content) -> some View {
         content.confirmationDialog(
             "Detect ads in the cloud or on this device?",
-            // Documented Binding(get:set:) exception: the dialog API has no
-            // item: overload for non-Identifiable optionals.
+            // Binding(get:set:) because the dialog has no item: overload for a
+            // non-Identifiable optional.
             isPresented: Binding(
                 get: { episode != nil },
                 set: { isPresented in

@@ -24,10 +24,8 @@ public final class AVFoundationPlaybackController {
     )
 
     public private(set) var snapshot = PlaybackSnapshot()
-    /// Counts player-item installs and the unload: a load, a download
-    /// switch, a failed-item rebuild, `unload()`. Readers that derive state
-    /// from the item (chapters) key on it, so a list read off one item never
-    /// outlives that item.
+    /// Bumps on every player-item install and on `unload()`. State derived from the item keys on
+    /// it, so it never outlives that item.
     public private(set) var currentItemGeneration = 0
     public private(set) var currentEpisode: Episode?
     public private(set) var state: PlaybackState = .idle
@@ -77,7 +75,6 @@ public final class AVFoundationPlaybackController {
     /// Exists only while `isAudioSessionActive`: built inside the held
     /// session, dropped whenever the session is released or lost.
     @ObservationIgnored private var autoSkipCue: (any PlaybackSkipCuePlaying)?
-    /// The settings screen's preview, apart from `autoSkipCue`.
     @ObservationIgnored private var previewCue: (any PlaybackSkipCuePlaying)?
     @ObservationIgnored private var previewCueGeneration = 0
     /// Set only while an acquisition for the current preview generation is
@@ -286,7 +283,6 @@ public final class AVFoundationPlaybackController {
     }
 
     /// Replaces this episode's audio without starting a new listening session.
-    /// Download completion can arrive while paused, buffering, or interrupted.
     @discardableResult
     public func useDownloadedAudio(at fileURL: URL, for episodeID: EpisodeID) -> Bool {
         guard fileURL.isFileURL,
@@ -377,9 +373,8 @@ public final class AVFoundationPlaybackController {
         )
     }
 
-    /// The sound played over an automatic skip while the listener hears the
-    /// episode, or nil for none. Only the URL is kept until the controller
-    /// holds the audio session; the player is opened inside it.
+    /// Only the URL is kept until the controller holds the audio session; the player is opened
+    /// inside it.
     public func setAutoSkipCue(_ url: URL?) {
         guard url != autoSkipCueURL else {
             return
@@ -393,10 +388,8 @@ public final class AVFoundationPlaybackController {
         makeAutoSkipCueIfNeeded()
     }
 
-    /// Plays `url` once, for the settings screen. In a session the controller
-    /// already holds it releases nothing. Otherwise it takes the session in
-    /// the same order an episode does, without touching playback state, and
-    /// releases it when the sound ends unless an episode has taken it over.
+    /// Plays `url` once. Outside a held session it takes the session as an episode does, without
+    /// touching playback state, and releases it when the sound ends unless an episode took it over.
     public func previewAutoSkipCue(_ url: URL) {
         previewCueGeneration += 1
         previewCueActivationTask = nil
@@ -443,9 +436,8 @@ public final class AVFoundationPlaybackController {
         {
             let replayPosition = episodeBoundaries.replayPosition(duration: duration)
             currentVoiceBoostTap?.reset()
-            // A replay is a programmatic reposition, not a user scrub: the
-            // .restore landing intent keeps a pre-roll skip zone armed so it
-            // auto-skips instead of being disarmed by the seek.
+            // A replay is a programmatic reposition, not a scrub: `.restoredPosition` keeps
+            // a pre-roll skip zone armed instead of disarming it.
             seekPlayer(to: replayPosition, mode: .restoredPosition)
             snapshot.position = replayPosition
             hasFinishedCurrentEpisode = false
@@ -648,9 +640,6 @@ public final class AVFoundationPlaybackController {
         extendSleepTimer(by: interval, now: .now)
     }
 
-    /// Pushes a running fixed-duration timer's deadline out by `interval`,
-    /// measured from what is left at `now`. Off and end-of-episode timers
-    /// have no deadline to extend.
     func extendSleepTimer(by interval: TimeInterval, now: Date) {
         guard case .duration = sleepTimerMode,
               let endsAt = snapshot.sleepTimerEndsAt
@@ -776,10 +765,8 @@ public final class AVFoundationPlaybackController {
         }
     }
 
-    /// Display-cadence media-time samples for one consumer, independent of the
-    /// 1 Hz snapshot publication. Each call installs its own periodic observer,
-    /// removed when the consuming task ends, so `.task(id:)` is the intended
-    /// lifecycle. Samples read the player directly and never mutate `snapshot`.
+    /// Each call installs its own periodic observer, removed when the consuming task ends.
+    /// Samples read the player directly and never touch `snapshot`.
     public func mediaClockSamples(
         interval: TimeInterval = 1.0 / 30.0
     ) -> AsyncStream<PlaybackMediaClockSample> {
@@ -807,8 +794,7 @@ public final class AVFoundationPlaybackController {
                 self?.removeMediaClockClient(id)
             }
         }
-        // Prime so a consumer that subscribes while paused renders immediately
-        // instead of waiting for playback to produce the first callback.
+        // Primed so a consumer subscribing while paused renders without waiting for playback.
         if let sample = currentMediaClockSample() {
             continuation.yield(sample)
         }
@@ -1101,10 +1087,9 @@ public final class AVFoundationPlaybackController {
         continuationState: VoiceBoostContinuationState? = nil
     ) -> AVPlayerItem {
         currentItemLocalFileIdentity = PlaybackLocalFileIdentity(at: audioURL)
-        // Local files get a precise timeline: karaoke equates item media time
-        // with transcript timestamps, and estimated MP3 timing (the default)
-        // can report a duration and land seeks at bytes that do not
-        // correspond to the requested time in stitched or VBR files.
+        // Local files get precise timing: karaoke equates item media time with transcript
+        // timestamps, and the default estimated MP3 timing misreports duration and lands
+        // seeks at the wrong bytes in stitched or VBR files.
         let options: [String: Any]? = audioURL.isFileURL
             ? [AVURLAssetPreferPreciseDurationAndTimingKey: true]
             : nil
@@ -1803,8 +1788,6 @@ public final class AVFoundationPlaybackController {
         case silent(PlaybackAutoSkipCueOutcome.Reason)
     }
 
-    /// Nil when no cue is set. The cue plays only when the listener is
-    /// hearing the episode and it carries on after the skip.
     private func autoSkipCueDecision(skippingTo target: TimeInterval) -> AutoSkipCueDecision? {
         guard autoSkipCueURL != nil else {
             return nil
@@ -1884,9 +1867,8 @@ public final class AVFoundationPlaybackController {
 
     private func completePreviewCueActivation(generation: Int, url: URL) {
         guard generation == previewCueGeneration else {
-            // Nothing plays for a preview invalidated mid-flight. The session
-            // its activation took is released unless an episode or a newer
-            // preview holds it or is taking it.
+            // A preview invalidated mid-flight plays nothing. Its session is released unless
+            // an episode or a newer preview holds it or is taking it.
             if audioSessionActivationTask == nil,
                !isAudioSessionActive,
                !previewCueOwnsAudioSession,
@@ -1933,8 +1915,6 @@ public final class AVFoundationPlaybackController {
         }
     }
 
-    /// Drops the preview player, then releases the session if the preview
-    /// alone holds it.
     private func endPreviewCue() {
         stopPreviewCue()
         releasePreviewOwnedAudioSessionIfIdle()
@@ -1957,9 +1937,8 @@ public final class AVFoundationPlaybackController {
         previewCue = nil
     }
 
-    /// Ends the preview for an unload, None or a lost route. After an
-    /// interruption or a media-services reset (`sessionLost`) the system has
-    /// already taken the session, so nothing is released.
+    /// With `sessionLost` (an interruption or a media-services reset) the system has already
+    /// taken the session, so nothing is released.
     private func invalidatePreviewCue(sessionLost: Bool = false) {
         previewCueGeneration += 1
         previewCueActivationTask = nil
@@ -2153,9 +2132,6 @@ public final class AVFoundationPlaybackController {
         sleepTimerRearmDeadline = now.addingTimeInterval(Self.sleepTimerRearmWindow)
     }
 
-    /// Re-arms the sleep timer that stopped playback if `now` is still inside
-    /// the re-arm window; otherwise forgets it. `play` passes the wall clock;
-    /// tests pass a shifted one.
     func rearmExpiredSleepTimerIfNeeded(now: Date) {
         guard let mode = expiredSleepTimerMode,
               let deadline = sleepTimerRearmDeadline,
@@ -2294,11 +2270,9 @@ public final class AVFoundationPlaybackController {
         didRetry: Bool
     ) {
         guard generation == audioSessionActivationGeneration else {
-            // The orphaned task just activated the system session for a
-            // generation invalidated mid-flight (unload during activation).
-            // With no newer activation owning it, release it — otherwise the
-            // system session stays active while isAudioSessionActive is false.
-            // A preview that is taking or holds the session releases it itself.
+            // This task activated the session for a generation invalidated mid-flight. Unless a
+            // newer activation or a preview owns it, release it, or the system session stays
+            // active while `isAudioSessionActive` is false.
             if audioSessionActivationTask == nil,
                !isAudioSessionActive,
                previewCueActivationTask == nil,

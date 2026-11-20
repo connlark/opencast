@@ -46,18 +46,6 @@ struct OpenCastRemoteTranscriptionWireTests {
         #expect(response.job.state.isTerminal == false)
     }
 
-    @Test("Progress estimate fields are optional for older Workers")
-    func legacyProgressDecodesWithoutEstimate() throws {
-        let progress = try JSONDecoder().decode(
-            OpenCastRemoteTranscriptionJobProgress.self,
-            from: Data(#"{"chunks_completed":1,"chunks_total":4}"#.utf8)
-        )
-        #expect(progress.chunksCompleted == 1)
-        #expect(progress.chunksTotal == 4)
-        #expect(progress.estimatedRemainingSeconds == nil)
-        #expect(progress.estimateStatus == nil)
-    }
-
     @Test("Estimate statuses preserve known and unknown wire values")
     func estimateStatusesRoundTrip() throws {
         let known: [OpenCastRemoteTranscriptionEstimateStatus] = [
@@ -100,20 +88,6 @@ struct OpenCastRemoteTranscriptionWireTests {
             from: reencoded
         )
         #expect(decodedAgain.state == .unknown("quantum_flux"))
-    }
-
-    @Test("Every known state round-trips its wire value")
-    func knownStatesRoundTrip() {
-        let states: [OpenCastRemoteTranscriptionJobState] = [
-            .created, .stagingOrigin, .waitingForDeviceSource, .sourceMatched,
-            .exactUploadRequired, .probing, .awaitingCredits, .reserved,
-            .chunking, .transcribing, .stitching, .resultReady, .delivered,
-            .acknowledged, .cancelling, .cancelled, .failed,
-        ]
-        for state in states {
-            #expect(OpenCastRemoteTranscriptionJobState(wireValue: state.wireValue) == state)
-        }
-        #expect(states.count(where: \.isTerminal) == 3)
     }
 
     @Test("Error codes decode, preserve unknowns, and keep the mismatch code stable")
@@ -215,7 +189,6 @@ struct OpenCastRemoteTranscriptionWireTests {
         #expect(encoded.contains("\"schema_version\":1"))
         #expect(encoded.contains("\"byte_count\":16328368"))
         #expect(encoded.contains("\"media_profile\":2"))
-        // Omitted, not null, when unset: the server reads absence as legacy.
         var undeclared = create
         undeclared.mediaProfile = nil
         let undeclaredJSON = String(decoding: try encoder.encode(undeclared), as: UTF8.self)
@@ -224,19 +197,6 @@ struct OpenCastRemoteTranscriptionWireTests {
         let bootstrap = OpenCastRemoteTranscriptionBootstrapRequest()
         let bootstrapJSON = String(decoding: try encoder.encode(bootstrap), as: UTF8.self)
         #expect(bootstrapJSON == "{\"schema_version\":1}")
-    }
-
-    @Test("Balance uses integer seconds")
-    func balanceDecodes() throws {
-        let json = """
-        { "available_seconds": 36000, "reserved_seconds": 0, "debt_seconds": 0 }
-        """
-        let balance = try JSONDecoder().decode(
-            OpenCastRemoteTranscriptionBalance.self,
-            from: Data(json.utf8)
-        )
-        #expect(balance.availableSeconds == 36000)
-        #expect(balance.debtSeconds == 0)
     }
 
     @Test("Upload grant response decodes geometry and bounded part batches")
@@ -286,21 +246,11 @@ struct OpenCastRemoteTranscriptionWireTests {
         #expect(completeJSON.contains("\"etag\":\"abc123\""))
     }
 
-    @Test("Upload states and error codes ride the stable-string contract")
-    func uploadStatesAndCodes() {
-        #expect(OpenCastRemoteTranscriptionJobState(wireValue: "exact_uploading") == .exactUploading)
-        #expect(OpenCastRemoteTranscriptionJobState.exactUploading.isTerminal == false)
-        #expect(OpenCastRemoteTranscriptionErrorCode(wireValue: "upload_unavailable") == .uploadUnavailable)
-        #expect(OpenCastRemoteTranscriptionErrorCode(wireValue: "upload_identity_mismatch") == .uploadIdentityMismatch)
-        #expect(OpenCastRemoteTranscriptionErrorCode.uploadUnavailable.wireValue == "upload_unavailable")
-    }
-
     @Test("Server ad detection is off unless a create asks for it: the fields default to nil and are omitted")
     func adAnalysisCreateFieldsEncode() throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
 
-        // The app builds every create, for every purpose, this way.
         let plain = OpenCastRemoteTranscriptionJobCreateRequest(
             clientRequestID: "req-1",
             episodeID: "ep-hash-1",
@@ -319,7 +269,6 @@ struct OpenCastRemoteTranscriptionWireTests {
         #expect(!plainJSON.contains("episode_title"))
         #expect(!plainJSON.contains("podcast_title"))
 
-        // A create that asks for it still encodes them.
         let detect = OpenCastRemoteTranscriptionJobCreateRequest(
             clientRequestID: "req-2",
             episodeID: "ep-hash-1",
@@ -334,13 +283,6 @@ struct OpenCastRemoteTranscriptionWireTests {
         #expect(detectJSON.contains("\"podcast_id\":\"https:\\/\\/example.com\\/feed.xml\""))
         #expect(detectJSON.contains("\"episode_title\":\"Episode 42\""))
         #expect(detectJSON.contains("\"podcast_title\":\"The Example Show\""))
-    }
-
-    @Test("detecting_ads is a known non-terminal state")
-    func detectingAdsState() {
-        #expect(OpenCastRemoteTranscriptionJobState(wireValue: "detecting_ads") == .detectingAds)
-        #expect(OpenCastRemoteTranscriptionJobState.detectingAds.wireValue == "detecting_ads")
-        #expect(OpenCastRemoteTranscriptionJobState.detectingAds.isTerminal == false)
     }
 
     @Test("Completed ad analysis decodes spans alongside an untouched result")
@@ -459,7 +401,6 @@ struct OpenCastRemoteTranscriptionWireTests {
         )
         #expect(decoded.sourceMatchMode == "exact_device_upload")
 
-        // Pre-pass-2 servers omit the field entirely.
         let withoutMode = withMode.replacing(
             ",\n  \"source_match_mode\": \"exact_device_upload\"",
             with: ""

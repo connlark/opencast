@@ -1,9 +1,7 @@
 import SwiftUI
 
-/// What one scene remembers about its Library layouts: whether its window
-/// has ever reported a fold, and the Automatic family each surface settled
-/// on. The root layer owns it in state, so it lives as long as the scene's
-/// root and outlives any one screen; a recreated scene starts afresh.
+/// Lives as long as the scene's root, outliving any one screen; a recreated
+/// scene starts afresh.
 @Observable
 final class SceneLibraryLayouts {
     enum Surface {
@@ -11,9 +9,7 @@ final class SceneLibraryLayouts {
         case inboxGroups
     }
 
-    /// Set once the window reports a `.division` region, active or inactive
-    /// (the inner display reports the band inactive while flat), and never
-    /// cleared: the scene stays foldable when it folds shut.
+    /// Never cleared: the scene stays foldable when it folds shut.
     private(set) var isFoldable = false
     private var library = AutomaticLibraryLayout()
     private var inboxGroups = AutomaticLibraryLayout()
@@ -44,8 +40,6 @@ final class SceneLibraryLayouts {
         }
     }
 
-    /// The window's `.division` regions including the inactive ones, for
-    /// `markFoldable(ifReported:)`.
     static func divisionRegions(in proxy: GeometryProxy) -> [WindowDivisionRegion] {
         proxy.reservedRegions(kind: .division, options: .includeInactive).map(WindowDivisionRegion.init)
     }

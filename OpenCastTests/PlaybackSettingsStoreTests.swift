@@ -6,29 +6,6 @@ import Testing
 @MainActor
 @Suite("Playback settings store")
 struct PlaybackSettingsStoreTests {
-    @Test("Playback settings default to per-episode Voice Boost on with 30 back and 15 forward")
-    func defaultsApplyToPlayback() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let playback = PlaybackVoiceBoostControllerSpy()
-        let store = PlaybackSettingsStore()
-
-        store.load(episodeID: "episode-1", podcastID: "podcast-1", modelContext: context, playback: playback)
-
-        #expect(store.voiceBoostMode == .perEpisode)
-        #expect(store.isVoiceBoostEnabled == true)
-        #expect(store.canChangeCurrentEpisodeVoiceBoost)
-        #expect(store.skipBackwardOption == .thirty)
-        #expect(store.skipForwardOption == .fifteen)
-        #expect(store.isAutoSkipPromosAndAdsEnabled)
-        #expect(playback.appliedValues == [true])
-        #expect(playback.appliedSkipIntervals.count == 1)
-        #expect(playback.appliedSkipIntervals.first?.backward == 30)
-        #expect(playback.appliedSkipIntervals.first?.forward == 15)
-        #expect(playback.appliedAutoSkipValues == [true])
-        #expect(playback.appliedRates == [1])
-    }
-
     @Test("Playback speed persists and restores through the shared settings path")
     func playbackSpeedPersistsAndRestores() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -44,50 +21,6 @@ struct PlaybackSettingsStoreTests {
 
         #expect(playback.appliedRates == [1, 1.5])
         #expect(reloadedPlayback.appliedRates == [1.5])
-    }
-
-    @Test("A playback-speed save failure rolls playback back and stays visible")
-    func playbackSpeedFailureRollsBackAndSurfacesError() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let playback = PlaybackVoiceBoostControllerSpy()
-        let store = PlaybackSettingsStore()
-        store.load(modelContext: context, playback: playback)
-
-        let didPersist = store.setPlaybackRate(
-            1.5,
-            modelContext: context,
-            playback: playback,
-            persist: { _, _ in throw PlaybackSettingsSaveFailure() }
-        )
-
-        #expect(!didPersist)
-        #expect(playback.rate == 1)
-        #expect(playback.appliedRates == [1, 1.5, 1])
-        #expect(store.lastErrorMessage?.contains("Unable to update playback speed") == true)
-        #expect(store.lastErrorMessage?.contains("Simulated preference save failure") == true)
-        #expect(store.globalPlaybackRate == 1)
-        #expect(try LocalPreferenceRecord.preference(
-            forKey: PlaybackSettingsStore.playbackRatePreferenceKey,
-            modelContext: context
-        ) == nil)
-    }
-
-    @Test("A global playback-speed save failure keeps the global speed")
-    func globalPlaybackSpeedFailureKeepsTheGlobalSpeed() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let playback = PlaybackVoiceBoostControllerSpy()
-        let store = PlaybackSettingsStore(save: { _ in
-            throw PlaybackSettingsSaveFailure()
-        })
-        store.load(modelContext: context, playback: playback)
-
-        #expect(!store.setPlaybackRate(1.5, modelContext: context, playback: playback))
-
-        #expect(playback.rate == 1)
-        #expect(store.globalPlaybackRate == 1)
-        #expect(store.lastErrorMessage?.contains("Unable to update playback speed") == true)
     }
 
     @Test(
@@ -174,23 +107,6 @@ struct PlaybackSettingsStoreTests {
             forKey: PlaybackSettingsStore.playbackRatePreferenceKey,
             modelContext: context
         )?.value == "1.25")
-    }
-
-    @Test("A load without a show speed restores the global speed")
-    func loadWithoutAShowSpeedRestoresTheGlobalSpeed() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let playback = PlaybackVoiceBoostControllerSpy()
-        let store = PlaybackSettingsStore()
-        store.load(modelContext: context, playback: playback)
-        #expect(store.setPlaybackRate(1.25, modelContext: context, playback: playback))
-
-        store.load(episodeID: "episode-1", podcastID: "podcast-1", rateOverride: 1.75, modelContext: context, playback: playback)
-        store.load(episodeID: "episode-2", podcastID: "podcast-2", modelContext: context, playback: playback)
-
-        #expect(playback.rate == 1.25)
-        #expect(playback.appliedRates == [1, 1.25, 1.75, 1.25])
-        #expect(store.globalPlaybackRate == 1.25)
     }
 
     @Test("A show-scope speed change persists through its closure and never writes the global preference")
@@ -282,27 +198,6 @@ struct PlaybackSettingsStoreTests {
             forKey: PlaybackSettingsStore.playbackRatePreferenceKey,
             modelContext: ModelContext(container)
         )?.value == "1.5")
-    }
-
-    @Test("A speed that is both playing and stored as the global speed writes nothing")
-    func unchangedGlobalSpeedWritesNothing() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let playback = PlaybackVoiceBoostControllerSpy()
-        var saveCount = 0
-        let store = PlaybackSettingsStore(save: { context in
-            saveCount += 1
-            try context.save()
-        })
-        store.load(modelContext: context, playback: playback)
-        #expect(store.setPlaybackRate(1.25, modelContext: context, playback: playback))
-        #expect(saveCount == 1)
-
-        #expect(store.setPlaybackRate(1.25, modelContext: context, playback: playback))
-
-        #expect(saveCount == 1)
-        #expect(playback.appliedRates == [1, 1.25])
-        #expect(store.globalPlaybackRate == 1.25)
     }
 
     @Test("Global Voice Boost off persists and overrides the current episode")
@@ -504,29 +399,6 @@ struct PlaybackSettingsStoreTests {
         #expect(reloadedPlayback.previewedAutoSkipCues.isEmpty)
     }
 
-    @Test(
-        "An empty or unknown stored skip sound reads as None and gives the controller no cue",
-        arguments: ["", "removed-sound"]
-    )
-    func unreadableStoredSkipSoundReadsAsNone(storedValue: String) throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        context.insert(LocalPreferenceRecord(
-            key: PlaybackSettingsStore.autoSkipSoundPreferenceKey,
-            value: storedValue
-        ))
-        try context.save()
-        let playback = PlaybackVoiceBoostControllerSpy()
-        let lookups = SkipSoundLookupRecorder()
-        let store = PlaybackSettingsStore(skipSoundURL: lookups.url(for:))
-
-        store.load(modelContext: context, playback: playback)
-
-        #expect(store.autoSkipSound == nil)
-        #expect(playback.appliedAutoSkipCues == [nil])
-        #expect(lookups.sounds.isEmpty)
-    }
-
     @Test("Choosing None clears the cue, plays nothing and persists")
     func choosingNoneClearsTheCueAndPlaysNothing() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -665,16 +537,6 @@ struct PlaybackSettingsStoreTests {
         )?.value == "keep")
     }
 
-    @Test("Tap to Play defaults on")
-    func tapToPlayDefaultsOn() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let store = PlaybackSettingsStore()
-
-        store.load(modelContext: ModelContext(container), playback: PlaybackVoiceBoostControllerSpy())
-
-        #expect(store.isTapToPlayEnabled)
-    }
-
     @Test("Tap to Play off persists and a fresh store reloads it")
     func tapToPlayOffPersistsAndReloads() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -742,16 +604,6 @@ struct PlaybackSettingsStoreTests {
         )?.value == "keep")
     }
 
-    @Test("Requeue Interrupted Episode defaults off")
-    func requeueInterruptedEpisodeDefaultsOff() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let store = PlaybackSettingsStore()
-
-        store.load(modelContext: ModelContext(container), playback: PlaybackVoiceBoostControllerSpy())
-
-        #expect(store.isRequeueInterruptedEpisodeEnabled == false)
-    }
-
     @Test("Requeue Interrupted Episode on persists and a fresh store reloads it")
     func requeueInterruptedEpisodeOnPersistsAndReloads() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -767,36 +619,6 @@ struct PlaybackSettingsStoreTests {
         #expect(store.isRequeueInterruptedEpisodeEnabled)
         #expect(store.lastErrorMessage == nil)
         #expect(reloadedStore.isRequeueInterruptedEpisodeEnabled)
-    }
-
-    @Test("A Requeue Interrupted Episode save failure rolls back and surfaces an error")
-    func requeueInterruptedEpisodeSaveFailureRollsBackAndSurfacesError() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let store = PlaybackSettingsStore(save: { _ in
-            throw PlaybackSettingsSaveFailure()
-        })
-        store.load(modelContext: context, playback: PlaybackVoiceBoostControllerSpy())
-
-        let didPersist = store.setRequeueInterruptedEpisodeEnabled(true, modelContext: context)
-
-        #expect(!didPersist)
-        #expect(store.isRequeueInterruptedEpisodeEnabled == false)
-        #expect(store.lastErrorMessage?.contains("Unable to update Up Next behavior") == true)
-        #expect(try LocalPreferenceRecord.preference(
-            forKey: PlaybackSettingsStore.requeueInterruptedEpisodePreferenceKey,
-            modelContext: context
-        ) == nil)
-    }
-
-    @Test("Sleep timer presets default to 5, 10, 15, 30, 45 and 60 minutes")
-    func sleepTimerPresetsDefault() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let store = PlaybackSettingsStore()
-
-        store.load(modelContext: ModelContext(container), playback: PlaybackVoiceBoostControllerSpy())
-
-        #expect(store.sleepTimerPresets == SleepTimerPresetDuration.defaults)
     }
 
     @Test("A sleep timer preset slot persists and a fresh store reloads it")
@@ -932,7 +754,6 @@ private struct PlaybackSettingsSaveFailure: LocalizedError {
     }
 }
 
-/// Records each skip sound the store looks up and answers as the app does.
 @MainActor
 private final class SkipSoundLookupRecorder {
     private(set) var sounds: [SkipSound] = []

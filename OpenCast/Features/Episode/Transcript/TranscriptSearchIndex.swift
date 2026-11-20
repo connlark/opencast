@@ -1,13 +1,9 @@
 import Foundation
 import OpenCastTranscription
 
-/// Immutable search support built once per transcript document so that
-/// per-keystroke matching runs off the main thread — the voice boost audio
-/// tap renders in-process, so main-thread stalls are audible.
-///
-/// Candidate filtering scans pre-folded copies of every line; ICU only runs
-/// for the (few) matched lines to produce highlight ranges into the original
-/// text.
+/// Per-keystroke matching runs off the main thread: the voice boost audio tap renders in-process,
+/// so main-thread stalls are audible. Filtering scans pre-folded lines; ICU runs only on matched
+/// lines, for highlight ranges into the original text.
 nonisolated struct TranscriptSearchIndex: Sendable {
     private static let cancellationCheckStride = 64
 
@@ -20,17 +16,13 @@ nonisolated struct TranscriptSearchIndex: Sendable {
     }
 
     @concurrent
-    static func build(
-        segments: [OpenCastTranscriptSegment],
-        checkpoint: (@Sendable (Int) async -> Void)? = nil
-    ) async throws -> TranscriptSearchIndex {
+    static func build(segments: [OpenCastTranscriptSegment]) async throws -> TranscriptSearchIndex {
         try Task.checkCancellation()
 
         var foldedTexts: [String] = []
         foldedTexts.reserveCapacity(segments.count)
         for (offset, segment) in segments.enumerated() {
             if offset.isMultiple(of: cancellationCheckStride) {
-                await checkpoint?(offset)
                 try Task.checkCancellation()
             }
             foldedTexts.append(fold(segment.text))
@@ -41,10 +33,7 @@ nonisolated struct TranscriptSearchIndex: Sendable {
     }
 
     @concurrent
-    func result(
-        for query: String,
-        checkpoint: (@Sendable (Int) async -> Void)? = nil
-    ) async throws -> TranscriptSearchResult {
+    func result(for query: String) async throws -> TranscriptSearchResult {
         try Task.checkCancellation()
 
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -57,7 +46,6 @@ nonisolated struct TranscriptSearchIndex: Sendable {
         var highlightRanges: [Int: [Range<String.Index>]] = [:]
         for index in foldedTexts.indices {
             if index.isMultiple(of: Self.cancellationCheckStride) {
-                await checkpoint?(index)
                 try Task.checkCancellation()
             }
             guard foldedTexts[index].contains(foldedQuery) else {

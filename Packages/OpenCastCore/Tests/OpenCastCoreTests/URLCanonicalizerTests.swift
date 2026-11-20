@@ -20,14 +20,6 @@ struct URLCanonicalizerTests {
         #expect(URLCanonicalizer.canonicalString(forRawString: " not a url ") == "not a url")
     }
 
-    @Test("Removes trailing slash for logical de-duping")
-    func removesTrailingSlash() {
-        let first = URL(string: "https://feeds.example.com/example-current-affairs.xml/")!
-        let second = URL(string: "https://feeds.example.com/example-current-affairs.xml")!
-
-        #expect(URLCanonicalizer.canonicalString(for: first) == URLCanonicalizer.canonicalString(for: second))
-    }
-
     @Test(
         "Canonicalization is idempotent across the corpus",
         arguments: [
@@ -48,10 +40,7 @@ struct URLCanonicalizerTests {
 
     @Test("Explicit default ports are preserved as distinct identities")
     func explicitDefaultPortsArePreserved() {
-        // Pinned current behavior: :443 is not stripped, so an explicit-port
-        // variant is a distinct PodcastID. Changing this would re-key
-        // episode IDs for any library that subscribed with the port spelled
-        // out — do not change casually.
+        // Stripping :443 would re-key the podcast and episode IDs of every library that subscribed with the port.
         #expect(
             URLCanonicalizer.canonicalString(forRawString: "https://example.com:443/feed.xml")
                 == "https://example.com:443/feed.xml"

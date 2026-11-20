@@ -135,8 +135,7 @@ struct ModelStoreRelocationTests {
         case beforeTheCleanup
         case partwayThroughTheCleanup
 
-        /// Steps 3 to 5 leave the source authoritative; step 6 runs after
-        /// the commit.
+        // The cleanup runs after the commit, so it never defers.
         var expectedDeferral: DeferralKind? {
             switch self {
             case .beforeClearingTheDestination, .partwayThroughClearingTheDestination:
@@ -409,14 +408,13 @@ struct ModelStoreRelocationTests {
         #expect(try Fixture.packageEntries(at: fixture.groupDirectory) == groupPackage)
     }
 
-    /// The fixture carries a `-shm` but no `-wal`: SQLite opens any database
-    /// that has a `-wal` beside it in WAL mode, whatever its header says.
     @Test("A journal mode other than WAL defers before any checkpoint and leaves the sidecars alone")
     func rollbackJournalModeIsUnsupported() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
         let store = fixture.location()
         try Fixture.writeStore(at: store.groupURL, uuid: UUID().uuidString, rows: Self.groupRows, journalMode: "DELETE")
+        // No -wal: SQLite opens any database with a -wal beside it in WAL mode, whatever its header says.
         let shm = Data(repeating: 0x5A, count: 32_768)
         try shm.write(to: Fixture.sidecar(store.groupURL, "-shm"))
         let groupTree = try Fixture.tree(at: fixture.groupDirectory)
@@ -565,8 +563,6 @@ struct ModelStoreRelocationTests {
 
     private static let groupRows = ["group-1", "group-2", "group-3"]
 
-    /// A group store at rest with both companions, beside a stale app store
-    /// whose companion holds different bytes and one file the group lacks.
     /// Returns the group store's UUID.
     private func writeSourceReadyToMove(_ fixture: Fixture, store: ModelStoreLocation) throws -> String {
         let uuid = UUID().uuidString
@@ -585,8 +581,6 @@ struct ModelStoreRelocationTests {
         try Fixture.writeCompanions(in: fixture.groupDirectory, seed: "leftover")
     }
 
-    /// The group's package without its `-wal` sits in the app directory, and
-    /// nothing of the package, `-shm` included, is left in the group.
     private func expectCleanEndState(_ fixture: Fixture, groupPackageBeforeTheRun: [String: Fixture.Entry]) throws {
         #expect(try Fixture.packageEntries(at: fixture.appDirectory) == Self.cleanAppPackage(from: groupPackageBeforeTheRun))
         #expect(try Fixture.packageEntries(at: fixture.groupDirectory).isEmpty)

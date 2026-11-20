@@ -1,12 +1,7 @@
 import SwiftUI
 
-/// Where the secondary pane's content sits inside the allocation a split
-/// gives it: the window's safe rectangle and a vertical band, each converted
-/// into the pane's own coordinates once, and the content clear of every
-/// active occlusion region over the pane (the picker below those over its
-/// top, the content above those over its bottom). The allocation is in the window
-/// reader's space; the insets are pane-local. x is leading-relative, as in
-/// `NowPlayingCardGeometry`.
+/// `allocation` is in the window reader's space and the insets are pane-local; x is
+/// leading-relative.
 nonisolated struct NowPlayingPaneGeometry: Equatable {
     let allocation: CGRect
     let contentInsets: EdgeInsets
@@ -29,14 +24,11 @@ nonisolated struct NowPlayingPaneGeometry: Equatable {
         var top = max(0, safe.minY - allocation.minY)
         var bottom = max(0, allocation.maxY - safe.maxY)
 
-        // The pane keeps to the band's trailing side, the player's opposite.
         if case .foldedVertical(let band) = pose,
            NowPlayingCardGeometry.overlaps(allocation.minX...allocation.maxX, band.minX...band.maxX) {
             leading = max(leading, band.maxX - allocation.minX)
         }
 
-        // The picker below every region over the pane's top; the content
-        // above every region over its bottom.
         let columnStart = allocation.minX + leading
         let columnEnd = max(columnStart, allocation.maxX - trailing)
         for region in occlusions

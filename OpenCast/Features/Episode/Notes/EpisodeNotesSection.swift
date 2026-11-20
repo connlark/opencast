@@ -1,8 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// The Private Notes cards on episode detail; hidden while the episode has
-/// none. The detail view fetches the notes and keeps them current.
 struct EpisodeNotesSection: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
@@ -28,7 +26,6 @@ struct EpisodeNotesSection: View {
                     .accessibilityIdentifier("Share Private Notes")
                 }
 
-                // The episode note leads; timestamped notes follow in the query's timeline order.
                 ForEach(notes.filter(\.isEpisodeWide) + notes.filter { !$0.isEpisodeWide }) { note in
                     card(for: note)
                 }

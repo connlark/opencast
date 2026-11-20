@@ -2,12 +2,9 @@ import Foundation
 import SwiftData
 import UIKit
 
-/// Sheet-scoped loader for the Episode Diagnostics report. Construction does
-/// no work at all; every read, file check, and probe starts from `load`,
-/// which the sheet's `.task` drives, so nothing runs until the sheet opens
-/// and everything cancels when it closes. The audio share flow runs in its own
-/// task because dismissing diagnostics must stop the *wait* without touching
-/// a download the user asked for.
+/// Construction does no work: every read, file check and probe starts from `load`. The audio
+/// share runs in its own task, so dismissal stops the wait without touching a download the user
+/// asked for.
 @Observable
 final class EpisodeDiagnosticsModel {
     let episodeID: String
@@ -19,10 +16,8 @@ final class EpisodeDiagnosticsModel {
     private(set) var mp3ShareState: EpisodeDiagnosticsMP3ShareState = .idle
     var presentedShareFile: EpisodeDiagnosticsShareFile?
 
-    /// Live dependencies are built on first use, not in init: the presenting
-    /// closure re-evaluates the sheet's initializer per body pass and @State
-    /// discards every model but the first, so an eager default would allocate
-    /// (and leak until deinit) a fresh probe URLSession per evaluation.
+    /// Built on first use, not in init: the sheet's initializer runs per body pass and @State
+    /// keeps only the first model, so an eager default would leak a probe URLSession per pass.
     var dependencies: EpisodeDiagnosticsDependencies {
         if let injectedOrBuiltDependencies {
             return injectedOrBuiltDependencies
@@ -181,19 +176,17 @@ final class EpisodeDiagnosticsModel {
             var didPublishZoneMatrix = false
             var effectiveAd: DocumentOutcome<EpisodeAdAnalysisDocument>?
 
-            // The ad-analysis section compares against the transcript document
-            // and the zone matrix additionally needs the local media duration,
-            // so those two wait for their inputs; everything else publishes
-            // the moment its own step lands.
+            // The ad-analysis section needs the transcript, and the zone matrix also the local
+            // media duration, so those two wait for their inputs; every other section publishes
+            // as soon as its own step lands.
             @MainActor func publishSettledAdSections() async {
                 guard let adRecord, let ad, let transcript else {
                     return
                 }
                 if !didPublishAdAnalysis {
                     didPublishAdAnalysis = true
-                    // The currency verdict normalizes and fingerprints the
-                    // whole transcript — off-caller, never on the MainActor
-                    // while the sheet is rendering.
+                    // The verdict fingerprints the whole transcript, so it never runs on the
+                    // MainActor while the sheet renders.
                     let isCurrent: Bool? = if let adDocument = ad.document,
                         let transcriptDocument = transcript.document {
                         await appModel.adAnalyses.isCurrentAnalysisDocumentOffCaller(
@@ -364,8 +357,6 @@ final class EpisodeDiagnosticsModel {
         }
     }
 
-    /// Explicit cancel: stops the app download itself, not only this sheet's
-    /// wait for it.
     func cancelSharedDownload(appModel: OpenCastAppModel, modelContext: ModelContext) {
         shareTask?.cancel()
         appModel.downloads.cancelDownload(episodeID: episodeID, modelContext: modelContext)
@@ -380,8 +371,6 @@ final class EpisodeDiagnosticsModel {
         self.activeShareFile = nil
     }
 
-    /// Dismissal stops waiting and blocks a later automatic share
-    /// presentation, but deliberately leaves the download itself running.
     func handleDisappear() {
         isDismissed = true
         shareTask?.cancel()
@@ -390,9 +379,8 @@ final class EpisodeDiagnosticsModel {
     }
 
     private func presentShare(source: URL, episode: EpisodeListItemSnapshot) {
-        // A re-share while a share is still active would otherwise strand the
-        // previous hard-link directory, keeping the episode's disk blocks
-        // alive even after the download itself is deleted.
+        // Otherwise a re-share strands the previous hard-link directory, which keeps the
+        // episode's disk blocks alive after the download is deleted.
         if let activeShareFile {
             dependencies.cleanUpShareFile(activeShareFile)
         }

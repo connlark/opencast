@@ -1,7 +1,5 @@
 import Foundation
 
-/// StoreKit-free transaction handle: enough to redeem (signed JWS goes to
-/// the server) and to finish by id after the server acknowledges.
 nonisolated struct RemoteTranscriptionStoreTransaction: Sendable, Equatable {
     let id: UInt64
     let productID: String

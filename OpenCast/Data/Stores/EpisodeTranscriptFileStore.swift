@@ -5,11 +5,7 @@ struct EpisodeTranscriptFileStore: Sendable {
     nonisolated static let directoryName = "EpisodeTranscripts"
 
     let baseDirectory: URL
-    /// Lets a test hold a document write (a transcription run's or a remote
-    /// import's) once it is under way: past its cancellation check, before
-    /// its bytes land.
     let beforeDocumentWriteForTesting: (@Sendable (_ relativePath: String) async -> Void)?
-    /// Lets a test act while a caller is suspended on a document read.
     let beforeDocumentReadForTesting: (@Sendable (_ relativePath: String) async -> Void)?
 
     init(
@@ -49,10 +45,8 @@ struct EpisodeTranscriptFileStore: Sendable {
         return OpenCastSHA256.hash(Data(value.utf8))
     }
 
-    /// Fingerprint for remotely produced documents. Domain-separated from the
-    /// local fingerprint and keyed on the serving contract and pipeline so a
-    /// remote contract change never overwrites a local or prior remote
-    /// transcript file.
+    /// Domain-separated and keyed on the serving contract, so a contract change never overwrites a
+    /// local or earlier remote transcript file.
     nonisolated func remoteFingerprint(
         sourceFileSHA256: String,
         provider: String,
@@ -93,13 +87,8 @@ struct EpisodeTranscriptFileStore: Sendable {
         return try read(relativePath: relativePath)
     }
 
-    /// Writes a document beside its place, off the caller, and returns
-    /// where. The caller places it (`placeStagedDocument`) only once it knows
-    /// it may still write the transcript, and discards it otherwise: a run's
-    /// write that comes back after the run was ended, or a remote import's
-    /// that comes back after a local run took the episode, must not leave a
-    /// document behind. A terminal flush ignores cancellation, so a pending
-    /// checkpoint still persists while the run's task is cancelled.
+    /// Staged beside its place so a write that returns after its run ended, or after a local run
+    /// took the episode, can be discarded without leaving a document behind.
     @concurrent
     func stageOffCaller(
         _ document: EpisodeTranscriptDocument,
@@ -117,8 +106,6 @@ struct EpisodeTranscriptFileStore: Sendable {
         return stagedURL
     }
 
-    /// Moves a staged document into its place with one rename, replacing
-    /// the document there.
     nonisolated func placeStagedDocument(at stagedURL: URL, relativePath: String) throws {
         guard rename(stagedURL.path, fileURL(relativePath: relativePath).path) == 0 else {
             let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
@@ -156,8 +143,6 @@ struct EpisodeTranscriptFileStore: Sendable {
         try removeItemIfPresent(at: transcriptsDirectory.appending(path: safeStem(episodeID)))
     }
 
-    /// Deletes every file in the episode's transcript directory but the
-    /// document at `keptRelativePath`.
     nonisolated func deleteTranscripts(forEpisodeID episodeID: String, keeping keptRelativePath: String) throws {
         let keptName = fileURL(relativePath: keptRelativePath).lastPathComponent
         let fileURLs: [URL]
@@ -174,9 +159,6 @@ struct EpisodeTranscriptFileStore: Sendable {
         }
     }
 
-    /// Renames the per-episode directory when an episode's identity migrates.
-    /// If the successor already has a directory, files merge into it and
-    /// name-conflicting leftovers (already present there) are dropped.
     nonisolated func migrateTranscripts(fromEpisodeID oldEpisodeID: String, to newEpisodeID: String) throws {
         try migratePerEpisodeDirectory(
             from: transcriptsDirectory.appending(path: safeStem(oldEpisodeID), directoryHint: .isDirectory),

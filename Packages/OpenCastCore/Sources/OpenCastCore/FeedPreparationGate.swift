@@ -1,7 +1,6 @@
 import Foundation
 
-/// Shared across every DefaultFeedService instance. A queued task owns no
-/// transport and cancellation removes it without consuming an admission slot.
+/// Cancelling a queued task removes it without consuming an admission slot.
 actor FeedPreparationGate {
     static let shared = FeedPreparationGate()
     private static let maximumInteractiveBurst = 3

@@ -1,10 +1,7 @@
 import Foundation
 
-/// Maps citations back to what the model was shown. For a recap that is the
-/// window; for an answer it is exactly the segment lines the tool outputs
-/// carried this turn. An id never shown, a blank bullet, or a repeat of an
-/// earlier bullet (the model pads short windows with the same sentence) is
-/// dropped rather than rendered.
+/// A citation must name a segment the model was shown this turn. A repeated bullet drops too:
+/// the model pads short windows with the same sentence.
 nonisolated enum TranscriptCitationValidator {
     static func validate(_ recap: TranscriptRecap, window: TranscriptRecapWindow) -> TranscriptRecapValidation {
         let startByID = Dictionary(window.segments.map { ($0.id, $0.start) }, uniquingKeysWith: { first, _ in first })
@@ -55,7 +52,6 @@ nonisolated enum TranscriptCitationValidator {
         return TranscriptAskValidation(citations: citations, droppedCitationIDs: dropped)
     }
 
-    /// Every segment id the tool outputs printed this turn.
     static func shownSegmentIDs(in exchanges: [TranscriptIntelligenceToolExchange]) -> Set<Int> {
         var ids: Set<Int> = []
         for exchange in exchanges {

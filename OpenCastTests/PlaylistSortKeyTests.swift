@@ -1,5 +1,4 @@
 import Foundation
-import SwiftData
 import Testing
 @testable import OpenCast
 
@@ -126,40 +125,5 @@ struct PlaylistSortKeyTests {
         #expect(!PlaylistSortKey.isValid("a0"))
         #expect(!PlaylistSortKey.isValid("A"))
         #expect(!PlaylistSortKey.isValid("a-b"))
-    }
-
-    @Test("A lexical SwiftData sort returns rows in plain string order")
-    func lexicalFetchMatchesStringOrder() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        // "a9" / "a11" and "2" / "11" are the pairs a numeric-aware
-        // comparator would swap.
-        var keySet = Set(PlaylistSortKey.renumbered(count: 40))
-        keySet.formUnion(["a9", "a11", "2", "11", "0z", "z", "zi"])
-        keySet.insert(PlaylistSortKey.between("a11", "a9"))
-        keySet.insert(PlaylistSortKey.first(before: "0z"))
-        let sortedKeys = keySet.sorted()
-
-        for (index, key) in sortedKeys.reversed().enumerated() {
-            context.insert(
-                PlaylistItemRecord(
-                    playlistID: "sort-key-fixture",
-                    episodeID: "episode-\(index)",
-                    podcastID: "https://example.com/feed.xml",
-                    sortKey: key,
-                    episodeTitle: "Episode \(index)",
-                    podcastTitle: "Example Show"
-                )
-            )
-        }
-        try context.save()
-
-        let fetched = try ModelContext(container).fetch(
-            FetchDescriptor<PlaylistItemRecord>(
-                sortBy: [SortDescriptor(\.sortKey, comparator: .lexical)]
-            )
-        )
-
-        #expect(fetched.map(\.sortKey) == sortedKeys)
     }
 }

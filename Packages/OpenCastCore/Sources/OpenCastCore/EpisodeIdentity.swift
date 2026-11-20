@@ -39,8 +39,6 @@ public enum EpisodeIdentity {
         return EpisodeID(rawValue: sha256("\(canonicalFeedURL)|\(identityMaterial)"))
     }
 
-    /// The whitespace/case normalization the title-date identity tier hashes.
-    /// Exposed so identity reconciliation matches titles by the same rules.
     public static func normalizedTitle(_ title: String) -> String {
         title.normalizedForEpisodeIdentity
     }

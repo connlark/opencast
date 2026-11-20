@@ -1,16 +1,6 @@
 import Foundation
 import FoundationModels
 
-/// One Ask conversation over one transcript: the model session, its two
-/// retrieval tools, the per-turn call budget, and the in-memory history. A
-/// turn runs one streamed structured request under the store's deadline and
-/// validates its citations against the passages the tools have shown in the
-/// current model session (a follow-up often answers from passages fetched
-/// a turn earlier without calling a tool again). The model session is
-/// replaced once its input passes the budget, seeded with the earlier
-/// questions and answers but none of their passages, and after any failure
-/// that leaves it unusable; a guardrail decline keeps it, so the
-/// conversation continues.
 final class TranscriptAskSession {
     static let sessionInputTokenBudget = 20_000
     static let maximumResponseTokens = 600
@@ -18,7 +8,6 @@ final class TranscriptAskSession {
     static let historySeedExchangeLimit = 8
     static let historySeedTokenBudget = 2_000
 
-    /// Everything one turn produced, for the evaluation runner's report.
     struct Turn: Sendable {
         var question: String
         var prompt: String
@@ -33,8 +22,6 @@ final class TranscriptAskSession {
         var wasReseeded: Bool
         var sessionInputTokenCount: Int
         var partialUpdateCount = 0
-        /// Segment ids citations were validated against: every id the tools
-        /// have shown in the current model session.
         var validatedAgainstSegmentCount = 0
     }
 
@@ -47,6 +34,8 @@ final class TranscriptAskSession {
     private let tools: [any Tool]
     private let budget: TranscriptToolBudget
     private var session: (any TranscriptIntelligenceSession)?
+    /// Citations validate against every passage shown in this model session, not only this
+    /// turn: a follow-up often answers from passages fetched a turn earlier.
     private var shownSegmentIDsInSession: Set<Int> = []
     private var inputTokenBudget: Int
 
@@ -156,9 +145,6 @@ final class TranscriptAskSession {
         )
     }
 
-    /// The live session, or a fresh one when none exists or the last has
-    /// grown past the input budget. The second value says whether history
-    /// must be replayed into it.
     private func currentSession() async -> (any TranscriptIntelligenceSession, wasReseeded: Bool) {
         if let session, session.inputTokenCount < inputTokenBudget {
             return (session, false)
@@ -170,7 +156,6 @@ final class TranscriptAskSession {
         return (fresh, !exchanges.isEmpty)
     }
 
-    /// The most recent exchanges that fit the seed budget, oldest first.
     private func seedHistory() async -> [TranscriptAskExchange] {
         var history = Array(exchanges.suffix(Self.historySeedExchangeLimit))
         while history.count > 1 {
@@ -183,9 +168,8 @@ final class TranscriptAskSession {
         return history
     }
 
-    /// A declined or refused prompt leaves the session usable; a timeout
-    /// (our deadline cancelled the model mid-turn), a full context, or an
-    /// unknown failure does not.
+    /// A timeout means the deadline cancelled the model mid-turn, which leaves the session
+    /// unusable.
     private static func invalidatesSession(_ failure: TranscriptIntelligenceFailure) -> Bool {
         switch failure {
         case .guardrailViolation, .refusal, .cancelled:

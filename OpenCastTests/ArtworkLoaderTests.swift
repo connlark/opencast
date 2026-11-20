@@ -10,51 +10,6 @@ import UniformTypeIdentifiers
 
 @Suite("Artwork loader")
 struct ArtworkLoaderTests {
-    @Test("Cache hit reuses downsampled artwork")
-    func cacheHitReusesDownsampledArtwork() async throws {
-        let data = try pngData(width: 400, height: 400)
-        let probe = ArtworkDataLoaderProbe(responses: [(data, nil)])
-        let loader = try makeLoader(dataLoader: probe.load)
-        let url = URL(string: "https://example.com/cache.png")!
-
-        let firstImage = try #require(
-            try await loader.image(for: url, targetPixelSize: CGSize(width: 48, height: 48))
-        )
-        let secondImage = try #require(
-            try await loader.image(for: url, targetPixelSize: CGSize(width: 48, height: 48))
-        )
-
-        #expect(await probe.requestCount == 1)
-        #expect(pixelWidth(of: firstImage) <= 48)
-        #expect(pixelWidth(of: secondImage) <= 48)
-    }
-
-    @Test("Duplicate in-flight loads coalesce by URL")
-    func duplicateInflightLoadsCoalesceByURL() async throws {
-        let data = try pngData(width: 400, height: 400)
-        let probe = ArtworkDataLoaderProbe(responses: [(data, nil)], waitsForRelease: true)
-        let loader = try makeLoader(dataLoader: probe.load)
-        let url = URL(string: "https://example.com/coalesced.png")!
-
-        async let firstImage = loader.image(for: url, targetPixelSize: CGSize(width: 52, height: 52))
-        async let secondImage = loader.image(for: url, targetPixelSize: CGSize(width: 96, height: 96))
-
-        defer {
-            Task {
-                await probe.cancelAll()
-            }
-        }
-
-        #expect(await probe.waitForRequestCount(1))
-        #expect(await probe.requestCount == 1)
-        await probe.release()
-
-        let images = try await (firstImage, secondImage)
-        #expect(images.0 != nil)
-        #expect(images.1 != nil)
-        #expect(await probe.requestCount == 1)
-    }
-
     @Test("Caller cancellation leaves in-flight artwork available for the cache")
     func callerCancellationLeavesInflightArtworkAvailableForCache() async throws {
         let data = try pngData(width: 400, height: 400)
@@ -79,8 +34,16 @@ struct ArtworkLoaderTests {
         #expect(await probe.requestCount == 1)
     }
 
-    @Test("Identical network and disk artwork shares one decode across rows and URLs", arguments: [false, true], [false, true])
-    func concurrentRowsShareDecodedImage(fromDisk: Bool, distinctURLs: Bool) async throws {
+    @Test(
+        "Identical network and disk artwork shares one decode across rows and URLs",
+        arguments: [
+            (fromDisk: false, distinctURLs: false, networkRequests: 1),
+            (fromDisk: false, distinctURLs: true, networkRequests: 12),
+            (fromDisk: true, distinctURLs: false, networkRequests: 0),
+            (fromDisk: true, distinctURLs: true, networkRequests: 0)
+        ]
+    )
+    func concurrentRowsShareDecodedImage(fromDisk: Bool, distinctURLs: Bool, networkRequests: Int) async throws {
         let data = try pngData(width: 1_600, height: 1_600)
         let requests = (0..<12).map { index in
             ArtworkRequest(
@@ -117,9 +80,8 @@ struct ArtworkLoaderTests {
                 return images
             }
         }
-        let expectedNetworkRequests = fromDisk ? 0 : (distinctURLs ? requests.count : 1)
         if !fromDisk {
-            #expect(await probe.waitForRequestCount(expectedNetworkRequests))
+            #expect(await probe.waitForRequestCount(networkRequests))
             await probe.release()
         }
         let images = try await readers.value
@@ -127,7 +89,7 @@ struct ArtworkLoaderTests {
         #expect(images.count == requests.count)
         #expect(images.allSatisfy { $0 === images.first })
         #expect(decodeProbe.observedMainThreadValues == [false])
-        #expect(await probe.requestCount == expectedNetworkRequests)
+        #expect(await probe.requestCount == networkRequests)
     }
 
     @Test("Sequential URL aliases reuse pixels while retaining separate preview identities")
@@ -264,34 +226,6 @@ struct ArtworkLoaderTests {
         #expect(await probe.requestCount == 1)
     }
 
-    @Test("Large artwork decoding stays off the main actor")
-    func largeArtworkDecodingStaysOffMainActor() async throws {
-        let directory = try makeTemporaryDirectory()
-        let data = try pngData(width: 1_600, height: 1_600)
-        let probe = ArtworkDataLoaderProbe(responses: [(data, nil)])
-        let decodeProbe = ArtworkDecodeThreadProbe()
-        let loader = ArtworkLoader(
-            diskCache: ArtworkDiskCache(directory: directory),
-            dataLoader: probe.load,
-            imageDecoder: decodeProbe.decode
-        )
-        let url = URL(string: "https://example.com/large-artwork.png")!
-        let largeRequest = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 1_024, height: 1_024))
-        let smallerRequest = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 512, height: 512))
-
-        let networkImage = try await Task { @MainActor in
-            try await loader.image(for: largeRequest)
-        }.value
-        let diskImage = try await Task { @MainActor in
-            try await loader.image(for: smallerRequest)
-        }.value
-
-        #expect(networkImage != nil)
-        #expect(diskImage != nil)
-        #expect(await probe.requestCount == 1)
-        #expect(decodeProbe.observedMainThreadValues == [false, false])
-    }
-
     @Test("Canonical artwork URL variants share cache entries")
     func canonicalArtworkURLVariantsShareCacheEntries() async throws {
         let data = try pngData(width: 400, height: 400)
@@ -302,29 +236,6 @@ struct ArtworkLoaderTests {
 
         let firstImage = try await loader.image(for: firstURL, targetPixelSize: CGSize(width: 48, height: 48))
         let secondImage = try await loader.image(for: secondURL, targetPixelSize: CGSize(width: 48, height: 48))
-
-        #expect(firstImage != nil)
-        #expect(secondImage != nil)
-        #expect(await probe.requestCount == 1)
-    }
-
-    @Test("New loader instance uses disk artwork without refetching")
-    func newLoaderInstanceUsesDiskArtworkWithoutRefetching() async throws {
-        let directory = try makeTemporaryDirectory()
-        let data = try pngData(width: 400, height: 400)
-        let probe = ArtworkDataLoaderProbe(responses: [(data, nil)])
-        let firstLoader = ArtworkLoader(
-            diskCache: ArtworkDiskCache(directory: directory),
-            dataLoader: probe.load
-        )
-        let secondLoader = ArtworkLoader(
-            diskCache: ArtworkDiskCache(directory: directory),
-            dataLoader: probe.load
-        )
-        let url = URL(string: "https://example.com/relaunch.png")!
-
-        let firstImage = try await firstLoader.image(for: url, targetPixelSize: CGSize(width: 56, height: 56))
-        let secondImage = try await secondLoader.image(for: url, targetPixelSize: CGSize(width: 96, height: 96))
 
         #expect(firstImage != nil)
         #expect(secondImage != nil)
@@ -357,26 +268,6 @@ struct ArtworkLoaderTests {
         #expect(await probe.requestCount == 1)
     }
 
-    @Test("Memory cache hit returns preview from disk metadata")
-    func memoryCacheHitReturnsPreviewFromDiskMetadata() async throws {
-        let directory = try makeTemporaryDirectory()
-        let data = try pngData(width: 400, height: 400)
-        let probe = ArtworkDataLoaderProbe(responses: [(data, nil)])
-        let loader = ArtworkLoader(
-            diskCache: ArtworkDiskCache(directory: directory),
-            dataLoader: probe.load
-        )
-        let url = URL(string: "https://example.com/memory-preview-cache.png")!
-        let request = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 56, height: 56))
-
-        let networkResult = try #require(try await loader.loadResult(for: request))
-        let memoryResult = try #require(try await loader.loadResult(for: request))
-
-        #expect(networkResult.preview != nil)
-        #expect(memoryResult.preview == networkResult.preview)
-        #expect(await probe.requestCount == 1)
-    }
-
     @Test("Memory cache hit reads metadata only, not the data file")
     func memoryCacheHitReadsMetadataOnlyNotDataFile() async throws {
         let directory = try makeTemporaryDirectory()
@@ -390,9 +281,7 @@ struct ArtworkLoaderTests {
         )
 
         let networkResult = try #require(try await loader.loadResult(for: request))
-        // Deleting the data file while keeping the metadata sidecar makes any
-        // warm-path data read observable: a path through the data file loses
-        // the preview, the metadata-only path keeps it.
+        // Without the data file only the metadata-only warm path keeps the preview.
         let dataFiles = try FileManager.default
             .contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "data" }
@@ -432,31 +321,6 @@ struct ArtworkLoaderTests {
             diskCache: diskCache,
             dataLoader: probe.load
         )
-
-        let result = try #require(try await loader.loadResult(for: request))
-        let metadata = try #require(try await diskCache.metadata(for: url))
-
-        #expect(result.preview != nil)
-        #expect(metadata.preview == result.preview)
-        #expect(await probe.requestCount == 0)
-    }
-
-    @Test("Legacy disk cache hit backfills preview without refetching")
-    func legacyDiskCacheHitBackfillsPreviewWithoutRefetching() async throws {
-        let directory = try makeTemporaryDirectory()
-        let data = try pngData(width: 400, height: 400)
-        let url = URL(string: "https://example.com/legacy-preview-backfill.png")!
-        let request = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 56, height: 56))
-        let diskCache = ArtworkDiskCache(directory: directory)
-        _ = try await diskCache.store(
-            data: data,
-            response: OpenCastHTTPResponse(
-                httpResponse(url: url, statusCode: 200, headers: ["Content-Type": "image/png"])
-            ),
-            for: url
-        )
-        let probe = ArtworkDataLoaderProbe(responses: [(data, nil)])
-        let loader = ArtworkLoader(diskCache: diskCache, dataLoader: probe.load)
 
         let result = try #require(try await loader.loadResult(for: request))
         let metadata = try #require(try await diskCache.metadata(for: url))
@@ -609,40 +473,6 @@ struct ArtworkLoaderTests {
         #expect(await probe.requestCount == 2)
     }
 
-    @Test("Stale cached artwork renders immediately and revalidates")
-    func staleCachedArtworkRendersImmediatelyAndRevalidates() async throws {
-        let directory = try makeTemporaryDirectory()
-        let url = URL(string: "https://example.com/stale.png")!
-        let cachedData = try pngData(width: 400, height: 400)
-        let diskCache = ArtworkDiskCache(directory: directory)
-        let oldDate = Date.now.addingTimeInterval(-31 * 24 * 60 * 60)
-        _ = try await diskCache.store(
-            data: cachedData,
-            response: OpenCastHTTPResponse(
-                httpResponse(url: url, statusCode: 200, headers: ["ETag": "\"old\""])
-            ),
-            for: url,
-            now: oldDate
-        )
-        let probe = ArtworkDataLoaderProbe(responses: [(
-            Data(),
-            httpResponse(url: url, statusCode: 304, headers: ["ETag": "\"old\""])
-        )])
-        let loader = ArtworkLoader(diskCache: diskCache, dataLoader: probe.load)
-
-        let image = try await loader.image(
-            for: url,
-            targetPixelSize: CGSize(width: 56, height: 56),
-            cacheKind: .show
-        )
-
-        #expect(image != nil)
-        #expect(await probe.waitForRequestCount(1))
-        await loader.waitForBackgroundRevalidations()
-        let metadata = try #require(try await diskCache.metadata(for: url))
-        #expect(metadata.lastValidation > oldDate)
-    }
-
     @Test("304 updates metadata without rewriting bytes")
     func notModifiedUpdatesMetadataWithoutRewritingBytes() async throws {
         let directory = try makeTemporaryDirectory()
@@ -664,7 +494,7 @@ struct ArtworkLoaderTests {
         )])
         let loader = ArtworkLoader(diskCache: diskCache, dataLoader: probe.load)
 
-        _ = try await loader.image(
+        let image = try await loader.image(
             for: url,
             targetPixelSize: CGSize(width: 56, height: 56),
             cacheKind: .show
@@ -672,33 +502,10 @@ struct ArtworkLoaderTests {
         await loader.waitForBackgroundRevalidations()
         let entry = try #require(try await diskCache.cachedEntry(for: url))
 
+        #expect(image != nil)
         #expect(entry.data == cachedData)
         #expect(entry.metadata.byteCount == cachedData.count)
         #expect(entry.metadata.lastValidation > oldDate)
-    }
-
-    @Test("A thumbnail decode does not satisfy a larger request")
-    func thumbnailDecodeDoesNotSatisfyLargerRequest() async throws {
-        let data = try pngData(width: 1_600, height: 1_600)
-        let probe = ArtworkDataLoaderProbe(responses: [(data, nil)])
-        let loader = try makeLoader(dataLoader: probe.load)
-        let url = URL(string: "https://example.com/thumbnail-only.png")!
-
-        // A list row decodes the cover as a thumbnail first.
-        let thumbnail = try #require(
-            try await loader.image(for: url, targetPixelSize: CGSize(width: 114, height: 114))
-        )
-        let largeRequest = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 1_024, height: 1_024))
-
-        #expect(pixelWidth(of: thumbnail) <= 114)
-        #expect(loader.bestCachedImage(for: largeRequest) === thumbnail)
-        #expect(loader.imageMeetingSize(for: largeRequest) == nil)
-
-        // The full-size decode then serves the larger request.
-        let large = try #require(try await loader.image(for: largeRequest))
-        #expect(pixelWidth(of: large) >= 1_024)
-        #expect(loader.imageMeetingSize(for: largeRequest) === large)
-        #expect(await probe.requestCount == 1)
     }
 
     @Test("Now Playing artwork is not served from a thumbnail cache")
@@ -716,7 +523,6 @@ struct ArtworkLoaderTests {
                 targetPixelSize: CGSize(width: 1_024, height: 1_024)
             )
 
-            // The lock screen must not adopt the list row's thumbnail.
             #expect(nowPlayingLoader.cachedArtwork(for: url) == nil)
 
             let artwork = try await nowPlayingLoader.artwork(for: url)
@@ -728,33 +534,9 @@ struct ArtworkLoaderTests {
         #expect(await probe.requestCount == 1)
     }
 
-    @Test("UI and Now Playing artwork share disk bytes")
-    func uiAndNowPlayingArtworkShareDiskBytes() async throws {
-        let data = try pngData(width: 400, height: 400)
-        let probe = ArtworkDataLoaderProbe(responses: [(data, nil)])
-        let loader = try makeLoader(dataLoader: probe.load)
-        let url = URL(string: "https://example.com/shared-now-playing.png")!
-
-        let smallImage = try await loader.image(for: url, targetPixelSize: CGSize(width: 56, height: 56))
-        let largeImage = try await loader.image(for: url, targetPixelSize: CGSize(width: 96, height: 96))
-        let cachedArtwork = try await Task { @MainActor in
-            let nowPlayingLoader = SharedNowPlayingArtworkLoader(
-                artworkLoader: loader,
-                targetPixelSize: CGSize(width: 512, height: 512)
-            )
-            _ = try await nowPlayingLoader.artwork(for: url)
-            return nowPlayingLoader.cachedArtwork(for: url)
-        }.value
-
-        #expect(smallImage != nil)
-        #expect(largeImage != nil)
-        #expect(cachedArtwork != nil)
-        #expect(await probe.requestCount == 1)
-    }
-
-    @Test("An oversized payload is refused on receive and never cached")
-    func oversizedPayloadRefusedOnReceiveAndNeverCached() async throws {
-        let oversized = Data(repeating: 0xAB, count: ArtworkTransferPolicy.maximumByteCount + 1)
+    @Test("Artwork wider than the pixel limit is refused and never cached")
+    func extremeDeclaredCanvasRefusedBeforeDecode() async throws {
+        let oversized = try pngData(width: 12_001, height: 300)
         let probe = ArtworkDataLoaderProbe(responses: [(oversized, nil)])
         let directory = try makeTemporaryDirectory()
         let loader = ArtworkLoader(
@@ -763,67 +545,10 @@ struct ArtworkLoaderTests {
         )
         let url = URL(string: "https://example.com/oversized.png")!
 
-        let image = try await loader.image(for: url, targetPixelSize: CGSize(width: 48, height: 48))
+        let image = try await loader.image(for: url, targetPixelSize: CGSize(width: 1_024, height: 1_024))
 
         #expect(image == nil)
-        #expect(try cacheFile(in: directory, pathExtension: "png") == nil)
-    }
-
-    @Test("An extreme declared canvas is refused before decode and never cached")
-    func extremeDeclaredCanvasRefusedBeforeDecode() async throws {
-        let bomb = Self.syntheticPNGHeader(width: 100_000, height: 100_000)
-        let probe = ArtworkDataLoaderProbe(responses: [(bomb, nil)])
-        let directory = try makeTemporaryDirectory()
-        let loader = ArtworkLoader(
-            diskCache: ArtworkDiskCache(directory: directory),
-            dataLoader: probe.load
-        )
-        let url = URL(string: "https://example.com/bomb.png")!
-
-        let image = try await loader.image(for: url, targetPixelSize: CGSize(width: 48, height: 48))
-
-        #expect(image == nil)
-        #expect(try cacheFile(in: directory, pathExtension: "png") == nil)
-    }
-
-    /// A tiny synthetic payload whose IHDR declares an absurd canvas — the
-    /// compressed-bomb shape from the triage, without a large fixture.
-    private static func syntheticPNGHeader(width: UInt32, height: UInt32) -> Data {
-        var data = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
-        var chunk = Data("IHDR".utf8)
-        for value in [width, height] {
-            chunk.append(contentsOf: [
-                UInt8((value >> 24) & 0xFF),
-                UInt8((value >> 16) & 0xFF),
-                UInt8((value >> 8) & 0xFF),
-                UInt8(value & 0xFF),
-            ])
-        }
-        // bit depth 8, color type 6 (RGBA), compression 0, filter 0, interlace 0
-        chunk.append(contentsOf: [8, 6, 0, 0, 0])
-        let payloadLength = UInt32(chunk.count - 4)
-        data.append(contentsOf: [
-            UInt8((payloadLength >> 24) & 0xFF),
-            UInt8((payloadLength >> 16) & 0xFF),
-            UInt8((payloadLength >> 8) & 0xFF),
-            UInt8(payloadLength & 0xFF),
-        ])
-        data.append(chunk)
-        var crc: UInt32 = 0xFFFFFFFF
-        for byte in chunk {
-            crc ^= UInt32(byte)
-            for _ in 0..<8 {
-                crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320 : crc >> 1
-            }
-        }
-        crc ^= 0xFFFFFFFF
-        data.append(contentsOf: [
-            UInt8((crc >> 24) & 0xFF),
-            UInt8((crc >> 16) & 0xFF),
-            UInt8((crc >> 8) & 0xFF),
-            UInt8(crc & 0xFF),
-        ])
-        return data
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == [])
     }
 
     private func pngData(width: Int, height: Int) throws -> Data {

@@ -1,9 +1,8 @@
 import Foundation
 import OpenCastTranscription
 
-/// Release-only lane router. It resolves AppTransaction once, then pins every
-/// request for this process to one concrete API client. An unknown or failed
-/// environment lookup never falls back to a money/state lane.
+/// Resolves the lane once and pins the process to it, so no request reaches a second
+/// money/state lane.
 actor RemoteTranscriptionRoutedAPIClient: RemoteTranscriptionAPI {
     private let environmentProvider: @Sendable () async throws -> RemoteTranscriptionStoreEnvironment
     private let clientFactory: @Sendable (

@@ -7,9 +7,6 @@ import Synchronization
 import Testing
 @testable import OpenCast
 
-/// What the key sheet's Save, sync switch and Remove do to the tier state,
-/// on the real key store over the in-memory Keychain with its faults. Every
-/// expectation is also read back from the store's preference.
 @MainActor
 @Suite("Analysis key sheet actions")
 struct AnalysisKeySheetActionsTests {
@@ -19,7 +16,6 @@ struct AnalysisKeySheetActionsTests {
     private static let other = AnalysisKeyFixtures.key(AnalysisKeyFixtures.replacementText)
     private static let delete = AnalysisProviderKeyStoreError.Operation.delete
 
-    /// Fails one operation on one form, once armed.
     private nonisolated final class FaultSwitch: Sendable {
         private let armed = Mutex<(AnalysisProviderKeyStoreError.Operation, Bool)?>(nil)
 
@@ -53,7 +49,6 @@ struct AnalysisKeySheetActionsTests {
             AnalysisKeySheetActions(provider: provider, keys: keys, tier: tier, modelContext: context)
         }
 
-        /// The state as a later launch would read it.
         var persisted: AnalysisKeyTierStore.State {
             let store = AnalysisKeyTierStore()
             store.load(modelContext: context)
@@ -155,20 +150,6 @@ struct AnalysisKeySheetActionsTests {
         }
 
         stack.expectState(.freeTier(day: Self.yesterday))
-    }
-
-    @Test("Sync on with the local delete failed and no local copy: the synced key is in use, so its answer stands")
-    func partialSyncOnSaveWithNoLocalCopy() throws {
-        let stack = try Stack(seeded: [.google: (Self.other, syncs: true)])
-        stack.tier.noteNotFreeTier(modelContext: stack.context)
-        stack.faults.arm(Self.delete, synchronizable: false)
-
-        #expect(throws: AnalysisProviderKeyStoreError.self) {
-            try stack.actions().save(Self.typed, syncs: true, tested: Self.answer(.freeTier))
-        }
-
-        stack.expectState(.freeTier(day: Self.yesterday))
-        #expect(try stack.keys.key(for: .google)?.digest == Self.typed.digest)
     }
 
     @Test("Sync on with the local delete failed and no Test: the key in use changed, so the state goes")

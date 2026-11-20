@@ -4,10 +4,6 @@ import OpenCastAnalysisProviders
 import Security
 import Synchronization
 
-/// Provider keys held in memory, for UI tests and previews: the Keychain
-/// storage's two forms, read rule and call order over a dictionary, with the
-/// same fault seam, so a failure can land between a mutation's write and its
-/// delete and leave both forms, as the Keychain can.
 nonisolated final class InMemoryAnalysisProviderKeyStorage: AnalysisProviderKeyStoring {
     typealias Fault = KeychainAnalysisProviderKeyStorage.Fault
 
@@ -32,10 +28,8 @@ nonisolated final class InMemoryAnalysisProviderKeyStorage: AnalysisProviderKeyS
         case synced
     }
 
-    /// The stored items; `place` changes them without taking `operations`,
-    /// as another device or process writes the Keychain.
+    /// `place` writes these without taking `operations`, as another device or process would.
     private let items: Mutex<[AnalysisProvider: Forms]>
-    /// One operation at a time, as the Keychain storage's lock.
     private let operations = Mutex(())
     private let fault: Fault?
 
@@ -50,13 +44,10 @@ nonisolated final class InMemoryAnalysisProviderKeyStorage: AnalysisProviderKeyS
         self.fault = fault
     }
 
-    /// Writes (or with `nil` deletes) one form behind the storage's back, as
-    /// another device or process would.
     func place(_ data: Data?, provider: AnalysisProvider, synchronizable: Bool) {
         items.withLock { $0[provider, default: Forms()][synchronizable] = data }
     }
 
-    /// Both forms as stored, read behind the storage's back (tests).
     func stored(_ provider: AnalysisProvider) -> (local: Data?, synced: Data?) {
         items.withLock { ($0[provider]?.local, $0[provider]?.synced) }
     }

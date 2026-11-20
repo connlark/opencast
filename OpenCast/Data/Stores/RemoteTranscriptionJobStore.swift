@@ -2,18 +2,8 @@ import Foundation
 import Observation
 import OpenCastTranscription
 
-/// Observable state for remote transcription jobs: the active request's
-/// phase, the last known dev balance (display only — the server ledger is
-/// authoritative), and persisted job references for relaunch recovery.
-///
-/// Every persisted-reference change goes through one main-actor mutation
-/// path (`mutateReference`), so a create attempt, an attach, an exit, a
-/// user-cancel intent and a clear can never interleave, and each one leaves
-/// a typed diagnostic event behind.
 @Observable
 final class RemoteTranscriptionJobStore {
-    /// Pending start intent awaiting the consumption preview sheet; set by
-    /// the episode menu, consumed by the sheet's Start/Cancel.
     var startPreview: RemoteTranscriptionStartPreviewRequest?
 
     func dismissStartPreview(ifMatching request: RemoteTranscriptionStartPreviewRequest) {
@@ -29,6 +19,7 @@ final class RemoteTranscriptionJobStore {
     private(set) var activeEpisodeTitle: String?
     private(set) var phase: RemoteTranscriptionRequestPhase?
     private(set) var accountID: String?
+    /// Display only; the server ledger is authoritative.
     private(set) var balance: OpenCastRemoteTranscriptionBalance?
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -74,8 +65,6 @@ final class RemoteTranscriptionJobStore {
         activeTask?.cancel()
     }
 
-    /// Dismisses a terminal outcome from the failure surface. Live and parked
-    /// requests are untouched — Resume or a user cancel ends those.
     func dismissTerminalPhase(for episodeID: String) {
         guard activeEpisodeID == episodeID, phase?.isTerminal == true else {
             return
@@ -94,10 +83,8 @@ final class RemoteTranscriptionJobStore {
 
     // MARK: Persisted job references
 
-    /// The stable reference for an episode and purpose, minting a new client
-    /// request ID only when none is persisted (duplicate submits attach
-    /// server-side). Purposes are keyed separately so a detect-ads pass never
-    /// attaches to a plain Transcribe Remotely job.
+    /// The client request ID stays stable until the reference is cleared: the server attaches a
+    /// duplicate submit to the existing job.
     func reference(
         for episodeID: String,
         purpose: RemoteTranscriptionJobPurpose = .transcription
@@ -116,7 +103,6 @@ final class RemoteTranscriptionJobStore {
         return reference
     }
 
-    /// The persisted reference, if any, without minting one.
     func existingReference(
         for episodeID: String,
         purpose: RemoteTranscriptionJobPurpose = .transcription
@@ -124,10 +110,8 @@ final class RemoteTranscriptionJobStore {
         references().first { $0.episodeID == episodeID && $0.resolvedPurpose == purpose }
     }
 
-    /// The completion-delivery owner a run of this reference snapshots: the
-    /// persisted owner, or `local` for a reference the run has yet to mint.
-    /// Read before a run starts, because a terminal failure clears the
-    /// reference before its error reaches the caller.
+    /// Read before a run starts: a terminal failure clears the reference before its error
+    /// reaches the caller.
     func completionDeliveryOwner(
         for episodeID: String,
         purpose: RemoteTranscriptionJobPurpose = .transcription
@@ -135,9 +119,7 @@ final class RemoteTranscriptionJobStore {
         existingReference(for: episodeID, purpose: purpose)?.completionDeliveryOwner ?? .local
     }
 
-    /// Persisted immediately before a create request can leave the process.
-    /// The create state only moves forward, so an attached reference is left
-    /// alone.
+    /// Must persist before a create request can leave the process.
     func markCreateAttempted(
         episodeID: String,
         purpose: RemoteTranscriptionJobPurpose = .transcription
@@ -164,8 +146,6 @@ final class RemoteTranscriptionJobStore {
         record(.createAttached, reference: updated, disposition: .attached)
     }
 
-    /// Records the last recoverable exit on an existing reference. A missing
-    /// reference is left alone: an exit never mints one.
     func recordExit(
         _ exit: RemoteTranscriptionJobExit?,
         episodeID: String,
@@ -179,9 +159,8 @@ final class RemoteTranscriptionJobStore {
         }
     }
 
-    /// Persists the user's cancel intent before any local task is cancelled.
-    /// While it is set, automatic re-attach is suppressed; only the
-    /// user-authorized cancel path resolves and clears the reference.
+    /// Must persist before any local task is cancelled; while set, automatic re-attach is
+    /// suppressed.
     func recordUserCancelIntent(
         episodeID: String,
         purpose: RemoteTranscriptionJobPurpose = .transcription
@@ -194,10 +173,7 @@ final class RemoteTranscriptionJobStore {
         record(.userCancelRequested, reference: updated, disposition: .cancelIntentPersisted)
     }
 
-    /// Terminal cleanup. Only a terminal server state, a durable import and
-    /// ack, a resolved user cancel, a conclusive first-attempt rejection or
-    /// the unfunded detect reservation bail may clear a reference; every
-    /// recoverable exit keeps it.
+    /// Only a terminal outcome may clear a reference; every recoverable exit keeps it.
     func clearReference(
         for episodeID: String,
         purpose: RemoteTranscriptionJobPurpose = .transcription
@@ -205,9 +181,6 @@ final class RemoteTranscriptionJobStore {
         removeReference(for: episodeID, purpose: purpose, kind: .referenceCleared, disposition: .cleared)
     }
 
-    /// Housekeeping for a reference older than the recovery window: the
-    /// server has expired its unacknowledged result by then, so nothing is
-    /// left to re-attach. Nothing is minted in its place.
     func expireReference(
         for episodeID: String,
         purpose: RemoteTranscriptionJobPurpose
@@ -223,9 +196,6 @@ final class RemoteTranscriptionJobStore {
         return (try? JSONDecoder().decode([RemoteTranscriptionJobReference].self, from: data)) ?? []
     }
 
-    /// The single read-modify-write path for an existing reference. Returns
-    /// the persisted result, or nil when no reference exists (nothing is
-    /// minted here).
     @discardableResult
     private func mutateReference(
         episodeID: String,

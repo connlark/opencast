@@ -1,15 +1,13 @@
 import Foundation
 import OpenCastAnalysis
 
-/// Downloads one policy document. Implementations stop reading past
-/// `maximumBytes` and throw `AnalysisPolicyRejection` for a bad status.
+/// Stops reading past `maximumBytes`; throws `AnalysisPolicyRejection` for a bad status.
 public protocol AnalysisPolicyFetching: Sendable {
     func fetch(_ url: URL, maximumBytes: Int) async throws -> Data
 }
 
-/// Where the policy is served: the model gateway that also serves the
-/// transcription model manifest. The current signature is mutable and names
-/// one version; each version's bundle sits at its own immutable URL.
+/// The signature is mutable and names one version; each version's bundle has its own
+/// immutable URL.
 public struct AnalysisPolicyEndpoint: Sendable, Equatable {
     public var baseURL: URL
 

@@ -2,8 +2,6 @@ import Foundation
 
 public protocol PodcastDirectoryService: Sendable {
     func search(query: String) async throws -> [DirectoryPodcastResult]
-    /// Selection-time enrichment for a known Apple collection ID.
-    /// Directories without that capability use the no-result default.
     func lookup(appleID: Int) async throws -> DirectoryPodcastResult?
 }
 
@@ -18,8 +16,6 @@ public struct ITunesPodcastDirectoryService: PodcastDirectoryService {
     let countryCode: String?
     static let jsonDecoder = JSONDecoder()
 
-    /// The device region, for the storefront default. The macOS 12 branch
-    /// only exists for the package's older macOS floor.
     public static var deviceRegionCode: String? {
         if #available(macOS 13, *) {
             Locale.current.region?.identifier
@@ -28,9 +24,7 @@ public struct ITunesPodcastDirectoryService: PodcastDirectoryService {
         }
     }
 
-    /// - Parameter countryCode: iTunes storefront country. Defaults to the
-    ///   device region so non-US users get their storefront's results; nil
-    ///   omits the parameter and iTunes falls back to the US storefront.
+    /// A nil `countryCode` omits the parameter, and iTunes then serves the US storefront.
     public init(
         httpClient: any OpenCastHTTPClient = URLSessionOpenCastHTTPClient(),
         countryCode: String? = ITunesPodcastDirectoryService.deviceRegionCode

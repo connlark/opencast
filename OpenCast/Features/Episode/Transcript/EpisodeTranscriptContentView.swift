@@ -2,10 +2,8 @@ import OpenCastTranscription
 import SwiftData
 import SwiftUI
 
-/// Owns everything in the transcript page that churns with playback —
-/// follow-along/karaoke state, scroll position, search, and the bottom
-/// accessory — so 1 Hz position ticks and per-segment transitions never
-/// re-evaluate the toolbar-owning parent (whose open "…" menu would flicker).
+/// Owns everything that churns with playback, so position ticks and segment transitions never
+/// re-evaluate the toolbar-owning parent, whose open menu would flicker.
 struct EpisodeTranscriptContentView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -111,9 +109,8 @@ struct EpisodeTranscriptContentView: View {
             if showsResumePill {
                 TranscriptResumePill(action: resumeFollowing)
             }
-            // The switchable state auto-resolves (`autoSwitchToTranscribedCopyIfNeeded`),
-            // so its banner only appears as the manual fallback after that
-            // one automatic attempt failed to converge.
+            // A switchable mismatch auto-resolves once, so the banner is only the manual
+            // fallback after that attempt failed to converge.
             if !isSearchPresented,
                case .mismatched(let canSwitchToTranscribedCopy)? = sourceAlignment,
                hasAutoSwitchedToTranscribedCopy || !canSwitchToTranscribedCopy {
@@ -134,9 +131,8 @@ struct EpisodeTranscriptContentView: View {
 
     // MARK: - Derived state
 
-    /// Keyed off the loaded document value, not the parent's load identifier —
-    /// that identifier flips before the async load lands, while this changes
-    /// exactly when new content is actually on screen.
+    /// Not the parent's load identifier: that flips before the async load lands, while this
+    /// changes exactly when new content is on screen.
     private var documentKey: String {
         "\(document.episodeID)|\(document.updatedAt.timeIntervalSince1970)"
     }
@@ -163,31 +159,20 @@ struct EpisodeTranscriptContentView: View {
         appModel.playback.currentEpisode?.audioURL
     }
 
-    /// Follow-along/karaoke may run only against the exact audio asset the
-    /// transcript describes; a dynamic enclosure URL returns byte-different
-    /// assemblies per request, so an unproven player item must not be
-    /// highlighted as though it were the transcribed audio.
     private var isSourceVerified: Bool {
         sourceAlignment == .verified
     }
 
-    /// The verdict can only change when the player item, current episode,
-    /// document, or download record changes — never on position ticks. The
-    /// actual player item is not observable, so the observable playback
-    /// state and duration stand in as trip-wires: every path that replaces
-    /// the item or establishes its timeline (load, retry, cache fallback,
-    /// duration resolution) publishes through them.
+    /// The player item is not observable, so playback state and duration stand in as trip-wires:
+    /// every path that replaces the item or establishes its timeline publishes through them.
     private var sourceAlignmentTaskID: String {
         let downloadStamp = appModel.downloads.record(for: episodeID)?.updatedAt.timeIntervalSince1970 ?? -1
         let playbackStamp = "\(appModel.playback.duration ?? -1)|\(String(describing: appModel.playback.state))"
         return "\(documentKey)|\(currentPlaybackEpisodeID ?? "none")|\(currentPlaybackAudioURL?.absoluteString ?? "none")|\(playbackStamp)|\(downloadStamp)"
     }
 
-    /// Restarting on identity changes tears the media-clock stream down for
-    /// dismissals, document reloads, current-episode flips, and backgrounding
-    /// via the `.task(id:)` cancellation, which removes the player observer.
-    /// On return to the foreground the stream's prime sample reconciles
-    /// immediately; the 1 Hz observer keeps segments current meanwhile.
+    /// The scene phase is in the key so backgrounding cancels the stream and removes the player
+    /// observer; on return, the stream's prime sample reconciles at once.
     private var mediaClockTaskID: String {
         "\(documentKey)|\(isCurrentEpisode)|\(isSourceVerified)|\(scenePhase == .active)"
     }
@@ -215,10 +200,7 @@ struct EpisodeTranscriptContentView: View {
         autoSwitchToTranscribedCopyIfNeeded()
     }
 
-    /// Opening the transcript should not require pressing the switch button:
-    /// when the matched copy exists but the player is on a different asset,
-    /// switch to it once automatically, preserving pause state. One attempt
-    /// per document view — if it cannot converge, the banner offers the
+    /// One automatic attempt per document view: if it cannot converge, the banner offers the
     /// manual path instead of looping.
     private func autoSwitchToTranscribedCopyIfNeeded() {
         guard !hasAutoSwitchedToTranscribedCopy,
@@ -269,9 +251,8 @@ struct EpisodeTranscriptContentView: View {
     // MARK: - Follow-along
 
     private func handlePositionTick() {
-        // Self-healing convergence: while unverified, re-resolve on the 1 Hz
-        // tick so a missed observation (item swap, deferred asset load) can
-        // never leave follow-along suspended against a now-proven item.
+        // While unverified, re-resolve on each tick, so a missed observation (item swap,
+        // deferred asset load) never leaves follow-along suspended against a now-proven item.
         if sourceAlignment != .verified {
             reconcileSourceAlignment()
         }
@@ -295,11 +276,8 @@ struct EpisodeTranscriptContentView: View {
         }
     }
 
-    /// The single idempotent reconciliation both the media clock and the 1 Hz
-    /// observer converge on: resolve the complete highlight state for the
-    /// given media position, publishing only what actually changed. Every
-    /// sample is a wake-up, never an event to count, so dropped, coalesced,
-    /// or duplicated callbacks and seeks in either direction self-heal here.
+    /// Idempotent: every sample is a wake-up, never an event to count, so dropped, coalesced or
+    /// duplicated callbacks and seeks in either direction self-heal here.
     private func reconcile(position: TimeInterval, animated: Bool = true) {
         guard isCurrentEpisode, isSourceVerified else {
             tapPin = nil
@@ -345,9 +323,8 @@ struct EpisodeTranscriptContentView: View {
     ) {
         if activeSegmentID != segment?.id {
             activeSegmentID = segment?.id
-            // The stored bound indexes the previous layout's text; nil it in
-            // the same pass the layout is replaced so a stale index can never
-            // slice the new text.
+            // The stored bound indexes the previous layout's text, so it is cleared in the same
+            // pass that replaces the layout; a stale index must never slice the new text.
             karaokeSpokenUpperBound = nil
             if let segment {
                 let handoff = index.map(timeline.handoff(afterSegmentAt:)) ?? .infinity
@@ -390,7 +367,6 @@ struct EpisodeTranscriptContentView: View {
     private func handleCurrentEpisodeChange() {
         if isCurrentEpisode {
             isFollowing = true
-            // Becoming current again re-arms the one-shot automatic switch.
             hasAutoSwitchedToTranscribedCopy = false
             reconcile(position: appModel.playback.position)
         } else {
@@ -439,10 +415,8 @@ struct EpisodeTranscriptContentView: View {
         playEpisode(at: nil)
     }
 
-    /// Carrying the numeric position across assemblies is approximate (they
-    /// differ by inserted content), but every karaoke frame afterward is
-    /// exact against the transcribed copy. Pause state is preserved so the
-    /// automatic switch never starts audio the user had stopped.
+    /// The carried position is approximate across assemblies, but every karaoke frame afterward is
+    /// exact. Pause state is kept so the automatic switch never starts audio the user stopped.
     private func switchToTranscribedCopy() {
         let wantsAudio = switch appModel.playback.state {
         case .playing, .buffering, .loading:

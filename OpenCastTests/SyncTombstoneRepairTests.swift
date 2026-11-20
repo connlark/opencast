@@ -52,8 +52,6 @@ struct SyncTombstoneRepairTests {
         #expect(store.syncedStoreSelfSaveCount == 1)
     }
 
-    /// The tombstone comparisons are inclusive: a record stamped at the clear
-    /// instant itself is shadowed. Guards the issue 34 rewrite of `<=`.
     @Test("Records stamped at a tombstone's own instant stay shadowed")
     func recordsStampedAtATombstonesOwnInstantStayShadowed() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -193,8 +191,6 @@ struct SyncTombstoneRepairTests {
         context.insert(
             SyncTombstoneRecord(scope: .feedProgress, feedURL: Self.feedURL, deletedAt: Self.clearInstant)
         )
-        // Written long ago under a raw variant of the claiming feed's URL —
-        // the exact shadow-record shape that used to dodge every clear.
         context.insert(
             EpisodeProgressRecord(
                 episodeID: "shared-episode",
@@ -388,8 +384,6 @@ struct SyncTombstoneRepairTests {
         let older = now.addingTimeInterval(-100)
         let newer = now.addingTimeInterval(-50)
 
-        // Same scope and same stored key twice: the key field for these scopes
-        // is not defined yet, so a build in the field must not pick a winner.
         context.insert(SyncTombstoneRecord(scope: .playlist, feedURL: Self.feedURL, deletedAt: older))
         context.insert(SyncTombstoneRecord(scope: .playlist, feedURL: Self.feedURL, deletedAt: newer))
         context.insert(SyncTombstoneRecord(scope: .playlist, feedURL: "", deletedAt: older))
@@ -632,8 +626,6 @@ struct SyncTombstoneRepairTests {
         #expect(result.progressGroupsMerged == 1)
     }
 
-    /// The archive rides with `updatedAt`, as `isPlayed` does: whichever copy
-    /// wrote last decides, archive or unarchive, whichever identity survives.
     @Test("Duplicate repair takes the archive from the newest copy in both directions")
     func duplicateRepairTakesTheArchiveFromTheNewestCopy() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -641,7 +633,6 @@ struct SyncTombstoneRepairTests {
         let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
         let laterInstant = Self.clearInstant.addingTimeInterval(50)
 
-        // Archived later on the copy whose identity loses.
         context.insert(
             EpisodeProgressRecord(
                 episodeID: "archived-later",
@@ -661,7 +652,6 @@ struct SyncTombstoneRepairTests {
                 dedupeUUID: "bbbbbbbb-2222-0000-0000-000000000000"
             )
         )
-        // Unarchived later on the copy whose identity loses.
         context.insert(
             EpisodeProgressRecord(
                 episodeID: "unarchived-later",
@@ -736,10 +726,6 @@ struct SyncTombstoneRepairTests {
         #expect(store.archivedEpisodeIDs == ["legacy-archived"])
     }
 
-    /// Copies that tie on `updatedAt`, played, duration and position but
-    /// differ in their archive must merge to the same archive in either
-    /// order, or two peers keep the same identity with opposite archives.
-    /// The merge runs directly because a fetch's order cannot be chosen.
     @Test("Tied copies merge to the same archive in either input order, with or without identities")
     func tiedCopiesMergeToTheSameArchiveInEitherOrder() throws {
         let laterArchive = Self.clearInstant.addingTimeInterval(10)
@@ -778,8 +764,7 @@ struct SyncTombstoneRepairTests {
         let dedupeUUID: String
     }
 
-    /// Merges the copies, in the order given, into one survivor and returns
-    /// its archive.
+    // Calls the merge directly: a fetch's order cannot be chosen.
     private func mergedArchive(of copies: [TiedProgressCopy]) throws -> Date? {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
@@ -814,8 +799,6 @@ struct SyncTombstoneRepairTests {
         return survivors.first?.archivedAt
     }
 
-    /// Clear Progress tombstones the episode; an archive written before the
-    /// clear goes with it, and one written after it survives.
     @Test("An episode tombstone shadows an older archive and keeps a newer one")
     func episodeTombstoneShadowsAnOlderArchive() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

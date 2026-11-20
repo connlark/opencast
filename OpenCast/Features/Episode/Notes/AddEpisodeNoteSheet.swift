@@ -9,8 +9,6 @@ struct AddEpisodeNoteSheet: View {
     @State private var errorMessage: String?
     @FocusState private var isEditing: Bool
 
-    /// Callers resolve an existing note into the draft before presenting, so
-    /// the editor opens with its text and never fetches.
     let draft: EpisodeNoteDraft
 
     init(draft: EpisodeNoteDraft) {

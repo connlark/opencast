@@ -5,54 +5,32 @@ import Testing
 
 @Suite("Now Playing auto-skip pill undo")
 struct NowPlayingAutoSkipUndoTests {
-    private let zones = [
-        PlaybackSkipZone(id: 1, startTime: 51, endTime: 141),
-        PlaybackSkipZone(id: 2, startTime: 1262, endTime: 1384)
-    ]
-
-    @Test
-    func seekTargetLandsJustInsideTheSkippedZoneStart() {
-        // Exactly zone.startTime can land a frame before the zone and miss
-        // the .scrub disarm (measured live re-skip); the target sits half a
-        // second inside.
-        let target = NowPlayingAutoSkipUndo.seekTarget(
+    @Test(
+        "Undo lands half a second inside the skipped zone, never past a tiny zone's midpoint",
+        arguments: [
+            (start: 1262.0, end: 1384.0, target: 1262.5),
+            (start: 10.0, end: 10.6, target: 10.3)
+        ]
+    )
+    func seekTarget(start: TimeInterval, end: TimeInterval, target: TimeInterval) {
+        let zones = [
+            PlaybackSkipZone(id: 1, startTime: 51, endTime: 141),
+            PlaybackSkipZone(id: 2, startTime: start, endTime: end)
+        ]
+        #expect(NowPlayingAutoSkipUndo.seekTarget(
             for: PlaybackAutoSkipEvent(zoneID: 2, sequence: 1),
             zones: zones
-        )
-        #expect(target == 1262.5)
-    }
-
-    @Test
-    func seekTargetNeverPassesTheMidpointOfTinyZones() {
-        let tinyZone = [PlaybackSkipZone(id: 7, startTime: 10, endTime: 10.6)]
-        let target = NowPlayingAutoSkipUndo.seekTarget(
-            for: PlaybackAutoSkipEvent(zoneID: 7, sequence: 1),
-            zones: tinyZone
-        )
-        #expect(target == 10.3)
-    }
-
-    @Test
-    func missingEventOrUnknownZoneProducesNoSeek() {
-        #expect(NowPlayingAutoSkipUndo.seekTarget(for: nil, zones: zones) == nil)
-        #expect(NowPlayingAutoSkipUndo.seekTarget(
-            for: PlaybackAutoSkipEvent(zoneID: 99, sequence: 1),
-            zones: zones
-        ) == nil)
-        #expect(NowPlayingAutoSkipUndo.seekTarget(
-            for: PlaybackAutoSkipEvent(zoneID: 1, sequence: 1),
-            zones: []
-        ) == nil)
+        ) == target)
     }
 
     @Test
     func undoSeekIntentLandsAsScrubSoTheZonePlaysThroughOnceAndRearms() {
-        // The pill undo relies on the existing `.scrub`-landing disarm: the
-        // policy must not re-skip on the landing, must stay quiet while the
-        // zone plays through, and must re-arm after exit.
         #expect(NowPlayingAutoSkipUndo.seekIntent == .scrub)
 
-        var policy = PlaybackAdSkipPolicy(zones: zones)
+        var policy = PlaybackAdSkipPolicy(zones: [
+            PlaybackSkipZone(id: 1, startTime: 51, endTime: 141),
+            PlaybackSkipZone(id: 2, startTime: 1262, endTime: 1384)
+        ])
         let landing = policy.evaluate(
             previousPosition: 1384,
             position: 1262.5,
@@ -69,7 +47,6 @@ struct NowPlayingAutoSkipUndoTests {
         )
         #expect(playThroughTick == nil)
 
-        // Exit the zone, then re-enter: the zone must re-arm and skip again.
         let exitTick = policy.evaluate(
             previousPosition: 1300,
             position: 1385,

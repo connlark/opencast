@@ -1,8 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// The one home for download settings, pushed from the Downloads tab and
-/// reached from Settings › Storage. Every control applies on change.
 struct DownloadSettingsView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
@@ -89,8 +87,6 @@ struct DownloadSettingsView: View {
         }
     }
 
-    /// The default always has a value; the picker's nil tag belongs to a
-    /// show's Default row, which this picker leaves out.
     private var defaultKeepLimitBinding: Binding<DownloadKeepLimit?> {
         Binding {
             appModel.downloadSettings.defaultKeepLimit

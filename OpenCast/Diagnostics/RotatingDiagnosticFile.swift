@@ -1,14 +1,8 @@
 import Foundation
 
-/// An append-only file with a byte cap and one `.previous` generation, so a
-/// diagnostic trail stays bounded at roughly twice the cap on disk. Appends
-/// are queued on a private serial queue and never block the caller; failures
-/// are dropped, never asserted, because a diagnostic sink must not turn into
-/// a crash on a Release device.
-///
-/// Thread safety: every file operation and every access to the cached byte
-/// count happens on `queue`, so the class is safe to share across
-/// isolation domains without other locking.
+/// Every file operation and every access to `currentByteCount` happens on `queue`, which
+/// makes it Sendable. Failures are dropped, never asserted: a diagnostic sink must not
+/// crash a Release device.
 nonisolated final class RotatingDiagnosticFile: @unchecked Sendable {
     static let defaultMaximumByteCount = 256 * 1024
 
@@ -16,8 +10,7 @@ nonisolated final class RotatingDiagnosticFile: @unchecked Sendable {
     let maximumByteCount: Int
 
     private let queue: DispatchQueue
-    /// Bytes currently in `fileURL`, read once from disk then tracked here so
-    /// appends do not stat the file every time.
+    /// Read from disk once, then tracked here so appends do not stat the file.
     private var currentByteCount: Int?
 
     init(fileURL: URL, maximumByteCount: Int = RotatingDiagnosticFile.defaultMaximumByteCount) {
@@ -30,15 +23,12 @@ nonisolated final class RotatingDiagnosticFile: @unchecked Sendable {
         fileURL.appendingPathExtension("previous")
     }
 
-    /// Enqueues one record. The caller returns immediately.
     func append(_ data: Data) {
         queue.async { [self] in
             write(data)
         }
     }
 
-    /// Waits for every queued append to land. Intended for tests and for
-    /// reading the trail back on a device.
     func flush() {
         queue.sync {}
     }

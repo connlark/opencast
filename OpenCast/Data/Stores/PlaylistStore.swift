@@ -3,12 +3,8 @@ import Observation
 import OpenCastCore
 import SwiftData
 
-/// Owns the synced playlists with `UpNextQueueStore`'s save and rollback
-/// mechanics, minus consumption: playback never removes an item, load never
-/// prunes rows whose episode stopped resolving (they render from their
-/// fallbacks), and adding an existing member skips it rather than moving it.
-/// Every save dirties a playlist, item or playlist tombstone row, because it
-/// carries a self-save credit that would otherwise swallow a remote change.
+/// Every save must dirty a playlist, item or playlist tombstone row: it carries a self-save
+/// credit that would otherwise swallow a remote change.
 @Observable
 final class PlaylistStore {
     private typealias ListedState = (
@@ -30,8 +26,7 @@ final class PlaylistStore {
     }
 
     @ObservationIgnored var onPlaylistsChanged: (() -> Void)?
-    /// Smart playlist evaluations, keyed by the tokens each rule reads; the
-    /// app model fills it and this store drops entries with their playlists.
+    /// The app model fills it; this store drops entries with their playlists.
     @ObservationIgnored let smartEvaluations = SmartPlaylistEvaluationCache()
     @ObservationIgnored private let saveSyncedStore: (ModelContext) throws -> Void
     @ObservationIgnored private let now: () -> Date
@@ -39,8 +34,6 @@ final class PlaylistStore {
     /// reports whether its save committed.
     @ObservationIgnored private var stagedIdentityMigration: StagedIdentityMigration?
 
-    /// `saveSyncedStore` is the synced-store save (the self-save ledger in the
-    /// app); `now` is the test seam for deterministic timestamps.
     init(
         saveSyncedStore: @escaping (ModelContext) throws -> Void,
         now: @escaping () -> Date = { .now }
@@ -63,13 +56,9 @@ final class PlaylistStore {
         }
     }
 
-    /// Rereads the rows after something outside this store may have changed
-    /// them (an import, a repair pass) and publishes only on a difference.
-    ///
-    /// It never rolls back or drops a staged re-key: it wrote nothing, and the
-    /// context is shared with writers whose pending changes are not its own.
-    /// The full fetch is deliberate, since an identity re-key and a feed-move
-    /// rule rewrite leave `updatedAt` alone and a cheaper probe would miss them.
+    /// Never rolls back or drops a staged re-key: the context is shared with writers whose pending
+    /// changes are not its own. Fetches in full because an identity re-key or a feed-move rule
+    /// rewrite leaves `updatedAt` alone.
     @discardableResult
     func reload(modelContext: ModelContext) -> PlaylistReloadChange {
         let state: ListedState
@@ -117,8 +106,6 @@ final class PlaylistStore {
         return change
     }
 
-    /// A smart playlist stores `rule`, or the default rule without one; a
-    /// manual playlist ignores it.
     @discardableResult
     func create(
         name: String,
@@ -195,9 +182,8 @@ final class PlaylistStore {
         }
     }
 
-    /// Stores a smart playlist's rule in its canonical form; an identical
-    /// rule is a no-op. A rule this build cannot read is never overwritten,
-    /// so an older app cannot clobber a newer version's rule.
+    /// A rule this build cannot read is never overwritten, so an older app cannot clobber a newer
+    /// version's rule.
     @discardableResult
     func setRule(
         _ rule: PlaylistRule,
@@ -256,9 +242,8 @@ final class PlaylistStore {
             for record in playlistRecords {
                 modelContext.delete(record)
             }
-            // Inserted even when memory listed the playlist and no row was
-            // left: another device may still hold rows, and the tombstone is
-            // what keeps the delete from being undone when they sync back.
+            // Inserted even when no row was left: another device may still hold rows, and the
+            // tombstone keeps the delete from being undone when they sync back.
             modelContext.insert(PlaylistTombstoneRecord(playlistID: playlistID, deletedAt: now()))
             try saveSyncedStore(modelContext)
             smartEvaluations.remove(playlistID)
@@ -273,8 +258,7 @@ final class PlaylistStore {
         }
     }
 
-    /// Appends the episodes that are not already members, in order, and
-    /// returns how many were added.
+    /// Skips existing members rather than moving them; returns how many were added.
     @discardableResult
     func add(
         _ episodes: [EpisodeListItemSnapshot],
@@ -395,9 +379,8 @@ final class PlaylistStore {
 
             let playlistRecords = try fetchPlaylistRecords(playlistID, modelContext: modelContext)
             let timestamp = now()
-            // Removal is by episode, not by row: a twin row of the pair that
-            // another device minted under another `itemID` goes too, or it
-            // would list the episode again until repair.
+            // Removal is by episode, not row: a twin another device minted under another `itemID`
+            // goes too, or it would list the episode again until repair.
             var remainingRecords: [PlaylistItemRecord] = []
             var deletedRowCount = 0
             for record in itemRecords {
@@ -449,9 +432,6 @@ final class PlaylistStore {
         }
     }
 
-    /// Moves items within the loaded order. Only the moved rows get new keys,
-    /// unless a key grows past the renumber threshold, in which case the whole
-    /// playlist is renumbered in the same save.
     @discardableResult
     func move(
         fromOffsets offsets: IndexSet,
@@ -496,9 +476,8 @@ final class PlaylistStore {
                 modelContext: modelContext
             )
             guard itemRecords.map(\.itemID) == currentItems.map(\.itemID) else {
-                // The rows changed behind the loaded order (an identity re-key
-                // can delete a duplicate row, an import can land) and no reload
-                // has run yet; adopting them lets the retry succeed.
+                // The rows changed behind the loaded order and no reload has run yet; adopting
+                // them lets the retry succeed.
                 publishItems(itemRecords, in: playlistID, updatedAt: nil)
                 onPlaylistsChanged?()
                 lastErrorMessage = staleMessage
@@ -545,9 +524,6 @@ final class PlaylistStore {
         }
     }
 
-    /// Reorders a manual playlist by each row's stored publication date and
-    /// renumbers it in one save. Equal and missing dates keep their current
-    /// relative order; an already-sorted playlist is left untouched.
     @discardableResult
     func sortItems(
         in playlistID: String,
@@ -581,7 +557,7 @@ final class PlaylistStore {
                 modelContext: modelContext
             )
             guard itemRecords.map(\.itemID) == currentItems.map(\.itemID) else {
-                // Same recovery as `move`: adopt the rows so the retry succeeds.
+                // Adopting the changed rows lets the retry succeed.
                 publishItems(itemRecords, in: playlistID, updatedAt: nil)
                 onPlaylistsChanged?()
                 lastErrorMessage = "\(failure) because it changed. Try again."
@@ -626,9 +602,7 @@ final class PlaylistStore {
         }
     }
 
-    /// Played state lives in the library's progress index, so these figures
-    /// are computed on demand instead of being held on the summaries. Manual
-    /// playlists only: a smart playlist's figures come from its evaluation.
+    /// Manual playlists only; a smart playlist's figures come from its evaluation.
     func counts(for playlistID: String, isPlayed: (String) -> Bool) -> PlaylistCounts {
         let items = itemsByPlaylistID[playlistID] ?? []
         let unplayedItems = items.filter { !isPlayed($0.episodeID) }
@@ -699,8 +673,6 @@ final class PlaylistStore {
         }
     }
 
-    /// Publishes the playlist's rows in their new order, touches the
-    /// playlist's `updatedAt`, and saves.
     private func commitItems(
         _ orderedRecords: [PlaylistItemRecord],
         playlistRecords: [PlaylistRecord],
@@ -793,16 +765,9 @@ final class PlaylistStore {
         return (Self.sorted(summaries, by: sortOrder), itemsByID, listed.needsRepair)
     }
 
-    /// The rows a duplicate repair pass would keep, found without changing
-    /// the store, so memory never lists a twin or a tombstoned row that the
-    /// next pass deletes, and a mutation never rewrites one. Twin groups and
-    /// tombstones follow `PlaylistSyncRepairer`: one row per `playlistID` and
-    /// per (`playlistID`, `episodeID`), the smallest `dedupeUUID` winning for
-    /// playlists and the newest `addedAt` for items, and rows with an empty
-    /// key standing alone. `itemRecords` arrive in the
-    /// store's item order and keep it. An item whose playlist is not listed is
-    /// left out: repair never deletes it, and it reappears once its playlist
-    /// row syncs in.
+    /// The rows the next repair pass would keep, found without changing the store, so memory never
+    /// lists a row that pass deletes. An item whose playlist is not listed stays out until that
+    /// playlist row syncs in.
     private func listedRows(
         playlistRecords: [PlaylistRecord],
         itemRecords: [PlaylistItemRecord],
@@ -869,8 +834,6 @@ final class PlaylistStore {
         return (listedPlaylists, listedItems, needsRepair)
     }
 
-    /// The copy `PlaylistSyncRepairer` keeps, or, when no copy carries an
-    /// identity, the freshest copy, whose content its fresh row carries.
     private static func listedPlaylist(in group: [PlaylistRecord]) -> PlaylistRecord? {
         PlaylistSyncRepairer.keptPlaylist(in: group)
             ?? group.min(by: PlaylistSyncRepairer.isFresherPlaylist)
@@ -901,9 +864,8 @@ final class PlaylistStore {
             && !zip(records, records.dropFirst()).contains { $0.sortKey >= $1.sortKey }
     }
 
-    /// Rows with empty, malformed, tied or over-long keys (a model default,
-    /// or a future synced edit) cannot anchor a midpoint, so the playlist is
-    /// renumbered in its current order first.
+    /// Empty, malformed, tied or over-long keys cannot anchor a midpoint, so the playlist renumbers
+    /// in its current order first.
     private static func renumberIfUnordered(_ records: [PlaylistItemRecord], timestamp: Date) {
         guard !keysAreOrdered(records)
             || records.contains(where: { PlaylistSortKey.needsRenumbering($0.sortKey) })
@@ -930,8 +892,7 @@ final class PlaylistStore {
         }
     }
 
-    /// `count` increasing keys strictly between `lower` and `upper`, split
-    /// from the middle out so a block insert stays as short as a single one.
+    /// Split from the middle out so a block insert's keys stay as short as a single insert's.
     private static func keys(count: Int, between lower: String?, and upper: String?) -> [String] {
         guard count > 0 else {
             return []
@@ -985,8 +946,6 @@ final class PlaylistStore {
         )
     }
 
-    /// A smart row without stored JSON reads as the default rule; only a
-    /// stored rule that fails to decode is unreadable.
     private static func rule(for record: PlaylistRecord) -> PlaylistRule? {
         guard record.kind == .smart else {
             return nil
@@ -1067,14 +1026,9 @@ final class PlaylistStore {
 }
 
 extension PlaylistStore: EpisodeIdentitySidecarMigrating {
-    /// Stages the loaded items' re-key for the rows
-    /// `EpisodeIdentityMigrationApplier` rewrites in the same pass. Memory
-    /// only: the applier owns the rows and the save, and the staged state
-    /// is published by `finishEpisodeSidecarMigration` only once that save
-    /// has committed, so memory never runs ahead of storage. The collision
-    /// rule is the applier's, per playlist: a successor already present
-    /// drops the departed item instead of leaving two members for one
-    /// episode.
+    /// Memory only: `EpisodeIdentityMigrationApplier` owns the rows and the save, and the staged
+    /// state publishes only once that save commits. A successor already in a playlist drops the
+    /// departed item, matching the applier.
     func migrateEpisodeSidecars(
         from oldEpisodeID: String,
         to newEpisodeID: String,
@@ -1109,11 +1063,7 @@ extension PlaylistStore: EpisodeIdentitySidecarMigrating {
         stagedIdentityMigration = staged
     }
 
-    /// A smart rule names its shows by feed URL, so a moved subscription's
-    /// URL is swapped in every rule that lists it; otherwise the show would
-    /// silently drop out of the rule. Rows and loaded summaries follow the
-    /// episode re-key's staging, and `updatedAt` is untouched because a
-    /// re-key is not an edit. A rule this build cannot read is left alone.
+    /// Leaves `updatedAt` alone: a re-key is not an edit.
     func migrateFeedSidecars(
         from oldCanonicalFeedURL: String,
         to newCanonicalFeedURL: String,
@@ -1161,8 +1111,6 @@ extension PlaylistStore: EpisodeIdentitySidecarMigrating {
     }
 }
 
-/// The loaded state with a reconciliation's re-keys applied, held back until
-/// the reconciliation's save commits.
 private struct StagedIdentityMigration {
     var playlists: [PlaylistSummary]
     var itemsByPlaylistID: [String: [PlaylistItem]]

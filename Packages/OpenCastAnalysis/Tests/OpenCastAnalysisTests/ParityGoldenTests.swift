@@ -2,9 +2,6 @@ import Foundation
 @testable import OpenCastAnalysis
 import Testing
 
-/// Replays every synthetic golden case through the Swift pipeline and
-/// requires the output to equal what the services' eval bridges produced
-/// for the same inputs (`Packages/OpenCastAnalysis/scripts/generate-parity-goldens.py`).
 @Suite("Parity goldens")
 struct ParityGoldenTests {
     struct Case: Sendable, CustomTestStringConvertible {

@@ -2,11 +2,6 @@ import Foundation
 import Testing
 @testable import OpenCastVoiceBoost
 
-/// Pins the DC-protection decision: protection comes from the 70 Hz HPF in
-/// the default (EQ-on) chain, and EQ-off configurations are documented as
-/// unprotected — an always-on DC blocker in the signal path would break the
-/// limiterOnly null-transparency invariant, which requires passing the
-/// waveform (DC included) bit-identically.
 struct VoiceBoostDCOffsetTests {
     private let sampleRate = 48_000.0
     private let dcOffset: Float = 0.05
@@ -43,8 +38,6 @@ struct VoiceBoostDCOffsetTests {
             / Double(offset.count - tailStart)
         #expect(abs(outputDC) < 0.002)
 
-        // The compressor envelope must not see the offset: reduction
-        // matches the clean run.
         let cleanReduction = cleanProcessor.metrics.currentCompressorReductionDB
         let offsetReduction = offsetProcessor.metrics.currentCompressorReductionDB
         #expect(abs(cleanReduction - offsetReduction) < 0.1)

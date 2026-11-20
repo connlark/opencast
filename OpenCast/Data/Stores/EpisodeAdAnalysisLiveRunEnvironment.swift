@@ -3,8 +3,6 @@ import OpenCastAnalysis
 import OpenCastAnalysisProviders
 import SwiftData
 
-/// The app's run environment for device ad detection, over the app model's
-/// route resolver, transport factory, run records, usage and trial status.
 final class EpisodeAdAnalysisLiveRunEnvironment: EpisodeAdAnalysisRunEnvironment {
     let runs: AnalysisRunRecordStore
     let clock: any AnalysisClock = AnalysisSystemClock()

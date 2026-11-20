@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// The action bar's stateful download control: idle arrow, cancelable
-/// progress ring while downloading, and a Downloaded menu once complete.
 struct EpisodeDownloadActionButton: View {
     let record: EpisodeDownloadRecord?
     var liveProgress: DownloadByteProgress?

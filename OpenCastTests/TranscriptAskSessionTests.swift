@@ -49,8 +49,7 @@ struct TranscriptAskSessionTests {
         #expect(answer.droppedCitationCount == 2)
         #expect(answer.isVerified)
         #expect(answer.usage != nil)
-        let expectedText = "Segment thirty-one says so."
-        #expect(partials == [String(expectedText.prefix(expectedText.count / 2)), expectedText])
+        #expect(partials == ["Segment thirt", "Segment thirty-one says so."])
         #expect(session.exchanges == [TranscriptAskExchange(question: "What does segment 31 say?", answer: "Segment thirty-one says so.", citationIDs: [31], isAnswerable: true)])
         #expect(session.sessionGeneration == 1)
         #expect(turns.count == 1)

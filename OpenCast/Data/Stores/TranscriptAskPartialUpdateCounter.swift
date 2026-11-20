@@ -1,6 +1,5 @@
 import Synchronization
 
-/// Counts streamed partial updates for a turn's report.
 nonisolated final class TranscriptAskPartialUpdateCounter: Sendable {
     private let value = Mutex(0)
 

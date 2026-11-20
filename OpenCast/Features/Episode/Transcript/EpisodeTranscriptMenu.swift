@@ -9,7 +9,6 @@ struct EpisodeTranscriptMenu: View {
     let canImproveTranscript: Bool
     /// Nil hides the recap entries entirely (ineligible device, flag off).
     let recapMenuState: TranscriptRecapMenuState?
-    /// Ask stays behind its own sub-flag until its stage closes.
     let showsAsk: Bool
     let onRecap: (TranscriptRecapWindowKind) -> Void
     let onAsk: () -> Void

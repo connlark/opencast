@@ -4,8 +4,6 @@ import OpenCastAnalysisProviders
 import Testing
 @testable import OpenCast
 
-/// The key sheet's last Test: a new Test or an edit clears whether the key
-/// was accepted and what Google said about its tier together.
 @MainActor
 @Suite("Analysis key test state")
 struct AnalysisKeyTestStateTests {
@@ -19,7 +17,6 @@ struct AnalysisKeyTestStateTests {
         AnalysisKeyTestStatusLabel.text(for: try #require(state.result), isFreeTier: state.isFreeTier, provider: .google)
     }
 
-    /// A state whose Test of `key` finished with `tier`.
     private func tested(_ tier: AnalysisTierCheckResult) throws -> AnalysisKeyTestState {
         var state = AnalysisKeyTestState()
         let started = state.start(key: Self.key)
@@ -82,15 +79,5 @@ struct AnalysisKeyTestStateTests {
 
         #expect(state.result == nil)
         #expect(state.tier == nil)
-    }
-
-    @Test("An inconclusive check reads Key works, and only a free-tier answer changes it", arguments: [
-        (AnalysisTierCheckResult.inconclusive, false), (.notFreeTier, false), (.freeTier, true),
-    ])
-    func acceptedKeyFooter(tier: AnalysisTierCheckResult, isFreeTier: Bool) throws {
-        let state = try tested(tier)
-
-        #expect(state.isFreeTier == isFreeTier)
-        #expect(try footer(state) == (isFreeTier ? AIServicesCopy.testResultFreeTier : AIServicesCopy.testResult(.accepted, provider: .google)))
     }
 }

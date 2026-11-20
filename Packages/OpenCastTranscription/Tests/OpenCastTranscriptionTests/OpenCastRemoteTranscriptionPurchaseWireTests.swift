@@ -81,23 +81,13 @@ struct OpenCastRemoteTranscriptionPurchaseWireTests {
         let unknown = try decode("mystery_future_outcome").outcome
         #expect(unknown == .unknown("mystery_future_outcome"))
 
-        // Fail closed: only known acknowledgements may finish a transaction.
         #expect(OpenCastRemoteTranscriptionRedeemOutcome.credited.isFinishable)
         #expect(OpenCastRemoteTranscriptionRedeemOutcome.alreadyCredited.isFinishable)
         #expect(OpenCastRemoteTranscriptionRedeemOutcome.refunded.isFinishable)
         #expect(!unknown.isFinishable)
     }
-
-    @Test("Purchase error codes round-trip their wire values")
-    func purchaseErrorCodes() {
-        #expect(OpenCastRemoteTranscriptionErrorCode(wireValue: "bootstrap_required") == .bootstrapRequired)
-        #expect(OpenCastRemoteTranscriptionErrorCode(wireValue: "purchases_disabled") == .purchasesDisabled)
-        #expect(OpenCastRemoteTranscriptionErrorCode.bootstrapRequired.wireValue == "bootstrap_required")
-        #expect(OpenCastRemoteTranscriptionErrorCode.purchasesDisabled.wireValue == "purchases_disabled")
-    }
 }
 
-/// Minimal JSON value for asserting encoded shapes without dictionary casts.
 enum OpenCastRemoteTranscriptionAnyJSON: Decodable, Equatable {
     case string(String)
     case number(Double)

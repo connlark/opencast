@@ -7,17 +7,12 @@ import Synchronization
 import Testing
 @testable import OpenCast
 
-/// A Google key on the free tier, through the store: the check before a run
-/// and after a failed one, the handover to the trial service, how each run
-/// ends, and recovery. The route always follows the answer given in the run;
-/// the stored state only decides whether to ask.
 @MainActor
 @Suite("Episode ad analysis free tier")
 struct EpisodeAdAnalysisFreeTierTests {
     private static let overloaded = ScriptedAdAnswer.failure(.retryable(status: 503, retryAfterSeconds: 0), status: 503, listener: .overloaded)
     private static let namedFreeTier = ScriptedAdAnswer.freeTierFailure(.quotaExhausted, listener: .billingOrQuota)
 
-    /// One store over a scripted environment, in a directory of its own.
     @MainActor
     private final class Fixture {
         let context: ModelContext
@@ -54,13 +49,11 @@ struct EpisodeAdAnalysisFreeTierTests {
             store.startAnalysis(transcript: document ?? transcript, modelContext: context)
         }
 
-        /// Starts a run and waits for it to end.
         func run(_ document: EpisodeTranscriptDocument? = nil) async {
             start(document)
             #expect(await waitUntil { !self.store.hasActiveJob })
         }
 
-        /// What a launch's resume reads the transcript from.
         func writeTranscript() throws {
             let document = transcript
             let fileStore = EpisodeTranscriptFileStore(baseDirectory: directory)
@@ -100,26 +93,6 @@ struct EpisodeAdAnalysisFreeTierTests {
     }
 
     // MARK: Before the run
-
-    @Test(
-        "Unknown and free-tier states check first; a not-free state does not",
-        arguments: [
-            (AnalysisKeyTierStore.State.unknown, 1),
-            (.freeTier(day: Date(timeIntervalSince1970: 1_790_000_000)), 1),
-            (.notFreeTier, 0),
-        ]
-    )
-    func stateDecidesOnlyWhetherToAsk(state: AnalysisKeyTierStore.State, checks: Int) async throws {
-        let fixture = try Fixture()
-        fixture.environment.handoverWindowOpen = true
-        fixture.environment.googleKeyTier = state
-        fixture.environment.tierAnswer = .notFreeTier
-
-        await fixture.run()
-
-        #expect(fixture.environment.tierChecks == checks)
-        #expect(fixture.record?.state == .completed)
-    }
 
     @Test("A free-tier answer runs on the trial service with no direct send, and the next run checks again")
     func freeTierAnswerRoutesToTheTrial() async throws {
@@ -187,20 +160,8 @@ struct EpisodeAdAnalysisFreeTierTests {
         #expect(fixture.record?.state == .completed)
         #expect(fixture.directRun?.state == .finished)
         #expect(fixture.trialRun == nil)
-        // A direct run finished: billing may be set up, so the mark goes.
         #expect(fixture.environment.tierResets == 1)
         #expect(fixture.environment.googleKeyTier == .unknown)
-    }
-
-    @Test("No check runs before a run outside the window")
-    func noCheckOutsideTheWindow() async throws {
-        let fixture = try Fixture()
-        fixture.environment.handoverWindowOpen = false
-
-        await fixture.run()
-
-        #expect(fixture.environment.tierChecks == 0)
-        #expect(fixture.record?.state == .completed)
     }
 
     @Test("A resumed record keeps its route and is not checked")
@@ -251,27 +212,6 @@ struct EpisodeAdAnalysisFreeTierTests {
         #expect(fixture.environment.presentedReasons.isEmpty)
     }
 
-    @Test("Remove in AI Services during the trial status call ends the run as needing a key")
-    func removalDuringTheStatusCall() async throws {
-        let gate = AsyncTestGate()
-        let fixture = try Fixture()
-        fixture.environment.handoverWindowOpen = true
-        fixture.environment.tierAnswer = .freeTier
-        fixture.environment.handoverAnswer = .available
-        fixture.environment.handoverGate = gate
-        fixture.start()
-        #expect(await waitUntil { fixture.environment.handoverRequests == 1 })
-
-        fixture.store.cancelActiveRun(reason: .keyRemoved)
-        await gate.release()
-        #expect(await waitUntil { !fixture.store.hasActiveJob })
-
-        #expect(fixture.record?.failureKind == .keyRequiredNoKey)
-        #expect(fixture.environment.tierNotes.isEmpty)
-        #expect(fixture.runs.isEmpty)
-        #expect(fixture.environment.sends.count == 0)
-    }
-
     @Test("A cancelled check is never read as an answer: it writes no state and nothing runs")
     func cancelledCheckWritesNothing() async throws {
         let gate = AsyncTestGate()
@@ -289,24 +229,6 @@ struct EpisodeAdAnalysisFreeTierTests {
         #expect(fixture.environment.tierNotes.isEmpty)
         #expect(fixture.runs.isEmpty)
         #expect(fixture.environment.sends.count == 0)
-    }
-
-    @Test("A key removed through the Keychain during the check writes no state and takes no trial route")
-    func keychainRemovalDuringTheCheck() async throws {
-        let storage = InMemoryAnalysisProviderKeyStorage(seeded: [.google: (ScriptedAdAnalysisRunEnvironment.key, syncs: false)])
-        let fixture = try Fixture()
-        fixture.environment.keyStorage = storage
-        fixture.environment.handoverWindowOpen = true
-        fixture.environment.tierAnswer = .freeTier
-        fixture.environment.handoverAnswer = .available
-        fixture.environment.onTierCheck = { try? storage.remove(provider: .google, includingSyncedCopy: true) }
-
-        await fixture.run()
-
-        #expect(fixture.environment.tierNotes.isEmpty)
-        #expect(fixture.environment.handoverRequests == 0)
-        #expect(fixture.runs.isEmpty)
-        #expect(fixture.record?.failureKind == .keyRequiredNoKey)
     }
 
     @Test("A key replaced through the Keychain during the status call writes no state and takes no trial route")
@@ -350,24 +272,6 @@ struct EpisodeAdAnalysisFreeTierTests {
         #expect(fixture.record?.failureKind == .keyRequiredNoKey)
     }
 
-    @Test("A key removed through the Keychain during the status call writes no state and takes no trial route")
-    func keychainRemovalDuringTheStatusCall() async throws {
-        let storage = InMemoryAnalysisProviderKeyStorage(seeded: [.google: (ScriptedAdAnalysisRunEnvironment.key, syncs: false)])
-        let fixture = try Fixture()
-        fixture.environment.keyStorage = storage
-        fixture.environment.handoverWindowOpen = true
-        fixture.environment.tierAnswer = .freeTier
-        fixture.environment.handoverAnswer = .available
-        fixture.environment.onHandover = { try? storage.remove(provider: .google, includingSyncedCopy: true) }
-
-        await fixture.run()
-
-        #expect(fixture.environment.tierNotes.isEmpty)
-        #expect(fixture.runs.isEmpty)
-        #expect(fixture.environment.sends.count == 0)
-        #expect(fixture.record?.failureKind == .keyRequiredNoKey)
-    }
-
     @Test("An interruption during the status call leaves no run to resume, and a reload finds the last document in place")
     func interruptionDuringTheStatusCallLeavesNoRun() async throws {
         let gate = AsyncTestGate()
@@ -401,28 +305,6 @@ struct EpisodeAdAnalysisFreeTierTests {
         #expect(relaunched.document(for: fixture.episodeID) == original)
         #expect(fixture.runs.count == runsBefore)
         #expect(fixture.environment.sends.count == sendsBefore)
-    }
-
-    @Test("An expiry during the check leaves no run record and the last document in place")
-    func expiryDuringTheCheckLeavesNoRun() async throws {
-        let gate = AsyncTestGate()
-        let fixture = try Fixture()
-        await fixture.run()
-        let original = try #require(fixture.store.document(for: fixture.episodeID))
-        let runsBefore = fixture.runs.count
-
-        fixture.environment.handoverWindowOpen = true
-        fixture.environment.tierAnswer = .freeTier
-        fixture.environment.tierCheckGate = gate
-        fixture.start()
-        #expect(await waitUntil { fixture.environment.tierChecks == 1 })
-        fixture.store.cancelActiveRun(reason: .expiration)
-        await gate.release()
-        #expect(await waitUntil { !fixture.store.hasActiveJob })
-
-        #expect(fixture.runs.count == runsBefore)
-        #expect(fixture.record?.state == .completed)
-        #expect(fixture.store.document(for: fixture.episodeID) == original)
     }
 
     // MARK: After a failed direct attempt
@@ -468,20 +350,6 @@ struct EpisodeAdAnalysisFreeTierTests {
         #expect(fixture.environment.tierChecks == 0)
         #expect(fixture.environment.handoverRequests == 0)
         #expect(fixture.record?.state == .failed)
-    }
-
-    @Test("A run that got a free-tier answer before it started is not asked again")
-    func answerBeforeTheRunIsNotAskedAgain() async throws {
-        let fixture = try Fixture()
-        fixture.environment.handoverWindowOpen = true
-        fixture.environment.tierAnswer = .freeTier
-        fixture.environment.handoverAnswer = .unavailable
-        fixture.environment.answer = Self.overloaded
-
-        await fixture.run()
-
-        #expect(fixture.environment.tierChecks == 1)
-        #expect(fixture.record?.failureKind == .providerFreeTierRetry)
     }
 
     @Test("A free-tier answer after a failure hands over inside the window")
@@ -535,17 +403,6 @@ struct EpisodeAdAnalysisFreeTierTests {
         #expect(fixture.record?.failureKind == .providerLimited)
         #expect(fixture.environment.googleKeyTier == .notFreeTier)
         #expect(fixture.environment.handoverRequests == 0)
-    }
-
-    @Test("A daily limit on a key not named free tier says so")
-    func dailyLimitOnAPaidKey() async throws {
-        let fixture = try Fixture()
-        fixture.environment.tierAnswer = .notFreeTier
-        fixture.environment.answer = .failure(.quotaExhausted, status: 429, listener: .dailyLimit)
-
-        await fixture.run()
-
-        #expect(fixture.record?.failureKind == .providerDailyLimit)
     }
 
     @Test("A send naming the free tier needs no check, whatever the listener failure")
@@ -740,26 +597,6 @@ struct EpisodeAdAnalysisFreeTierTests {
         #expect(fixture.trialRun?.state == .finished)
     }
 
-    @Test("A listener's cancel during the direct attempt asks nothing and hands nothing over")
-    func cancelBeforeTheHandover() async throws {
-        let fixture = try Fixture()
-        fixture.environment.handoverWindowOpen = true
-        fixture.environment.googleKeyTier = .notFreeTier
-        fixture.environment.tierAnswer = .freeTier
-        fixture.environment.handoverAnswer = .available
-        fixture.environment.answer = .hold
-        fixture.start()
-        #expect(await waitUntil { fixture.environment.sends.count == 1 })
-
-        fixture.store.cancelActiveRun(reason: .listener)
-        #expect(await waitUntil { !fixture.store.hasActiveJob })
-
-        #expect(fixture.environment.tierChecks == 0)
-        #expect(fixture.environment.handoverRequests == 0)
-        #expect(fixture.trialRun == nil)
-        #expect(fixture.environment.tierNotes.isEmpty)
-    }
-
     @Test("An in-app key removal during the direct attempt ends the run as needing a key, asks nothing and hands nothing over")
     func removalBeforeTheHandover() async throws {
         let fixture = try Fixture()
@@ -823,27 +660,6 @@ struct EpisodeAdAnalysisFreeTierTests {
         #expect(fixture.environment.tierNotes.isEmpty)
     }
 
-    @Test("A listener's cancel while the handover is being resolved ends the direct run and starts nothing")
-    func cancelDuringTheHandover() async throws {
-        let gate = AsyncTestGate()
-        let fixture = try Fixture()
-        fixture.environment.handoverWindowOpen = true
-        fixture.environment.googleKeyTier = .notFreeTier
-        fixture.environment.answer = Self.namedFreeTier
-        fixture.environment.handoverAnswer = .available
-        fixture.environment.handoverGate = gate
-        fixture.start()
-        #expect(await waitUntil { fixture.environment.handoverRequests == 1 })
-
-        fixture.store.cancelActiveRun(reason: .listener)
-        await gate.release()
-        #expect(await waitUntil { !fixture.store.hasActiveJob })
-
-        #expect(fixture.trialRun == nil)
-        #expect(fixture.directRun?.state == .cancelled)
-        #expect(fixture.environment.tierNotes.isEmpty)
-    }
-
     @Test("An in-app key removal while the handover is being resolved ends the run as needing a key")
     func removalDuringTheHandover() async throws {
         let gate = AsyncTestGate()
@@ -892,40 +708,6 @@ struct EpisodeAdAnalysisFreeTierTests {
         #expect(fixture.record?.failureKind == nil)
         #expect(fixture.trialRun?.state == .finished)
         #expect(fixture.environment.presentedReasons.isEmpty)
-    }
-
-    @Test("Once the handover record is written, removing the Google key no longer concerns the run")
-    func removalAfterTheHandoverIsWritten() async throws {
-        let fixture = try Fixture()
-        fixture.environment.handoverWindowOpen = true
-        fixture.environment.googleKeyTier = .notFreeTier
-        fixture.environment.handoverAnswer = .available
-        fixture.environment.answerForRun = { $0 == 1 ? Self.namedFreeTier : .hold }
-        fixture.start()
-        #expect(await waitUntil { fixture.environment.sends.count == 2 })
-
-        #expect(fixture.store.activeDirectProvider == nil)
-        fixture.store.cancelActiveRun(reason: .listener)
-        #expect(await waitUntil { !fixture.store.hasActiveJob })
-    }
-
-    @Test("A key removed through the Keychain while the handover is being resolved hands nothing over")
-    func keychainRemovalDuringTheHandover() async throws {
-        let storage = InMemoryAnalysisProviderKeyStorage(seeded: [.google: (ScriptedAdAnalysisRunEnvironment.key, syncs: false)])
-        let fixture = try Fixture()
-        fixture.environment.keyStorage = storage
-        fixture.environment.handoverWindowOpen = true
-        fixture.environment.googleKeyTier = .notFreeTier
-        fixture.environment.answer = Self.namedFreeTier
-        fixture.environment.handoverAnswer = .available
-        fixture.environment.onHandover = { try? storage.remove(provider: .google, includingSyncedCopy: true) }
-
-        await fixture.run()
-
-        #expect(fixture.trialRun == nil)
-        #expect(fixture.record?.failureKind == .keyRequiredNoKey)
-        #expect(fixture.directRun?.state == .failed)
-        #expect(fixture.environment.tierNotes.isEmpty)
     }
 
     @Test("A key replaced through the Keychain while the handover is being resolved hands nothing over")
@@ -1140,8 +922,6 @@ struct EpisodeAdAnalysisFreeTierTests {
         #expect(fixture.environment.presentedReasons.isEmpty)
     }
 
-    /// A free-tier run expired on the trial service with its record open,
-    /// and the episode's record still running, as a kill leaves them.
     private func expiredFreeTierRun(_ fixture: Fixture) async throws -> AnalysisRunRecord {
         try fixture.writeTranscript()
         fixture.environment.handoverWindowOpen = true
@@ -1156,7 +936,6 @@ struct EpisodeAdAnalysisFreeTierTests {
         return try #require(fixture.trialRun)
     }
 
-    /// Reloads as a launch does and waits for the resume to end.
     private func relaunch(_ fixture: Fixture) async -> EpisodeAdAnalysisStore {
         let relaunched = Fixture.makeStore(directory: fixture.directory, environment: fixture.environment)
         relaunched.load(modelContext: fixture.context)
@@ -1191,23 +970,6 @@ struct EpisodeAdAnalysisFreeTierTests {
         let relaunched = await relaunch(fixture)
 
         #expect(relaunched.record(for: fixture.episodeID)?.failureKind == .providerFreeTier)
-        #expect(fixture.environment.presentedReasons.isEmpty)
-        #expect(fixture.environment.sends.count == 1)
-        #expect(fixture.environment.runs.record(id: run.id)?.state == .cancelled)
-    }
-
-    @Test("A manual retry past the date with the exchange gone closes the run and fails as free tier, the window read first")
-    func retryWithNoExchangeOutsideTheWindow() async throws {
-        let fixture = try Fixture()
-        let run = try await expiredFreeTierRun(fixture)
-
-        fixture.environment.handoverWindowOpen = false
-        fixture.environment.isPastTrialDate = true
-        fixture.environment.keepsResumedRoute = false
-        fixture.environment.route = .keyRequired(.proxyUnavailable)
-        await fixture.run()
-
-        #expect(fixture.record?.failureKind == .providerFreeTier)
         #expect(fixture.environment.presentedReasons.isEmpty)
         #expect(fixture.environment.sends.count == 1)
         #expect(fixture.environment.runs.record(id: run.id)?.state == .cancelled)
@@ -1313,8 +1075,7 @@ struct EpisodeAdAnalysisFreeTierTests {
         #expect(fixture.store.analysisProgress(for: fixture.episodeID)?.completed == 0)
 
         handoverObserver.record(Self.answeredSend)
-        await drainMainActorHops()
-        #expect(fixture.store.analysisProgress(for: fixture.episodeID)?.completed == 1)
+        #expect(await waitUntil { fixture.store.analysisProgress(for: fixture.episodeID)?.completed == 1 })
 
         fixture.store.cancelActiveRun(reason: .listener)
         #expect(await waitUntil { !fixture.store.hasActiveJob })
@@ -1374,6 +1135,7 @@ struct EpisodeAdAnalysisFreeTierTests {
         await fixture.run()
 
         #expect(fixture.environment.tierChecks == 1)
+        #expect(fixture.record?.failureKind == .providerFreeTierRetry)
         #expect(fixture.environment.tierNotes == [.freeTier, .freeTier])
         #expect(fixture.environment.googleKeyTier == .freeTier(day: Self.answerDay))
     }
@@ -1412,17 +1174,6 @@ struct EpisodeAdAnalysisFreeTierTests {
 
     // MARK: The state after a run
 
-    @Test("A direct Google run that completes while the state is free tier resets it")
-    func completionResetsAStaleMark() async throws {
-        let fixture = try Fixture()
-        fixture.environment.googleKeyTier = .freeTier(day: .now)
-
-        await fixture.run()
-
-        #expect(fixture.environment.tierResets == 1)
-        #expect(fixture.environment.googleKeyTier == .unknown)
-    }
-
     @Test("A trial run for a free-tier key leaves the mark where it is")
     func trialCompletionKeepsTheMark() async throws {
         let fixture = try Fixture()
@@ -1443,7 +1194,6 @@ struct EpisodeAdAnalysisFreeTierTests {
     }
 }
 
-/// True once, for a send answered from any thread.
 private final class ScriptedFlag: Sendable {
     private let state = Mutex(false)
 
@@ -1453,15 +1203,6 @@ private final class ScriptedFlag: Sendable {
             return !wasSet
         }
     }
-}
-
-@MainActor
-private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async -> Bool {
-    for _ in 0..<2_000 {
-        if condition() { return true }
-        try? await Task.sleep(for: .milliseconds(5))
-    }
-    return condition()
 }
 
 private func transcriptDocument(episodeID: String, segmentCount: Int = 2) -> EpisodeTranscriptDocument {

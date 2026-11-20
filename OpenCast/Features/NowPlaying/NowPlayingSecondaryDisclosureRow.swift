@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// The secondary pane collapsed to one row on a tall foldable display: it
-/// names the remembered mode, and expanding it shows the same pane inline.
 struct NowPlayingSecondaryDisclosureRow: View {
     static let accessibilityIdentifier = "Now Playing Secondary Pane Row"
 

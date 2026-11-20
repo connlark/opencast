@@ -1,5 +1,5 @@
-/// Account balance in integer audio seconds. The server ledger is the only
-/// authority; the app never persists this beyond display state.
+/// Integer audio seconds. The server ledger is the only authority: never persist it beyond
+/// display state.
 public struct OpenCastRemoteTranscriptionBalance: Codable, Sendable, Equatable {
     public var availableSeconds: Int64
     public var reservedSeconds: Int64

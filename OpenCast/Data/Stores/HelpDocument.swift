@@ -1,7 +1,5 @@
 import Foundation
 
-/// Versioned help content: bundled as a fallback, mirrored from the website,
-/// and refreshed remotely. Documents with a different schema are ignored.
 nonisolated struct HelpDocument: Decodable, Equatable, Sendable {
     static let supportedSchemaVersion = 1
     static let empty = HelpDocument(
@@ -20,8 +18,7 @@ nonisolated struct HelpDocument: Decodable, Equatable, Sendable {
         self.topics = topics
     }
 
-    /// Dates are second-precision ISO 8601; Foundation's `.iso8601` strategy
-    /// rejects fractional seconds, which the website validator also forbids.
+    /// `.iso8601` rejects fractional seconds, so documents carry second-precision dates.
     static func decode(_ data: Data) throws -> HelpDocument {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601

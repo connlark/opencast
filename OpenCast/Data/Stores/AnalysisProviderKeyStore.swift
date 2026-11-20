@@ -3,30 +3,20 @@ import Observation
 import OpenCastAnalysis
 import OpenCastAnalysisProviders
 
-/// The listener's provider keys as the app sees them: whether each provider
-/// has one saved, and the calls that change them. Holds no key: `key(for:)`
-/// reads the storage at request time. Never logs.
-///
-/// Everything it publishes was read: every mutation, finished or failed, is
-/// followed by a read of what is stored, and a read that fails leaves the
-/// last value read in place and says so. Nothing is inferred from what a
-/// mutation meant to do.
+/// Holds no key and never logs. Everything it publishes was read back from storage after each
+/// mutation, finished or failed; nothing is inferred from what a mutation meant to do. A failed
+/// read leaves the last value read in place and says so.
 @Observable
 final class AnalysisProviderKeyStore {
     @ObservationIgnored let storage: any AnalysisProviderKeyStoring
-    /// Every provider, `.none` until the first read.
     private(set) var presences: [AnalysisProvider: AnalysisKeyPresence]
-    /// Every provider, `unknown` until a read says, and after a read fails.
     private(set) var syncedCopyStatuses: [AnalysisProvider: AnalysisSyncedCopyStatus]
-    /// Providers whose last presence read failed: their presence is the last
-    /// one read, and the screen says the status is unavailable.
     private(set) var unreadProviders: Set<AnalysisProvider> = []
 
     /// Bumped by every mutation, so a refresh whose read started before one
     /// never publishes over the mutation's own readback.
     @ObservationIgnored private var mutationCounts: [AnalysisProvider: Int] = [:]
 
-    /// Does not touch the storage.
     init(storage: any AnalysisProviderKeyStoring) {
         self.storage = storage
         presences = Dictionary(uniqueKeysWithValues: AnalysisProvider.allCases.map { ($0, AnalysisKeyPresence.none) })
@@ -49,10 +39,7 @@ final class AnalysisProviderKeyStore {
         unreadProviders.contains(provider)
     }
 
-    /// What Remove deletes besides this device's key, and what its dialog
-    /// says: `absent` (this device only) only when no synced copy is known
-    /// or shown; `present` when one was read or the shown key is synced;
-    /// otherwise `unknown`, which deletes any synced copy too.
+    /// `unknown` counts as present: Remove then deletes any synced copy too.
     func removalScope(for provider: AnalysisProvider) -> AnalysisSyncedCopyStatus {
         if presence(for: provider) == .saved(synced: true) {
             return .present
@@ -64,10 +51,6 @@ final class AnalysisProviderKeyStore {
         removalScope(for: provider) != .absent
     }
 
-    /// This device uses its local key and a synced copy is also stored: one
-    /// a sync-off could not delete, or another device's, alike. Read from
-    /// the Keychain, so it holds across launches; `removeSyncedCopy` deletes
-    /// it.
     func syncedCopyBesideLocalKey(for provider: AnalysisProvider) -> Bool {
         presence(for: provider) == .saved(synced: false) && syncedCopyStatus(provider) == .present
     }
@@ -94,17 +77,12 @@ final class AnalysisProviderKeyStore {
         try storage.setSyncs(syncs, provider: provider)
     }
 
-    /// Deletes the synced copy on every device, keeping this device's local
-    /// key (`notSaved` when there is none, deleting nothing).
     func removeSyncedCopy(provider: AnalysisProvider) throws(AnalysisProviderKeyStoreError) {
         noteMutation(of: provider)
         defer { readBack(provider) }
         try storage.removeSyncedCopy(provider: provider)
     }
 
-    /// At launch, on foreground and when AI Services opens: a key can arrive
-    /// or leave through iCloud Keychain at any time. The reads run off the
-    /// main actor.
     func refreshPresences() async {
         let countsBeforeRead = mutationCounts
         let readings = await Self.readStates(from: storage)
@@ -113,8 +91,7 @@ final class AnalysisProviderKeyStore {
         }
     }
 
-    /// One provider's reads: `nil` presence when its read failed, `unknown`
-    /// synced copy when that read failed.
+    /// A `nil` presence means its read failed.
     private struct Reading: Sendable {
         var presence: AnalysisKeyPresence?
         var syncedCopy: AnalysisSyncedCopyStatus
@@ -139,9 +116,8 @@ final class AnalysisProviderKeyStore {
         return Reading(presence: try? storage.presence(for: provider), syncedCopy: syncedCopy)
     }
 
-    /// Publishes what was read. The two reads are separate calls, so a synced
-    /// key can land between them: a presence read as synced proves a synced
-    /// copy, whatever the earlier read found.
+    /// The two reads are separate calls, so a synced key can land between them: a presence read as
+    /// synced proves a synced copy, whatever the earlier read found.
     private func publish(_ reading: Reading, for provider: AnalysisProvider) {
         if let presence = reading.presence {
             presences[provider] = presence
@@ -152,8 +128,7 @@ final class AnalysisProviderKeyStore {
         syncedCopyStatuses[provider] = reading.presence == .saved(synced: true) ? .present : reading.syncedCopy
     }
 
-    /// After every mutation, finished or failed: a failed mutation can still
-    /// have changed what is stored (a write done, its delete not).
+    /// Runs after failed mutations too: one can still have changed what is stored.
     private func readBack(_ provider: AnalysisProvider) {
         publish(Self.read(provider, from: storage), for: provider)
     }

@@ -1,9 +1,6 @@
 import Foundation
 import OpenCastTranscription
 
-/// Validates a remote transcription result against the exact local file and
-/// builds the schema-3 transcript document. The wire result is never
-/// persisted directly; words stay nested per segment exactly as today.
 nonisolated enum EpisodeRemoteTranscriptMapper {
     static let provider = "cloudflare-workers-ai"
 
@@ -107,10 +104,8 @@ nonisolated enum EpisodeRemoteTranscriptMapper {
         }
         let segments = OpenCastTranscriptSegmentNormalizer.normalized(mappedSegments)
 
-        // Whole-second dates: the document is compared against its
-        // `.iso8601`-coded disk round trip (which drops fractional seconds)
-        // by the ad-analysis freshness checks, so the in-memory copy must
-        // already carry the truncated value.
+        // Whole seconds: ad-analysis freshness checks compare this document with its `.iso8601`
+        // disk round trip, which drops fractional seconds.
         let mintedAt = Date.now.truncatedToWholeSeconds
         var document = EpisodeTranscriptDocument(
             schemaVersion: EpisodeTranscriptDocument.currentSchemaVersion,
@@ -119,9 +114,8 @@ nonisolated enum EpisodeRemoteTranscriptMapper {
             sourceAudioURL: context.sourceAudioURL,
             sourceFileByteCount: context.localIdentity.byteCount,
             sourceFileSHA256: context.localIdentity.sha256,
-            // Honest compatibility values for pre-schema-3 logic; the
-            // explicit provenance fields below are the source of truth and a
-            // hosted model never claims a local tree hash.
+            // Compatibility values only: the provenance fields below are the source of truth, and
+            // a hosted model has no local tree hash.
             modelIdentifier: result.provenance.modelIdentifier,
             modelVersion: result.provenance.servingContractVersion,
             modelTreeSHA256: "",
@@ -143,7 +137,7 @@ nonisolated enum EpisodeRemoteTranscriptMapper {
         document.remoteChunkManifestSHA256 = result.provenance.chunkManifestSHA256
         document.normalizedTranscriptSHA256 = result.provenance.normalizedTranscriptSHA256
         document.remoteJobProvenanceToken = context.jobProvenanceToken
-        // Pre-pass-2 servers omit the mode and only ever hash-matched.
+        // Older servers omit the mode and only ever hash-matched.
         document.remoteSourceMatchMode = result.provenance.sourceMatchMode
             ?? EpisodeRemoteTranscriptSourceMatchMode.serverDeviceHashMatch.rawValue
         return document

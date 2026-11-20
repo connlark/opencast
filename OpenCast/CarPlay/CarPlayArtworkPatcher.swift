@@ -1,9 +1,8 @@
 import Foundation
 import SwiftUI
 
-/// Loads car-sized artwork after a list renders and patches rows in place.
-/// Patches are serial with a short gap: CarPlay stalls the main thread when a
-/// burst of `setImage(_:)` calls lands in one runloop pass.
+/// Patches run one at a time with a short gap: a burst of `setImage(_:)` calls in one
+/// runloop pass stalls CarPlay's main thread.
 final class CarPlayArtworkPatcher {
     /// One scope per list: a re-render of one tab must not cancel artwork still
     /// loading for a tab that did not change.

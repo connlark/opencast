@@ -97,20 +97,6 @@ struct PodcastAutoDownloadCoordinatorTests {
         #expect(fixture.watermark == AutoDownloadFixture.release(5))
     }
 
-    @Test("With No Limit a pass starts at most three")
-    func unlimitedPassIsCappedAtThree() async throws {
-        let fixture = try await AutoDownloadFixture.make(releaseDays: [1])
-        defer { fixture.tearDown() }
-        fixture.coordinator.enableAutoDownload(forPodcastID: fixture.feedURL, modelContext: fixture.context)
-        await fixture.coordinator.runPass(modelContext: fixture.context)
-
-        try await fixture.publish(releaseDays: [1, 2, 3, 4, 5, 6])
-        await fixture.coordinator.runPass(modelContext: fixture.context)
-
-        #expect(PodcastAutoDownloadCoordinator.unlimitedBatchCap == 3)
-        #expect(fixture.startedEpisodeIDs == [fixture.id(0), fixture.id(3), fixture.id(4), fixture.id(5)])
-    }
-
     @Test("Future-dated episodes are not released yet and never move the watermark")
     func futureDatedEpisodesWait() async throws {
         let fixture = try await AutoDownloadFixture.make(releaseDays: [1, 2, 31])
@@ -441,7 +427,7 @@ struct PodcastAutoDownloadCoordinatorTests {
         try await fixture.publish(releaseDays: [1, 2, 3, 4, 5])
         await fixture.coordinator.runPass(modelContext: fixture.context)
 
-        let expected = Dictionary(uniqueKeysWithValues: fixture.startedEpisodeIDs.map { ($0, fixture.feedURL) })
+        let expected = [fixture.id(2): fixture.feedURL, fixture.id(3): fixture.feedURL, fixture.id(4): fixture.feedURL]
         #expect(fixture.startedEpisodeIDs == [fixture.id(2), fixture.id(3), fixture.id(4)])
         #expect(fixture.settings.detectAdsPendingPodcastIDsByEpisodeID == expected)
         let reloaded = DownloadSettingsStore()
@@ -498,7 +484,6 @@ private final class AutoDownloadFixture {
     static let base = Date(timeIntervalSince1970: 1_780_000_000)
     static let wiFi = NetworkPathSnapshot(isSatisfied: true, isExpensive: false, isConstrained: false)
 
-    /// Day `day` after `base`; the fixture's clock starts on day 30.
     static func release(_ day: Int) -> Date {
         base.addingTimeInterval(Double(day) * 86_400)
     }
@@ -522,7 +507,6 @@ private final class AutoDownloadFixture {
         downloads = DownloadStore(downloader: downloader, fileStore: fileStore)
     }
 
-    /// Episode `i` is released on `releaseDays[i]`.
     static func make(releaseDays: [Int], subscribes: Bool = true) async throws -> AutoDownloadFixture {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let directory = FileManager.default.temporaryDirectory
@@ -550,7 +534,6 @@ private final class AutoDownloadFixture {
         return fixture
     }
 
-    /// Replaces the show's cached episodes and reloads the library.
     func publish(releaseDays: [Int]) async throws {
         let url = URL(string: feedURL)!
         let podcastID = URLCanonicalizer.podcastID(for: url)

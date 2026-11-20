@@ -1,8 +1,5 @@
-/// Body of `jobs` (create). Repeated submissions with the same
-/// `clientRequestID` attach to the same job instead of creating a second paid
-/// run. `episodeID` is the app's opaque episode hash, kept server-side only
-/// for relaunch correlation; the enclosure URL is stored encrypted and
-/// cleared once staging completes.
+/// Repeated submissions with the same `clientRequestID` attach to one job instead of
+/// starting a second paid run.
 public struct OpenCastRemoteTranscriptionJobCreateRequest: Codable, Sendable, Equatable {
     public var schemaVersion: Int
     public var clientRequestID: String
@@ -14,11 +11,8 @@ public struct OpenCastRemoteTranscriptionJobCreateRequest: Codable, Sendable, Eq
     /// Chains server-side ad detection after stitching; requires `podcastID`.
     public var adAnalysisRequested: Bool?
     public var podcastID: String?
-    /// Prompt context only; never required, never echoed back.
     public var episodeTitle: String?
     public var podcastTitle: String?
-    /// The media request profile the device downloads with; the server's
-    /// origin fetch mirrors it. Absent means an app that predates it.
     public var mediaProfile: Int?
 
     public init(

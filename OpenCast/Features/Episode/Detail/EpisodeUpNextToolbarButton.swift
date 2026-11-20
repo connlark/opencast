@@ -1,10 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// The episode page's Add to Up Next toolbar control, beside Episode Actions.
-/// A tap always opens its menu, Play Next and Play Last, plus Remove from Up
-/// Next once the episode is queued, so a tap alone never queues, moves or
-/// removes anything.
 struct EpisodeUpNextToolbarButton: View {
     static let accessibilityIdentifier = "Episode Up Next Control"
 
@@ -12,8 +8,6 @@ struct EpisodeUpNextToolbarButton: View {
     @Environment(\.modelContext) private var modelContext
 
     let episode: EpisodeListItemSnapshot
-    /// Called once for each queueing the store saved; the page plays the
-    /// haptic.
     let onEnqueued: () -> Void
 
     var body: some View {

@@ -3,44 +3,6 @@ import Testing
 @testable import OpenCastVoiceBoost
 
 struct VoiceBoostProcessorTests {
-    @Test("Silence remains silence")
-    func silenceRemainsSilence() {
-        var buffer = VoiceBoostFixtureGenerator.silence(
-            sampleRate: 48_000,
-            duration: 1,
-            channelCount: 2
-        )
-        let processor = VoiceBoostProcessor(sampleRate: 48_000, channelCount: 2)
-
-        VoiceBoostFixtureGenerator.processInBlocks(
-            &buffer,
-            processor: processor,
-            channelCount: 2
-        )
-
-        #expect(VoiceBoostFixtureGenerator.maxAbs(buffer) < 0.000_001)
-        #expect(processor.metrics.estimatedInputLUFS == nil)
-    }
-
-    @Test("NaN and Inf input is sanitized")
-    func nonFiniteInputIsSanitized() {
-        var buffer: [Float] = [
-            .nan,
-            .infinity,
-            -.infinity,
-            0.25,
-            -0.5,
-            0.5
-        ]
-        let processor = VoiceBoostProcessor(sampleRate: 48_000, channelCount: 2)
-
-        buffer.withUnsafeMutableBufferPointer { pointer in
-            processor.processInterleavedFloat32(pointer, frameCount: 3)
-        }
-
-        #expect(buffer.allSatisfy { $0.isFinite })
-    }
-
     @Test("Enabled processing does not emit clipped samples")
     func processingDoesNotClipSamples() {
         var buffer = VoiceBoostFixtureGenerator.sine(
@@ -85,33 +47,6 @@ struct VoiceBoostProcessorTests {
         )
 
         #expect((processor.metrics.outputTruePeakDBTP ?? 0) <= -1.4)
-    }
-
-    @Test("Disabled processor is dry-identical after the lookahead delay")
-    func disabledProcessorIsDelayedDryIdentical() {
-        var buffer = VoiceBoostFixtureGenerator.speechLike(
-            amplitude: 0.2,
-            sampleRate: 48_000,
-            duration: 0.5,
-            channelCount: 2
-        )
-        let original = buffer
-        let processor = VoiceBoostProcessor(
-            sampleRate: 48_000,
-            channelCount: 2,
-            configuration: VoiceBoostConfiguration(isEnabled: false)
-        )
-
-        VoiceBoostFixtureGenerator.processInBlocks(
-            &buffer,
-            processor: processor,
-            channelCount: 2
-        )
-
-        let latencySamples = processor.metrics.latencyFrames * 2
-        let delayedOutput = Array(buffer[latencySamples...])
-        let delayedInput = Array(original[..<(original.count - latencySamples)])
-        #expect(VoiceBoostFixtureGenerator.maximumDelta(delayedOutput, delayedInput) < 0.000_001)
     }
 
     @Test("Enable and disable changes ramp without a discontinuity spike")

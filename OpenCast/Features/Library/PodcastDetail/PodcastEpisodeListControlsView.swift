@@ -6,8 +6,6 @@ struct PodcastEpisodeListControlsView: View {
     @Binding var sortOrder: PodcastEpisodeSortOrder
     @Binding var filter: PodcastEpisodeFilter
     let podcastID: String
-    /// What a Group by Podcast visit hides. The filter chip cannot show
-    /// that, so a caption says why rows are missing and brings them back.
     var hiddenEpisodes = PodcastHiddenEpisodes()
     var onShowHiddenEpisodes: () -> Void = {}
 

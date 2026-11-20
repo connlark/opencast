@@ -1,13 +1,8 @@
-/// One show's completed downloads in the Group by Show list, in the flat
-/// list's newest-first order. Groups keep that order too, so a show appears
-/// where its newest download would.
 struct DownloadsShowGroup: Identifiable {
     let podcastID: String
     let title: String
-    /// The newest download's artwork, for a show the library no longer has.
     let artworkURL: String?
     let items: [DownloadListItem]
-    /// The show left the library; its downloads stay until deleted.
     let isOrphaned: Bool
 
     var id: String {

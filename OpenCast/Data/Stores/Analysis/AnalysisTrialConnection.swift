@@ -3,16 +3,12 @@ import Foundation
 import OpenCastAnalysisProviders
 import Synchronization
 
-/// Reaches the trial service for this build: resolves its configuration
-/// once, builds the exchange that signs for it, and reads the install's
-/// trial status. Under UI testing it never touches the network.
 nonisolated final class AnalysisTrialConnection: AnalysisTrialConnecting {
     static let statusTimeoutSeconds = 15.0
     static let statusMaximumBytes = 16 * 1024
 
     private let routing: AnalysisBackendRouting
     private let storeEnvironment: @Sendable () async throws -> RemoteTranscriptionStoreEnvironment
-    /// UI tests: the seeded status, answered without a request.
     private let fixtureStatus: AnalysisTrialProxyStatus?
     private let isFixture: Bool
     private let resolved = Mutex<TrialProxyBackendConfiguration?>(nil)
@@ -30,9 +26,6 @@ nonisolated final class AnalysisTrialConnection: AnalysisTrialConnecting {
         self.isFixture = isFixture
     }
 
-    /// Whether this build and device can use a trial route at all, without
-    /// any request: a Debug build with the operator bearer, or a device
-    /// that can attest.
     var isConfigured: Bool {
         if isFixture { return true }
         #if DEBUG && !INTERNAL_NOTIFICATIONS_DIAGNOSTICS
@@ -42,11 +35,8 @@ nonisolated final class AnalysisTrialConnection: AnalysisTrialConnecting {
         #endif
     }
 
-    /// Whether a trial route is really there for this build and device: the
-    /// UI-test fixture, or a configuration that resolves and can sign.
-    /// `isConfigured` cannot say so in a release build, where it only reads
-    /// App Attest support and an unknown store environment has no route.
-    /// Makes no request to opencast.
+    /// Unlike `isConfigured`, resolves the configuration: in a release build an unknown store
+    /// environment has no route. Makes no request to opencast.
     func isReachable(trialEndpoint: URL) async -> Bool {
         if isFixture { return true }
         return await configuration(trialEndpoint: trialEndpoint)?.canAuthenticate ?? false
@@ -69,8 +59,6 @@ nonisolated final class AnalysisTrialConnection: AnalysisTrialConnecting {
         }
     }
 
-    /// The exchange for this build's deployment, or `nil` when it has no
-    /// trial route or this device cannot sign for it.
     func exchange(trialEndpoint: URL) async -> (any AnalysisTrialProxyExchange)? {
         if isFixture { return AnalysisUITestTrialProxyExchange() }
         guard let configuration = await configuration(trialEndpoint: trialEndpoint),
@@ -88,7 +76,6 @@ nonisolated final class AnalysisTrialConnection: AnalysisTrialConnecting {
         }
     }
 
-    /// The install's trial status, or `nil` when it could not be read.
     func fetchStatus(trialEndpoint: URL) async -> AnalysisTrialProxyStatus? {
         if isFixture { return fixtureStatus }
         guard let exchange = await exchange(trialEndpoint: trialEndpoint),
@@ -106,8 +93,7 @@ nonisolated final class AnalysisTrialConnection: AnalysisTrialConnecting {
     }
 }
 
-/// UI tests route trial runs through the fixture transport; this exchange
-/// only stands in for the route and is never posted to.
+/// Stands in for the route only; it is never posted to.
 nonisolated struct AnalysisUITestTrialProxyExchange: AnalysisTrialProxyExchange {
     func post(
         path: String,

@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Shown after a refresh pass the device could not put on the network; the
-/// rows keep their last real refresh status underneath.
 struct LibraryOfflineNotice: View {
     var body: some View {
         Label("Offline — feeds will refresh when you're back online", systemImage: "wifi.slash")

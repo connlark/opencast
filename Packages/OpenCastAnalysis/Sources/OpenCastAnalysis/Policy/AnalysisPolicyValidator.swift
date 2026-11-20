@@ -1,10 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// Turns downloaded bytes into a bundle the app may use: size limits, the
-/// signature envelope naming exactly these bytes (version and SHA-256), the
-/// pinned-key signature over them (before any parsing), decoding, the named
-/// version, the format version, the app build and the clamp, in that order.
+/// Verifies the signature before parsing anything in the bundle.
 public struct AnalysisPolicyValidator: Sendable {
     public static let maximumBundleBytes = 1_048_576
     public static let maximumSignatureBytes = 4_096
@@ -59,11 +56,8 @@ public struct AnalysisPolicyValidator: Sendable {
 }
 
 extension AnalysisPolicyBundle {
-    /// The bytes of the bundle this build ships with.
     public static var bakedData: Data { Data(BakedAnalysisPolicy.json.utf8) }
 
-    /// The bundle this build ships with. The package's tests prove it decodes,
-    /// passes the clamp and equals the served bundle of the same version.
     public static let baked: AnalysisPolicyBundle = {
         do {
             let bundle = try decode(bakedData)

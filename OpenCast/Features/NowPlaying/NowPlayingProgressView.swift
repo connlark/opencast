@@ -6,9 +6,8 @@ struct NowPlayingProgressView: View {
     let displayedPosition: TimeInterval
     let zones: [PlaybackSkipZone]
     var displayOnlyZones: [PlaybackSkipZone] = []
-    /// Chapter start times marked on the rail under the slider. They stay
-    /// off the slider itself: the stock tick initializer turns the control
-    /// into a discrete slider that snaps to its ticks, which breaks scrubbing.
+    /// Drawn on a rail under the slider: the stock tick initializer makes the slider discrete
+    /// and snap to its ticks, which breaks scrubbing.
     var chapterBoundaries: [TimeInterval] = []
     var noteTimestamps: [TimeInterval] = []
     @Binding var scrubPosition: TimeInterval
@@ -56,8 +55,6 @@ struct NowPlayingProgressView: View {
         max(duration ?? max(displayedPosition, 1), 1)
     }
 
-    /// Markers only make sense against a known duration; one at or past the
-    /// end of the track is dropped rather than drawn on the edge.
     private var chapterMarkers: [TimeInterval] {
         guard let duration, duration.isFinite, duration > 0 else {
             return []
@@ -65,8 +62,6 @@ struct NowPlayingProgressView: View {
         return chapterBoundaries.filter { $0 > 0 && $0 < duration }
     }
 
-    /// Unlike chapters, a note at 0 or at the very end keeps its marker; the
-    /// rail clamps those dots to its edges.
     static func noteMarkers(duration: TimeInterval?, timestamps: [TimeInterval]) -> [TimeInterval] {
         guard let duration, duration.isFinite, duration > 0 else {
             return []

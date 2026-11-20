@@ -1,6 +1,3 @@
-/// Why a JSON text was rejected. The cases mirror the parse errors of the
-/// Rust services' JSON reader closely enough to tell classes apart in tests;
-/// callers only ever need "rejected".
 public enum JSONParseError: Error, Sendable, Equatable {
     case unexpectedEnd
     case unexpectedCharacter(offset: Int)
@@ -12,25 +9,11 @@ public enum JSONParseError: Error, Sendable, Equatable {
     case trailingCharacters(offset: Int)
 }
 
-/// A strict JSON reader with the acceptance rules of the Rust services'
-/// `serde_json` build (no `float_roundtrip`, no `arbitrary_precision`):
-/// only space, tab, newline and carriage return are whitespace; numbers
-/// follow RFC 8259 and are classified unsigned / negative / binary64 with
-/// the same overflow and power-of-ten conversion; strings reject raw control
-/// characters and malformed escapes; and nothing but whitespace may follow
-/// the value. Three things the Rust reader only rejects when a typed field
-/// reads them are kept as markers instead of errors, because an ignored
-/// field accepts them: unpaired surrogate escapes, out-of-range numbers and
-/// containers nested past its recursion limit. The Rust reader's typed path
-/// stops at the `maximumNesting`th nested container, while its ignore path
-/// reads any depth; so the containers around that level become values, and
-/// one at that level is read with the same syntax checks, however deep it
-/// goes, and kept as ``JSONValue/tooDeepContainer``. The reader never
-/// recurses, so no input can exhaust the stack.
+/// Accepts exactly what the Rust services' `serde_json` build accepts. Unpaired surrogates,
+/// out-of-range numbers and too-deep containers become markers, not errors: the Rust reader
+/// rejects them only when a typed field reads them.
 public enum JSONParser {
-    /// The nesting level at which the Rust reader's typed path fails
-    /// (`serde_json`'s recursion limit, 128): 127 nested containers are
-    /// read as values.
+    /// `serde_json`'s recursion limit: 127 nested containers read as values, the 128th is a marker.
     public static let maximumNesting = 128
 
     public static func parse(_ text: String) throws(JSONParseError) -> JSONValue {
@@ -47,12 +30,10 @@ public enum JSONParser {
     }
 
     private struct Reader {
-        /// An open array or object and what has been read of it.
         struct Container {
             let isObject: Bool
             var values: [JSONValue] = []
             var members: [JSONMember] = []
-            /// The name of the member whose value is being read.
             var key = ""
             var keyHasUnpairedSurrogate = false
 
@@ -79,8 +60,7 @@ public enum JSONParser {
             }
         }
 
-        /// One value at `index`, whitespace already skipped. Open containers
-        /// are kept on a heap stack, never on the call stack.
+        /// Expects whitespace skipped. Iterative on purpose: no input depth can exhaust the stack.
         mutating func parseValue() throws(JSONParseError) -> JSONValue {
             var open: [Container] = []
             while true {
@@ -110,8 +90,6 @@ public enum JSONParser {
                 } else {
                     value = try parseScalar()
                 }
-                // Hand the value to the innermost open container, closing
-                // every container that ends after it.
                 while true {
                     guard !open.isEmpty else { return value }
                     let last = open.count - 1
@@ -144,9 +122,7 @@ public enum JSONParser {
             }
         }
 
-        /// The container at `index`, read the way the Rust reader's ignore
-        /// path reads one: the same syntax as a value, any depth, nothing
-        /// kept.
+        /// Checks the same syntax as a value at any depth, as the Rust reader's ignore path does.
         mutating func skipContainer() throws(JSONParseError) {
             var closers: [UInt8] = []
             while true {
@@ -186,7 +162,6 @@ public enum JSONParser {
             }
         }
 
-        /// A member name and its colon, with the whitespace after it.
         mutating func parseKey() throws(JSONParseError) -> JSONValue {
             guard let quote = peek else { throw .unexpectedEnd }
             guard quote == UInt8(ascii: "\"") else { throw .invalidKey(offset: index) }
@@ -200,7 +175,6 @@ public enum JSONParser {
             return key
         }
 
-        /// Anything but an array or an object.
         mutating func parseScalar() throws(JSONParseError) -> JSONValue {
             guard let byte = peek else { throw .unexpectedEnd }
             switch byte {
@@ -267,8 +241,7 @@ public enum JSONParser {
             scalars.append(contentsOf: text.unicodeScalars)
         }
 
-        /// Decodes one escape after the backslash. Returns false when a
-        /// `\u` escape produced an unpaired surrogate.
+        /// Returns false when a `\u` escape produced an unpaired surrogate.
         mutating func parseEscape(into scalars: inout String.UnicodeScalarView) throws(JSONParseError) -> Bool {
             guard let byte = peek else { throw .unexpectedEnd }
             index += 1
@@ -328,8 +301,6 @@ public enum JSONParser {
 
         // MARK: Numbers
 
-        /// A number literal; out of range becomes a marker after the rest of
-        /// the literal is consumed, as the Rust reader's ignore path does.
         mutating func parseNumberValue(positive: Bool) throws(JSONParseError) -> JSONValue {
             let start = index
             do {
@@ -514,9 +485,7 @@ public enum JSONParser {
             return positive ? 0.0 : -0.0
         }
 
-        /// The Rust reader's conversion: the significand rounded to binary64,
-        /// then one multiply or divide by a correctly rounded power of ten,
-        /// stepping by 1e308 below the table.
+        /// Not correctly rounded on purpose: matches `serde_json` without `float_roundtrip`.
         func doubleFromParts(positive: Bool, significand: UInt64, exponent initial: Int32) throws(JSONParseError) -> Double {
             var value = Double(significand)
             var exponent = initial
@@ -542,8 +511,6 @@ public enum JSONParser {
     }
 }
 
-/// 1e0 through 1e308, each the correctly rounded binary64 value of its
-/// decimal literal.
 enum PowersOfTen {
     static let table: [Double] = (0...308).map { Double("1e\($0)")! }
 }

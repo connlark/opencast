@@ -20,8 +20,6 @@ struct VoiceBoostDiagnosticsSnapshotTaskModifier: ViewModifier {
 
             do {
                 try await Task.sleep(for: .milliseconds(250))
-            } catch is CancellationError {
-                return
             } catch {
                 return
             }

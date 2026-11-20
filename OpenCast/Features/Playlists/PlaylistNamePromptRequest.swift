@@ -1,5 +1,3 @@
-/// What the playlist name prompt is asking for: a name for a new manual or
-/// smart playlist, or a new name for an existing one.
 nonisolated struct PlaylistNamePromptRequest: Identifiable, Equatable, Sendable {
     nonisolated enum Kind: Equatable, Sendable {
         case create

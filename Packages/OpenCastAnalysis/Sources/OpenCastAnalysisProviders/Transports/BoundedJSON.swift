@@ -1,12 +1,7 @@
 import OpenCastAnalysis
 
-/// JSON read with its nesting bounded before it is parsed. Provider bodies
-/// and recordings nest a handful of levels, and what is read from them is
-/// walked level by level afterwards (verification, redaction, writing), so
-/// text from a provider or a recording is measured first, the way the
-/// parser reads it: one linear pass lexes strings (a backslash escapes the
-/// next character) and counts `[` and `{` outside them, and text nested
-/// past the bound is refused without parsing.
+/// Nesting is measured before parsing, since what is read is walked level by level afterwards
+/// (verification, redaction, writing).
 public enum BoundedJSON {
     public enum Result: Sendable, Equatable {
         case value(JSONValue)
@@ -16,10 +11,8 @@ public enum BoundedJSON {
     }
 
     public enum Scan: Sendable, Equatable {
-        /// Never nested past the bound, every string closed.
         case within
         case tooDeep
-        /// A string still open at the end: the text is not JSON.
         case unterminatedString
     }
 
@@ -35,11 +28,8 @@ public enum BoundedJSON {
         }
     }
 
-    /// Containers counted as the parser opens them: a bracket inside a
-    /// string is text, and a closing bracket never takes the count below
-    /// zero. The parser stops at the first byte it cannot read, at a depth
-    /// no greater than this count has reached by then, so `.within` bounds
-    /// the nesting of what it reads for any text, JSON or not.
+    /// The parser stops at the first byte it cannot read, no deeper than this count by then, so
+    /// `.within` bounds the nesting of what it reads for any text, JSON or not.
     public static func scan(_ text: String, maximumDepth: Int) -> Scan {
         var depth = 0
         var inString = false

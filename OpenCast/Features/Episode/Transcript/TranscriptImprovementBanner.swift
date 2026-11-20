@@ -1,10 +1,8 @@
 import SwiftData
 import SwiftUI
 
-/// In-page progress surface for the foreground-only "Improve Transcript"
-/// flow. Observes the improvement coordinator and per-episode transcription
-/// progress in its own body so the 1 Hz progress churn never re-evaluates the
-/// menu-owning parents.
+/// Observes progress in its own body, so the 1 Hz churn never re-evaluates the menu-owning
+/// parents.
 struct TranscriptImprovementBanner: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext

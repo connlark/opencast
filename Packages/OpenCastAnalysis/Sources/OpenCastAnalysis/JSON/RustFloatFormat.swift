@@ -1,8 +1,6 @@
-/// Text forms of binary64 values exactly as the Rust services print them.
 public enum RustFloatFormat {
-    /// The shortest round-trip digits of a finite, nonzero magnitude:
-    /// `value == digits × 10^exponent` after decimal rounding, with no
-    /// leading or trailing zeros in `digits`.
+    /// Requires a finite, nonzero magnitude. Returns the shortest round-trip
+    /// `digits × 10^exponent`, with no leading or trailing zero in `digits`.
     static func shortestDigits(_ magnitude: Double) -> (digits: [UInt8], exponent: Int) {
         let text = magnitude.description
         var mantissa = Substring(text)
@@ -33,10 +31,6 @@ public enum RustFloatFormat {
         return (digits, exponent)
     }
 
-    /// The float layout `serde_json` writes (its `zmij` formatter): fixed
-    /// notation when the leading digit's decimal exponent is in -5...15
-    /// (`1.0`, `0.00001`, `1000000000000000.0`, `12.34`), otherwise
-    /// `d.ddde+N` / `de-N` with the shortest round-trip digits.
     public static func serdeJSON(_ value: Double) -> String {
         precondition(value.isFinite)
         var result = value.sign == .minus ? "-" : ""
@@ -64,8 +58,7 @@ public enum RustFloatFormat {
         return result
     }
 
-    /// Rust's `{}` Display for f64: shortest round-trip digits, never in
-    /// exponent form, no `.0` on integral values.
+    /// Rust's `{}` Display for f64: never in exponent form, no `.0` on integral values.
     public static func display(_ value: Double) -> String {
         if value.isNaN { return "NaN" }
         if value.isInfinite { return value < 0 ? "-inf" : "inf" }
@@ -85,8 +78,7 @@ public enum RustFloatFormat {
         return result
     }
 
-    /// Rust's `{:.N}` for f64: the exact binary value rounded to `N` decimal
-    /// places, ties to even.
+    /// Rust's `{:.N}` for f64: rounds the exact binary value, ties to even.
     public static func fixed(_ value: Double, places: Int) -> String {
         if value.isNaN { return "NaN" }
         if value.isInfinite { return value < 0 ? "-inf" : "inf" }
@@ -125,7 +117,6 @@ public enum RustFloatFormat {
     }
 }
 
-/// Just enough arbitrary-precision arithmetic for exact decimal rounding.
 struct BigUInt {
     /// Little-endian 32-bit limbs.
     private(set) var limbs: [UInt32]

@@ -9,18 +9,13 @@ enum AdFreePassBackgroundRunLog {
         record(message, logURL: logURL)
     }
 
-    /// Test seam: explicit log URL and cap.
-    static func record(
-        _ message: String,
-        logURL: URL,
-        maximumByteCount: Int = defaultMaximumByteCount
-    ) {
+    static func record(_ message: String, logURL: URL) {
         let line = "\(Date.now) \(sanitize(message))\n"
         let data = Data(line.utf8)
         do {
             let directory = logURL.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            rotateIfNeeded(logURL: logURL, incomingByteCount: data.count, maximumByteCount: maximumByteCount)
+            rotateIfNeeded(logURL: logURL, incomingByteCount: data.count, maximumByteCount: defaultMaximumByteCount)
             if !FileManager.default.fileExists(atPath: logURL.path) {
                 FileManager.default.createFile(atPath: logURL.path, contents: nil)
             }
@@ -34,9 +29,8 @@ enum AdFreePassBackgroundRunLog {
     }
 
     private static func rotateIfNeeded(logURL: URL, incomingByteCount: Int, maximumByteCount: Int) {
-        // FileManager attributes, not URL.resourceValues: NSURL caches
-        // resource values per instance, so a reused URL would report a
-        // stale size and the rotation would never trigger.
+        // FileManager attributes, not URL.resourceValues: NSURL caches resource values per
+        // instance, so a reused URL reports a stale size and rotation never triggers.
         let attributes = try? FileManager.default.attributesOfItem(atPath: logURL.path)
         let currentByteCount = (attributes?[.size] as? NSNumber)?.intValue ?? 0
         guard currentByteCount + incomingByteCount > maximumByteCount else {
@@ -107,7 +101,6 @@ extension EpisodeAdFreePassStage {
     }
 
     var backgroundLogStageKind: String {
-        // Environment snapshots need a stable case key, not the verbose log line with progress details.
         switch self {
         case .idle:
             "idle"

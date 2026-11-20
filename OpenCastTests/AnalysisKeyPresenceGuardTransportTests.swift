@@ -6,8 +6,6 @@ import Synchronization
 import Testing
 @testable import OpenCast
 
-/// Answers every send with a reply that validates and counts the sends that
-/// reached it; `onArrival` runs with each arrival's 1-based count first.
 nonisolated final class CountingAdTransport: AnalysisProviderTransport {
     private let arrivals = Mutex(0)
     private let onArrival: @Sendable (Int) async -> Void
@@ -30,7 +28,6 @@ nonisolated final class CountingAdTransport: AnalysisProviderTransport {
     }
 }
 
-/// Turns the Keychain read fault on and off.
 nonisolated final class KeychainReadFault: Sendable {
     private let on = Mutex(false)
 
@@ -45,7 +42,6 @@ nonisolated final class KeychainReadFault: Sendable {
     }
 }
 
-/// The in-memory key store, counting the key reads a run makes.
 nonisolated final class CountingKeyStorage: AnalysisProviderKeyStoring {
     let inner: InMemoryAnalysisProviderKeyStorage
     private let readCount = Mutex(0)
@@ -88,8 +84,6 @@ nonisolated final class CountingKeyStorage: AnalysisProviderKeyStoring {
     }
 }
 
-/// Answers provider sends from a script, then refuses them; counts every
-/// send that left.
 nonisolated final class ScriptedProviderHTTPClient: AnalysisHTTPClient {
     private let state: Mutex<(responses: [AnalysisHTTPResponse], sent: Int)>
 
@@ -119,9 +113,6 @@ nonisolated final class ScriptedProviderHTTPClient: AnalysisHTTPClient {
     }
 }
 
-/// A pacer clock whose time moves only when the test ends its sleeps. A
-/// cancelled sleep ends at once with `CancellationError`, so a test that
-/// gives up on its precondition can cancel its run and await it.
 nonisolated final class GatedPacingClock: AnalysisClock, Sendable {
     private struct Sleeper {
         var id: Int
@@ -174,7 +165,6 @@ nonisolated final class GatedPacingClock: AnalysisClock, Sendable {
         state.withLock { $0.sleepers.count }
     }
 
-    /// Ends every sleep, moving time on by the longest.
     func wakeAll() {
         let sleepers = state.withLock { state in
             let sleepers = state.sleepers
@@ -191,8 +181,6 @@ nonisolated final class GatedPacingClock: AnalysisClock, Sendable {
 struct AnalysisKeyPresenceGuardTransportTests {
     static let key = AnalysisKeyFixtures.key(AnalysisKeyFixtures.googleText)
 
-    /// `segmentCount` segments; one window holds 800, the next starts 680
-    /// later.
     static func request(segmentCount: Int) -> AdAnalysisRequest {
         AdAnalysisRequest(
             requestID: "guard-request",
@@ -398,8 +386,6 @@ struct AnalysisKeyPresenceGuardTransportTests {
 
     // MARK: Keys that change while a send waits for its pacer
 
-    /// The app's transports over a counting key store and a scripted
-    /// provider; only the pacer's waits run on `pacingClock`.
     @MainActor
     final class PacedStack {
         let keys: CountingKeyStorage
@@ -439,15 +425,11 @@ struct AnalysisKeyPresenceGuardTransportTests {
         }
     }
 
-    /// Cancels `run` and waits for it to end, so a test that stops early
-    /// leaves nothing waiting.
     static func stop(_ run: Task<AnalysisOutcome, Never>) async {
         run.cancel()
         _ = await run.value
     }
 
-    /// Changes the key while `run` waits; a change that fails stops the run
-    /// before the error reaches the test.
     static func change(
         _ keys: InMemoryAnalysisProviderKeyStorage,
         during run: Task<AnalysisOutcome, Never>,
@@ -461,10 +443,6 @@ struct AnalysisKeyPresenceGuardTransportTests {
         }
     }
 
-    /// Holds the key's only pacer slot, starts an ad-detection run whose
-    /// first `queued` windows pass the guard and queue for the slot, changes
-    /// the key while they wait, then frees the slot. A run that never queues
-    /// is cancelled and the test fails.
     func adRunChangingKeyWhilePaced(
         maxInFlight: Int,
         segmentCount: Int,
@@ -543,7 +521,6 @@ struct AnalysisKeyPresenceGuardTransportTests {
         #expect(AnalysisProviderFailure.resolve(outcome, sends: stack.sends.sends) == .keyRequired)
     }
 
-    /// A short Chapters & Summary request.
     static func chaptersRequest() -> TranscriptAnalysisRequest {
         let segments: [AnalysisSegment] = (0..<40).map { (index: Int) -> AnalysisSegment in
             let start = Double(index) * 30
@@ -581,10 +558,8 @@ struct AnalysisKeyPresenceGuardTransportTests {
         let request = Self.chaptersRequest()
         let run = Task { await AnalysisRunner(transport: transport, clock: StoppedAnalysisClock()).generateChapters(request, policy: policy) }
 
-        // The first attempt was checked twice (before pacing and after
-        // admission), sent and rate limited; its retry passed the guard and
-        // waits out the cooldown in the pacer. A retry that never gets there
-        // is cancelled and the test fails.
+        // Reads so far: the first attempt's guard and dispatch check, then the
+        // retry's guard; the retry now waits out its cooldown in the pacer.
         let retryPaced = await waitUntil { clock.sleeperCount == 1 }
         if !retryPaced { await Self.stop(run) }
         try #require(retryPaced, "The retry must wait out its cooldown in the pacer")

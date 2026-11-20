@@ -60,7 +60,6 @@ actor ArtworkLoader {
         memoryCache.bestImage(for: request)
     }
 
-    /// The cached decode that actually reaches the request's pixel size.
     nonisolated func imageMeetingSize(for request: ArtworkRequest) -> UIImage? {
         memoryCache.imageMeetingSize(for: request)
     }
@@ -186,8 +185,6 @@ actor ArtworkLoader {
 
     private func rememberPreview(_ preview: ArtworkPreview) {
         if sourcePreviews[preview.sourceHash] == nil {
-            // Only tiny RGB grids are retained here; original bytes and decoded
-            // display images keep their existing cache lifetimes.
             if previewOrder.count == 200 {
                 sourcePreviews[previewOrder.removeFirst()] = nil
             }
@@ -282,7 +279,6 @@ actor ArtworkLoader {
                         }
                     }
                 }
-            } catch is CancellationError {
             } catch {
             }
 
@@ -337,8 +333,7 @@ actor ArtworkLoader {
             return nil
         }
 
-        // Admission policy on receive: oversized payloads never reach decode
-        // or either cache (security triage P1 #4).
+        // Oversized payloads must never reach decode or either cache.
         guard ArtworkTransferPolicy.admitsByteCount(response.data.count) else {
             return nil
         }
@@ -396,8 +391,8 @@ actor ArtworkLoader {
             return nil
         }
 
-        // Header-only dimension read; refuses extreme canvases before any
-        // pixel work (security triage P1 #4).
+        // Dimensions come from the header alone, so extreme canvases are refused before any
+        // pixel work.
         if let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, sourceOptions) as? [CFString: Any] {
             guard ArtworkTransferPolicy.admitsPixelDimensions(
                 width: properties[kCGImagePropertyPixelWidth] as? Int,

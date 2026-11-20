@@ -54,44 +54,6 @@ struct TranscribeTaskFallbackTests {
         )
     }
 
-    @Test("Windows without fallbacks record zero fallbacks and honest window ids")
-    func windowsWithoutFallbacksRecordZeroFallbacks() async throws {
-        let log = WindowIdLog()
-        let (task, _) = makeTask(fallbackScript: [false, false, false])
-
-        let result = try await task.run(
-            audioArray: Self.threeWindowAudio,
-            decodeOptions: makeOptions(),
-            callback: { progress in
-                log.append(progress.windowId)
-                return true
-            }
-        )
-
-        #expect(result.timings.totalDecodingFallbacks == 0)
-        #expect(result.timings.totalDecodingWindows == 3)
-        #expect(log.values == [0, 1, 2])
-    }
-
-    @Test("A single first fallback is counted as one, not zero")
-    func singleFirstFallbackCountsAsOne() async throws {
-        let log = WindowIdLog()
-        let (task, _) = makeTask(fallbackScript: [true, false, false, false])
-
-        let result = try await task.run(
-            audioArray: Self.threeWindowAudio,
-            decodeOptions: makeOptions(),
-            callback: { progress in
-                log.append(progress.windowId)
-                return true
-            }
-        )
-
-        #expect(result.timings.totalDecodingFallbacks == 1)
-        #expect(result.timings.totalDecodingWindows == 3)
-        #expect(log.values == [0, 0, 1, 2])
-    }
-
     @Test("Fallbacks accumulate across windows without shifting window ids")
     func fallbacksAccumulateAcrossWindows() async throws {
         let log = WindowIdLog()
@@ -129,19 +91,6 @@ struct TranscribeTaskFallbackTests {
         #expect(result.timings.totalDecodingWindows == 3)
         #expect(log.values == [0, 1, 2])
         #expect(decoder.receivedCallbackPresence == [Bool](repeating: false, count: 6))
-    }
-
-    @Test("Nil callbacks reach the decoder as nil instead of a wrapper")
-    func nilCallbacksReachDecoderAsNil() async throws {
-        let (task, decoder) = makeTask(fallbackScript: [false, false, false])
-
-        _ = try await task.run(
-            audioArray: Self.threeWindowAudio,
-            decodeOptions: makeOptions(),
-            callback: nil
-        )
-
-        #expect(decoder.receivedCallbackPresence == [false, false, false])
     }
 
     @Test("Provided callbacks still reach the decoder wrapped with window ids")

@@ -1,12 +1,9 @@
-/// The three kinds of skippable break.
 public enum AdSpanKind: String, Sendable, Hashable, CaseIterable {
     case hostReadAd = "host_read_ad"
     case insertedAd = "inserted_ad"
     case houseOrNetworkPromo = "house_or_network_promo"
 }
 
-/// A verified text anchor inside one segment. The app resolves it against
-/// the word timings of its own transcript.
 public struct AdBoundary: Sendable, Hashable {
     public var segmentID: Int64
     public var quote: String
@@ -21,7 +18,6 @@ public struct AdBoundary: Sendable, Hashable {
     }
 }
 
-/// A break that passed validation, with times taken from the transcript.
 public struct AdAnalysisSpan: Sendable, Hashable {
     public var kind: AdSpanKind
     public var label: String
@@ -51,11 +47,9 @@ public struct AdAnalysisSpan: Sendable, Hashable {
     }
 }
 
-/// Provider token usage, summed over the calls that produced a result.
 public struct AnalysisUsage: Sendable, Hashable {
     public var promptTokenCount: UInt64
     public var candidatesTokenCount: UInt64
-    /// Thinking tokens, billed at the output price.
     public var thoughtsTokenCount: UInt64
     public var totalTokenCount: UInt64
 
@@ -71,7 +65,6 @@ public struct AnalysisUsage: Sendable, Hashable {
         self.totalTokenCount = totalTokenCount
     }
 
-    /// Field-wise saturating sum; `nil` only when both are `nil`.
     public static func combine(_ lhs: AnalysisUsage?, _ rhs: AnalysisUsage?) -> AnalysisUsage? {
         guard let lhs else { return rhs }
         guard let rhs else { return lhs }
@@ -97,9 +90,6 @@ public struct AnalysisUsage: Sendable, Hashable {
     }
 }
 
-/// A completed ad analysis: the JSON object the ad-analysis service returns
-/// to the app, so the app's existing decoder, zone mapper and boundary
-/// refiner consume it unchanged.
 public struct AdAnalysisResponse: Sendable, Hashable {
     public var schemaVersion: UInt16
     public var requestID: String
@@ -128,8 +118,6 @@ public struct AdAnalysisResponse: Sendable, Hashable {
     public var jsonText: String { JSONWriter.string(jsonValue) }
 }
 
-/// The error body the ad-analysis service returns for a code, including the
-/// failure category the app uses to decide when to retry.
 public struct AdAnalysisErrorResponse: Sendable, Hashable {
     public enum Category: String, Sendable, Hashable {
         case capacity
@@ -149,7 +137,6 @@ public struct AdAnalysisErrorResponse: Sendable, Hashable {
     public var error: String
     public var category: Category?
     public var retryDisposition: RetryDisposition?
-    /// The policy revision a failure is attributed to.
     public var policyRevision: String?
 
     public init(error: String) {

@@ -1,27 +1,21 @@
-/// One rule a Chapters & Summary answer broke badly enough to reject it.
 public struct ChaptersHardViolation: Sendable, Hashable {
     public var rule: String
     public var detail: String
 }
 
-/// Every hard violation of a rejected answer, in the order found.
 public struct ChaptersRejection: Error, Sendable, Hashable {
     public var violations: [ChaptersHardViolation]
 
-    /// The rule codes, comma-joined, as reported to the app.
     public var codes: String { violations.map(\.rule).joined(separator: ",") }
 }
 
-/// A validated Chapters & Summary answer.
 public struct ChaptersValidatedAnalysis: Sendable, Hashable {
     public var chapters: [TranscriptAnalysisChapter]
     public var summary: TranscriptAnalysisSummary
     public var warnings: [String]
 }
 
-/// The Chapters & Summary validator. Hard violations reject the whole answer
-/// (chapters are a partition: one bad chapter invalidates the navigation);
-/// soft violations become warnings and never fail a run.
+/// Chapters partition the episode, so one bad chapter rejects the whole answer.
 public enum ChaptersValidator {
     static let titleMaxCharacters = 60
     static let titleMaxWords = 12
@@ -31,15 +25,11 @@ public enum ChaptersValidator {
     static let minimumClaims = 1
     static let maximumClaims = 12
 
-    /// The chapter ceiling: one per `secondsPerChapter` of audio, at least
-    /// the minimum.
     public static func maxChapters(durationSeconds: Double, policy: ChaptersSummaryPolicy) -> Int {
         max(policy.chapterCap.min, saturatingCount(rustCeil(durationSeconds / policy.chapterCap.secondsPerChapter)))
     }
 
-    /// A raw request validates once. A coalesced request must first pass in
-    /// unit space; only then are ids mapped back and the whole contract run
-    /// again against the original segments, so no unit id can escape.
+    /// A coalesced answer must pass in unit space before the remap, so no unit id can escape.
     public static func validateAndRemap(
         original: TranscriptAnalysisRequest,
         prepared: ChaptersPreparedRequest,
@@ -252,8 +242,6 @@ public enum ChaptersValidator {
         }
     }
 
-    /// Scheme prefixes, `www.`, or a bare `label.tld/` where the character
-    /// before the dot is an ASCII letter, digit or hyphen.
     static func containsURLShape(_ text: String) -> Bool {
         let lower = Array(text.lowercased().utf8)
         for marker in ["http://", "https://", "www."] where !lower.byteOccurrences(of: Array(marker.utf8)).isEmpty {
@@ -288,10 +276,8 @@ public enum ChaptersValidator {
         return false
     }
 
-    /// Rust `f64::ceil`.
     static func rustCeil(_ value: Double) -> Double { value.rounded(.up) }
 
-    /// Rust's saturating `f64 as usize` (NaN and negatives are 0).
     static func saturatingCount(_ value: Double) -> Int {
         if value.isNaN || value <= 0 { return 0 }
         if value >= Double(Int.max) { return Int.max }

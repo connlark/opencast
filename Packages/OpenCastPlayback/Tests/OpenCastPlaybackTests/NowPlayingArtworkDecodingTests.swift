@@ -27,13 +27,12 @@ struct NowPlayingArtworkDecodingTests {
 
         let maxEdge = max(image.size.width, image.size.height)
         #expect(Int(maxEdge) <= ArtworkTransferPolicy.nowPlayingMaximumPixelSize)
-        // Aspect ratio survives the downsample.
         #expect(abs((image.size.width / image.size.height) - 2.0) < 0.01)
     }
 
-    @Test("An extreme declared canvas is refused before pixel work")
+    @Test("Artwork over the declared dimension limit is refused")
     func extremeDeclaredCanvasIsRefused() throws {
-        let data = Self.syntheticPNGHeader(width: 100_000, height: 100_000)
+        let data = try Self.pngData(width: 12_001, height: 300)
 
         #expect(NowPlayingArtworkDecoding.downsampledImage(from: data) == nil)
     }
@@ -66,51 +65,5 @@ struct NowPlayingArtworkDecodingTests {
         CGImageDestinationAddImage(destination, image, nil)
         #expect(CGImageDestinationFinalize(destination))
         return data as Data
-    }
-
-    /// A tiny synthetic payload whose IHDR declares an absurd canvas — the
-    /// compressed-bomb shape from the triage, without a large fixture.
-    private static func syntheticPNGHeader(width: UInt32, height: UInt32) -> Data {
-        var data = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
-        var chunk = Data("IHDR".utf8)
-        for value in [width, height] {
-            chunk.append(contentsOf: [
-                UInt8((value >> 24) & 0xFF),
-                UInt8((value >> 16) & 0xFF),
-                UInt8((value >> 8) & 0xFF),
-                UInt8(value & 0xFF),
-            ])
-        }
-        // bit depth 8, color type 6 (RGBA), compression 0, filter 0, interlace 0
-        chunk.append(contentsOf: [8, 6, 0, 0, 0])
-        var length = Data()
-        let payloadLength = UInt32(chunk.count - 4)
-        length.append(contentsOf: [
-            UInt8((payloadLength >> 24) & 0xFF),
-            UInt8((payloadLength >> 16) & 0xFF),
-            UInt8((payloadLength >> 8) & 0xFF),
-            UInt8(payloadLength & 0xFF),
-        ])
-        data.append(length)
-        data.append(chunk)
-        data.append(contentsOf: crc32(chunk))
-        return data
-    }
-
-    private static func crc32(_ chunk: Data) -> [UInt8] {
-        var crc: UInt32 = 0xFFFFFFFF
-        for byte in chunk {
-            crc ^= UInt32(byte)
-            for _ in 0..<8 {
-                crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320 : crc >> 1
-            }
-        }
-        crc ^= 0xFFFFFFFF
-        return [
-            UInt8((crc >> 24) & 0xFF),
-            UInt8((crc >> 16) & 0xFF),
-            UInt8((crc >> 8) & 0xFF),
-            UInt8(crc & 0xFF),
-        ]
     }
 }

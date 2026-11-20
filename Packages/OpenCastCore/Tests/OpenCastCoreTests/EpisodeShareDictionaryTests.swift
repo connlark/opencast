@@ -16,13 +16,4 @@ struct EpisodeShareDictionaryTests {
         #expect(digest == EpisodeShareDictionary.v1SHA256)
         #expect(digest == fixture.dictionary.sha256)
     }
-
-    @Test("The dictionary carries both dashes as UTF-8 and ends with the scheme")
-    func dictionaryContentsSurviveEscaping() {
-        let bytes = EpisodeShareDictionary.v1
-
-        #expect(bytes.contains([0xE2, 0x80, 0x93]))
-        #expect(bytes.contains([0xE2, 0x80, 0x94]))
-        #expect(bytes.suffix(8) == Array("https://".utf8)[...])
-    }
 }

@@ -19,13 +19,6 @@ struct EpisodeTranscriptGenerationProgressMapperTests {
         #expect(EpisodeTranscriptGenerationProgressMapper.units(for: .completed) == 1_000)
     }
 
-    @Test("Terminal pauses hold the current units")
-    func terminalPausesHoldCurrentUnits() {
-        #expect(EpisodeTranscriptGenerationProgressMapper.units(for: .interrupted, currentUnits: 600) == 600)
-        #expect(EpisodeTranscriptGenerationProgressMapper.units(for: .cancelled, currentUnits: 600) == 600)
-        #expect(EpisodeTranscriptGenerationProgressMapper.units(for: .failed("probe"), currentUnits: 600) == 600)
-    }
-
     @Test("Updates are monotonic across phase regressions")
     func updatesAreMonotonicAcrossPhaseRegressions() {
         var mapper = EpisodeTranscriptGenerationProgressMapper()

@@ -1,15 +1,9 @@
 import Foundation
 import OpenCastCore
 
-/// Bounded-concurrency feed fetching shared by the bulk refresh and batch
-/// subscribe flows: fetches run off the main actor at the shared width while
-/// each result applies serially through the caller's closure. Cancellation
-/// fencing, generation checks, and busy-marker bookkeeping deliberately stay
-/// with the caller — this type only fetches and hands results back.
 enum FeedRefreshFetcher {
-    /// Bounded fetch fan-out shared by refreshAll and subscribeBatch: wide
-    /// enough to hide network latency, narrow enough not to flood the feed
-    /// hosts or starve the main actor with result application.
+    /// Wide enough to hide network latency, narrow enough not to flood feed hosts or starve the main
+    /// actor applying results.
     static let maxConcurrentFeedRefreshes = 4
 
     struct Result: Sendable {
@@ -64,9 +58,8 @@ enum FeedRefreshFetcher {
         }
     }
 
-    /// The sliding-window driver: seeds up to the shared width, then applies
-    /// each result as it lands, seeding the next fetch first so the window
-    /// stays full. An error thrown by `apply` cancels the remaining fetches.
+    /// Seeds the next fetch before applying a result, so the window stays full while `apply` runs.
+    /// An error thrown by `apply` cancels the remaining fetches.
     static func forEachResult(
         feedURLStrings: [String],
         feedService: any FeedService,

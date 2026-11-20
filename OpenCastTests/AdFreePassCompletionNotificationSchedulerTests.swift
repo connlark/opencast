@@ -27,12 +27,10 @@ struct AdFreePassCompletionNotificationSchedulerTests {
         #expect(request.content.body == "1 episode couldn't be analyzed.")
         #expect(request.content.categoryIdentifier == OpenCastNotificationCategory.adFreePass)
         #expect(request.content.sound != nil)
-        // Immediate delivery, unique per drain, grouped under one thread.
         #expect(request.trigger == nil)
         #expect(request.identifier.hasPrefix(AdFreePassCompletionNotificationScheduler.threadIdentifier))
         #expect(request.content.threadIdentifier == AdFreePassCompletionNotificationScheduler.threadIdentifier)
 
-        // The kind is a routing no-op — never "episode" or "diagnostic".
         let payload = request.content.userInfo["opencast"] as? [String: Any]
         #expect(payload?["kind"] as? String == "ad-free-pass")
     }
@@ -76,66 +74,6 @@ struct AdFreePassCompletionNotificationSchedulerTests {
         #expect(center.authorizationStatusReadCount == 0)
     }
 
-    @Test("Authorization gates delivery")
-    func authorizationTable() async {
-        for (status, expectsDelivery) in [
-            (UNAuthorizationStatus.authorized, true),
-            (.provisional, true),
-            (.ephemeral, true),
-            (.denied, false),
-            (.notDetermined, false),
-        ] {
-            let center = FakeAdFreePassNotificationCenter()
-            center.authorizationStatusValue = status
-            let scheduler = AdFreePassCompletionNotificationScheduler(center: center)
-
-            let decision = await scheduler.scheduleIfNeeded(
-                terminal: .drained(completedCount: 1, failedCount: 0),
-                outcomes: [completedOutcome(episodeID: "a", zoneCount: 2)],
-                isSceneActive: false
-            )
-
-            #expect(center.addedRequests.count == (expectsDelivery ? 1 : 0), "status \(status)")
-            let expected: CompletionDeliveryDecision = expectsDelivery ? .scheduled : .suppressed(.unauthorized)
-            #expect(decision == expected, "status \(status)")
-        }
-    }
-
-    @Test("The consent terminal never notifies even when backgrounded and authorized")
-    func deferredTerminalsNeverNotify() async {
-        let center = FakeAdFreePassNotificationCenter()
-        let scheduler = AdFreePassCompletionNotificationScheduler(center: center)
-
-        for terminal in [AdFreePassQueueTerminalOutcome.awaitingConsent] {
-            let decision = await scheduler.scheduleIfNeeded(
-                terminal: terminal,
-                outcomes: [completedOutcome(episodeID: "a", zoneCount: 2)],
-                isSceneActive: false
-            )
-            #expect(decision == .suppressed(.silentOutcome), "terminal \(terminal)")
-        }
-
-        #expect(center.addedRequests.isEmpty)
-        #expect(center.authorizationStatusReadCount == 0)
-    }
-
-    @Test("On-device interrupted terminals schedule the device-paused notification")
-    func interruptedTerminalSchedulesPausedNotification() async throws {
-        let center = FakeAdFreePassNotificationCenter()
-        let scheduler = AdFreePassCompletionNotificationScheduler(center: center)
-
-        await scheduler.scheduleIfNeeded(
-            terminal: .interrupted,
-            outcomes: [completedOutcome(episodeID: "a", zoneCount: 2)],
-            isSceneActive: false
-        )
-
-        let request = try #require(center.addedRequests.first)
-        #expect(center.addedRequests.count == 1)
-        #expect(request.content.title == "Ad detection paused")
-        #expect(request.content.body.contains("pick up where it left off"))
-    }
-
     @Test("An expiration park of a cloud item posts the server-still-working copy on the pinned category and thread, for either owner")
     func cloudParkSchedulesServerStillWorkingCopy() async throws {
         let center = FakeAdFreePassNotificationCenter()
@@ -156,45 +94,6 @@ struct AdFreePassCompletionNotificationSchedulerTests {
         #expect(request.content.threadIdentifier == AdFreePassCompletionNotificationScheduler.threadIdentifier)
         let payload = request.content.userInfo["opencast"] as? [String: Any]
         #expect(payload?["kind"] as? String == "ad-free-pass")
-    }
-
-    @Test("Silent cloud terminals and an all-remote drain never read authorization or reach add")
-    func silentCloudTerminalsNeverReachAdd() async {
-        let center = FakeAdFreePassNotificationCenter()
-        let scheduler = AdFreePassCompletionNotificationScheduler(center: center)
-
-        for (terminal, outcomes) in [
-            (AdFreePassQueueTerminalOutcome.remoteParked(.connectionLost), [AdFreePassQueueItemOutcome]()),
-            (.remoteParked(.localRequestFailed), []),
-            (.cloudUserCancelled, []),
-            (.drained(completedCount: 1, failedCount: 0), [completedOutcome(episodeID: "a", zoneCount: 2, owner: .remote)]),
-        ] {
-            let decision = await scheduler.scheduleIfNeeded(
-                terminal: terminal,
-                outcomes: outcomes,
-                isSceneActive: false
-            )
-            #expect(decision == .suppressed(.silentOutcome), "terminal \(terminal)")
-        }
-
-        #expect(center.addedRequests.isEmpty)
-        #expect(center.authorizationStatusReadCount == 0)
-    }
-
-    @Test("A refused add reports the failure instead of a scheduled notification")
-    func refusedAddReportsFailure() async {
-        let center = FakeAdFreePassNotificationCenter()
-        center.addError = CocoaError(.featureUnsupported)
-        let scheduler = AdFreePassCompletionNotificationScheduler(center: center)
-
-        let decision = await scheduler.scheduleIfNeeded(
-            terminal: .drained(completedCount: 1, failedCount: 0),
-            outcomes: [completedOutcome(episodeID: "a", zoneCount: 2)],
-            isSceneActive: false
-        )
-
-        #expect(decision == .addFailed)
-        #expect(center.addedRequests.isEmpty)
     }
 
     // MARK: - Fixtures

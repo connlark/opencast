@@ -9,10 +9,8 @@ final class EpisodeNoteRecord {
     var isEpisodeWide: Bool = false
     var text: String = ""
     var createdAt: Date = Date()
-    /// Display fallbacks: episode resolution reaches only subscribed shows and
-    /// downloads, so a note on a show the listener later leaves renders from
-    /// these. Notes saved before they existed are filled by
-    /// `EpisodeNoteStore.backfillEpisodeInfo`.
+    /// Display fallbacks: episode resolution reaches only subscribed shows and downloads, so a
+    /// note on a show the listener leaves renders from these.
     var podcastID: String = ""
     var podcastTitle: String = ""
     var episodeTitle: String = ""

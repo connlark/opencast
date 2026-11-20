@@ -25,8 +25,6 @@ struct BackgroundRemoteTranscriptionUploadTransportTests {
             }
         }
 
-        // The displaced first waiter must resume with the typed error rather
-        // than hang forever behind the silent overwrite.
         await #expect(throws: BackgroundRemoteTranscriptionUploadTransport.WaiterDisplaced.self) {
             _ = try await firstWaiter.value
         }

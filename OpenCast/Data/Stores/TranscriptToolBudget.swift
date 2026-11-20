@@ -1,9 +1,7 @@
 import Synchronization
 
-/// Caps how many tool calls one Ask turn may make. Forced tool calling made
-/// the model loop for minutes; with calling merely allowed it still
-/// occasionally re-searches, so past the cap every tool answers with an
-/// instruction to stop and answer instead of more passages.
+/// Forced tool calling made the model loop for minutes, and allowed calling still re-searches
+/// now and then, so past the cap every tool answers with an instruction to stop.
 nonisolated final class TranscriptToolBudget: Sendable {
     static let stopMessage = """
         You have used every transcript lookup allowed for this question. Stop searching and answer now \

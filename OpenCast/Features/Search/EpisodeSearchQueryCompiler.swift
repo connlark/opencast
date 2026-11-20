@@ -234,9 +234,8 @@ nonisolated enum EpisodeSearchQueryCompiler {
             )
         }
 
-        // FTS5 has no minimum-should-match operator. Requiring all but one
-        // term retains a useful recall path without letting a single generic
-        // token dominate a long query.
+        // FTS5 has no minimum-should-match operator; requiring all but one term keeps recall
+        // without letting one generic token dominate a long query.
         let clauses = terms.indices.map { omittedIndex in
             let retainedTerms = terms.indices.compactMap { index in
                 index == omittedIndex ? nil : terms[index]

@@ -1,8 +1,7 @@
 import Foundation
 
 nonisolated final class AdFreePassCancellationSource: @unchecked Sendable {
-    /// Why the pass task was cancelled. Only a user request may cancel a
-    /// remote server job; every other reason parks it for re-attach.
+    /// Only `.userRequest` may cancel a remote server job; every other reason parks it.
     enum Reason: Equatable, Sendable {
         case userRequest
         case sessionExpiration

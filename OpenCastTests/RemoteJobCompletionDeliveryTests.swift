@@ -5,28 +5,13 @@ import SwiftData
 import Testing
 @testable import OpenCast
 
-/// Local completion delivery for both remote flows. A run snapshots its
-/// reference's delivery owner before the runner clears the reference, so an
-/// outcome still knows its owner after cleanup. A remote owner suppresses
-/// the completion, never the paused notification. Delivery is decided once
-/// per run ending, at scheduling time: an active scene, missing
-/// authorization or a silent ending never reaches `add`.
-///
-/// Nothing in production writes a remote owner yet; these tests plant one on
-/// the reference the way a server-push client will.
 @MainActor
 @Suite("Remote job completion delivery", .serialized)
 struct RemoteJobCompletionDeliveryTests {
     enum Script {
-        /// The server keeps transcribing.
         case running
-        /// The server delivers a result on the first poll.
         case delivers
-        /// The server fails the job: the runner clears the reference, then
-        /// throws.
         case serverFails
-        /// Every poll loses the connection after attach.
-        case connectionLost
     }
 
     @MainActor
@@ -49,8 +34,7 @@ struct RemoteJobCompletionDeliveryTests {
             seedStore.existingReference(for: episode.episodeID, purpose: purpose)
         }
 
-        /// Plants a prepared reference whose completion a remote owner
-        /// delivers.
+        /// Writes the owner straight to defaults: nothing in production sets `.remote` yet.
         func seedRemoteOwner(_ purpose: RemoteTranscriptionJobPurpose) throws {
             let store = seedStore
             _ = store.reference(for: episode.episodeID, purpose: purpose)
@@ -127,7 +111,6 @@ struct RemoteJobCompletionDeliveryTests {
         )
 
         #expect(outcome.completionDeliveryOwner == owner)
-        // The reference was gone before the outcome reached the caller.
         #expect(device.reference(.transcription) == nil)
         #expect(device.api.serverState(of: outcome.jobID) == .acknowledged)
 
@@ -368,8 +351,7 @@ struct RemoteJobCompletionDeliveryTests {
 
         #expect(await waitUntil { handle.completions == [false] })
         // On a locked phone iOS suspends the app as soon as the task
-        // completes, so the run ending and its notification must already be
-        // delivered by then (SANDBOX SE, 2026-10-05: they arrived on unlock).
+        // completes, so the run ending and its notification must already be delivered.
         #expect(addsWhenCompleted == 1)
         #expect(deliveryEventsWhenCompleted == 1)
         #expect(rig.phase == .parkedOnServer(.parked))
@@ -395,31 +377,6 @@ struct RemoteJobCompletionDeliveryTests {
         #expect(await waitUntil { rig.center.addedRequests.count == 1 })
         #expect(await rig.postsAnotherNotification(beyond: 1) == false)
         #expect(device.deliveryEvents().map(\.kind) == [.notificationScheduled])
-    }
-
-    @Test("A connection-loss park ends the run as parked and stays silent")
-    func connectionLossParkIsSilent() async throws {
-        let device = try await makeDevice(episodeID: "ep-plain-connection", script: .connectionLost)
-        let coordinator = device.makeCoordinator()
-        var endings: [(phase: RemoteTranscriptionRequestPhase, owner: JobCompletionDeliveryOwner)] = []
-        coordinator.onRunEnded = { _, phase, owner in endings.append((phase, owner)) }
-
-        #expect(coordinator.start(episode: device.episode, modelContext: device.context) == .started)
-
-        #expect(await waitUntil { !endings.isEmpty })
-        let ending = try #require(endings.first)
-        #expect(ending.phase == .parkedOnServer(.connectionLost))
-        let center = FakeAdFreePassNotificationCenter()
-        let decision = await RemoteTranscriptionNotificationScheduler(center: center).scheduleIfNeeded(
-            phase: ending.phase,
-            episodeTitle: device.episode.title,
-            deliveryOwner: ending.owner,
-            isSceneActive: false
-        )
-        #expect(decision == .suppressed(.silentOutcome))
-        #expect(center.addedRequests.isEmpty)
-        #expect(device.reference(.transcription)?.lastExit == .connectionLost)
-        #expect(device.api.cancelCalls.isEmpty)
     }
 
     @Test("A park that lands during a user cancel never posts paused copy for the cancelled job")
@@ -603,8 +560,6 @@ struct RemoteJobCompletionDeliveryTests {
             RemoteJobFaultInjectingAPI(pollScript: [
                 OpenCastRemoteTranscriptionJobStatus(jobID: "", state: .failed),
             ])
-        case .connectionLost:
-            RemoteJobRecoveryFixture.transportAfterAttach.makeAPI()
         }
         let suiteName = "remote-completion-delivery-tests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))

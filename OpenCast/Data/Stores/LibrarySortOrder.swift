@@ -17,10 +17,7 @@ enum LibrarySortOrder: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// Title keeps the store's order (already title, then feed URL). Recent
-    /// Episodes puts the newest released episode first and undated shows
-    /// last, breaking ties by title and then feed URL. Played state plays no
-    /// part, so listening never reorders the Library.
+    /// `subscriptions` arrive sorted by title, then feed URL.
     func sorted(
         _ subscriptions: [SubscriptionRecord],
         latestReleaseDate: (String) -> Date?

@@ -3,8 +3,7 @@ import Foundation
 nonisolated struct EpisodeTranscriptAnalysisAPIUsage: Codable, Sendable, Equatable {
     var promptTokenCount: Int
     var candidatesTokenCount: Int
-    /// Thinking tokens bill as output alongside candidates; recorded so the
-    /// uncharged alpha's real per-run cost can price the at-cost minutes rate.
+    /// Bills as output alongside `candidatesTokenCount`.
     var thoughtsTokenCount: Int
     var totalTokenCount: Int
 

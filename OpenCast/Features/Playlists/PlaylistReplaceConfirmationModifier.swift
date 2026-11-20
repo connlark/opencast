@@ -1,8 +1,6 @@
 import SwiftUI
 
-/// Asks whether playing a playlist should replace Up Next or join behind it.
-/// Attach it to the control that triggers the play so Liquid Glass sources
-/// the dialog from that control.
+/// Attach it to the control that triggers the play, so Liquid Glass sources the dialog there.
 struct PlaylistReplaceConfirmationModifier: ViewModifier {
     @Binding var isPresented: Bool
     let queuedCount: Int

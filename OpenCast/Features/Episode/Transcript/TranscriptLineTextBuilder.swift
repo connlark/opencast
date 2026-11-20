@@ -1,8 +1,6 @@
 import SwiftUI
 
-/// Applies precomputed styling to a transcript line. All string searching
-/// happens up front (TranscriptKaraokeLayout, TranscriptSearchIndex) so this
-/// stays allocation-only on the render path.
+/// Allocation-only on the render path: all string searching happens up front.
 nonisolated enum TranscriptLineTextBuilder {
     static func attributedText(
         text: String,

@@ -41,9 +41,8 @@ nonisolated struct AppAttestSecureAPIClient: Sendable {
         exemptFromSuspension: Bool = false,
         response: ResponseBody.Type
     ) async throws -> ResponseBody {
-        // One gate turn spans issuance → response (including the single
-        // counter-race retry), so a key's counters reach the server in
-        // issuance order regardless of which service is sending.
+        // One gate turn spans issuance to response, the counter-race retry included, so a key's
+        // counters reach the server in issuance order.
         try await assertionGate.withSerializedSend(
             keyID: keyID, exemptFromSuspension: exemptFromSuspension
         ) {
@@ -57,9 +56,8 @@ nonisolated struct AppAttestSecureAPIClient: Sendable {
                     response: response
                 )
             } catch let error as AppAttestHTTPError where error.isCounterRaceFailure {
-                // Another process (app vs. extension) can still land a higher
-                // counter first; a fresh assertion picks up the advanced
-                // counter without the maximal delete-key + re-attest recovery.
+                // Another process (app or extension) can still land a higher counter first; a fresh
+                // assertion picks up the advanced counter.
                 return try await issueAssertionAndSend(
                     path: path,
                     installID: installID,
@@ -72,11 +70,9 @@ nonisolated struct AppAttestSecureAPIClient: Sendable {
         }
     }
 
-    /// ``sendRawPayload(path:installID:keyID:payload:timeout:response:)``
-    /// with the reply undecoded: every status comes back as a response, and
-    /// the body is read capped at `maximumBodyBytes`. One gate turn spans
-    /// issuance, the post and the whole body read; a 401 `invalid_counter`
-    /// is sent again once inside the turn with a fresh assertion.
+    /// Every status comes back undecoded, the body read capped at `maximumBodyBytes`. One gate
+    /// turn spans issuance, the post and the whole body read; a 401 `invalid_counter` is resent
+    /// once inside the turn.
     func sendRawPayloadForRawResponse(
         path: String,
         installID: String,

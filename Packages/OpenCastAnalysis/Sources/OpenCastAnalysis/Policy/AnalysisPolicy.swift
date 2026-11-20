@@ -1,7 +1,3 @@
-/// What one analysis run executes under: one feature's settings from the
-/// active bundle and the model entry the listener's provider selects. A run
-/// record keeps `bundleVersion`, `settings.revision`, `source` and the entry;
-/// `executionBudget` is the route's in-memory choice and is never kept.
 public struct AnalysisPolicy<Settings: Sendable & Equatable>: Sendable, Equatable {
     public let bundleVersion: Int
     public let source: AnalysisPolicySource

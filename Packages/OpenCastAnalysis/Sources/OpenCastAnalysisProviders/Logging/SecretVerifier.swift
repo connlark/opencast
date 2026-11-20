@@ -1,62 +1,12 @@
 import Foundation
 import OpenCastAnalysis
 
-/// The authority on whether text may leave the provider layer. The
-/// redactor (``RedactingLogger``) is best effort; every sink runs this
-/// verifier on what the redactor produced and fails closed on any hit, so
-/// the guarantee rests here, not on the redactor being complete.
-///
-/// Two contracts, one per kind of sink:
-///
-/// - **App sinks** (log lines, send records, observers) carry only closed
-///   vocabularies and numbers by construction. ``verifyAppText(_:)``
-///   checks that no registered secret survives whole (after normalising)
-///   and no key-shaped run remains. It deliberately does not check 4-scalar
-///   windows: a fixed word that happened to equal a key fragment would
-///   suppress that line type for good, and a closed vocabulary cannot carry
-///   a fragment anyway.
-/// - **Recorder sinks** (every file the live tool writes) carry provider
-///   text. ``verifyRecordedText(_:)``, ``verifyRecordedJSON(_:)`` and
-///   ``verifyRecordedArtifact(_:)`` look for any 4-scalar window of any
-///   registered secret, outside the secret's documented public prefix (a
-///   key prefix such as `sk-proj-` is public, not secret, and its windows
-///   match words such as "project").
-///
-/// The decoding contract for recorder sinks, the finite list a recording is
-/// verified through: the JSON parser's escapes (an unpaired surrogate fails
-/// closed); JSON nested in string values (depth 4, 256 KiB in all); in each
-/// string value and member name, `\uXXXX` and short escapes, percent
-/// encoding, numeric HTML entities of up to 64 digits (leading zeros, `;`
-/// optional) and the common named ones, and base64 or base64url runs of six
-/// or more symbols (the fewest that decode to four bytes), split at
-/// padding and read at each of the four group alignments, so an encoding
-/// placed after other base64 characters or after another padded encoding
-/// is read at its own alignment, and read again with format characters and
-/// compatibility forms removed but case kept; normalisation (below) before
-/// and after every decoding, so the two compose in either order; up to four decoding
-/// layers. A candidate still decodable at the fourth layer, a malformed
-/// encoding, a combining run past 32, an expansion past four times, the
-/// work bound (16 times the input plus 64 KiB) or any depth bound fails
-/// closed: a bound never accepts. The whole artifact's bytes are then
-/// checked as they stand, numbers included. A registered secret that
-/// cannot itself be normalised within the bounds makes every verification
-/// fail closed.
-///
-/// Normalisation, the same for secrets and candidates: compatibility
-/// decomposition (NFKD), full case folding, NFKD again, then removal of
-/// format (Cf), default-ignorable, nonspacing (Mn) and enclosing (Me)
-/// characters. Decomposing before stripping matters: composing first would
-/// turn `a` + U+0301 into `á` and hide the fragment. More than 32
-/// consecutive combining marks, or an expansion past four times the input,
-/// fails closed. Candidates are checked both as normalised and with every
-/// masking run (`*`, `•`, `●`, `…`, runs of two or more dots and the like,
-/// and runs of four or more `x` after a key prefix) collapsed to one marker.
+/// Every sink runs this on the redactor's output and fails closed on any hit; a bound never
+/// accepts.
 public struct SecretVerifier: Sendable {
     public enum Verdict: Sendable, Hashable {
         case clean
-        /// A registered secret, or a fragment of one, survives.
         case secretFragment
-        /// A bound was reached before safety could be established.
         case exhausted
     }
 
@@ -76,8 +26,7 @@ public struct SecretVerifier: Sendable {
     }
 
     public static let windowLength = 4
-    /// Member names whose value is a credential whatever it holds; such a
-    /// member passes only when its value is null or already `[REDACTED]`.
+    /// A member with one of these names passes only when its value is null or `[REDACTED]`.
     public static let credentialNames: Set<String> = [
         "authorization", "x-goog-api-key", "x-api-key", "api_key", "api-key", "apikey", "key", "token",
         "access_token", "secret", "password",
@@ -89,19 +38,16 @@ public struct SecretVerifier: Sendable {
 
     let windows: Set<Window>
     let wholeSecrets: [[Unicode.Scalar]]
-    /// A registered secret could not be normalised within the bounds, or is
-    /// shorter than a window once normalised (no fragment contract can
-    /// hold for it: it would match noise in any decoding). A bound never
-    /// removes protection: every verification then fails closed.
+    /// A secret past the normalisation bounds, or shorter than a window once normalised, has no
+    /// fragment contract: every verification then fails closed.
     let registrationFailed: Bool
 
     public init(secrets: [String]) {
         var windows: Set<Window> = []
         var whole: [[Unicode.Scalar]] = []
         var failed = false
-        // Deduplicated by bytes: hashing a String normalises it, which is
-        // superlinear on a long run of combining marks, and a key is
-        // checked against the bounds before anything else reads it.
+        // Deduplicated by bytes: hashing a String normalises it, superlinearly on a long run of
+        // combining marks.
         var registered: Set<[UInt8]> = []
         for secret in secrets where !secret.isEmpty && registered.insert(Array(secret.utf8)).inserted {
             guard let normalised = SecretNormalization.stripped(secret), !normalised.isEmpty else {
@@ -127,8 +73,8 @@ public struct SecretVerifier: Sendable {
 
     // MARK: App sinks
 
-    /// For text built from closed vocabularies and numbers: no registered
-    /// secret survives whole, normalised, and no key-shaped run remains.
+    /// For closed vocabularies and numbers only. No 4-scalar windows: a fixed word equal to a key
+    /// fragment would suppress its line type for good.
     public func verifyAppText(_ text: String) -> Verdict {
         guard !registrationFailed else { return .exhausted }
         if RedactingLogger.containsKeyShape(text) { return .secretFragment }
@@ -142,24 +88,19 @@ public struct SecretVerifier: Sendable {
 
     // MARK: Recorder sinks
 
-    /// Free text bound for a recording, in every supported decoding.
     public func verifyRecordedText(_ text: String) -> Verdict {
         guard !registrationFailed else { return .exhausted }
         var budget = Budget(text: text)
         return verifyText(text, depth: 0, nested: 0, budget: &budget)
     }
 
-    /// A parsed JSON value bound for a recording: every member name and
-    /// string, nested JSON in strings, credential-named members.
     public func verifyRecordedJSON(_ value: JSONValue) -> Verdict {
         guard !registrationFailed else { return .exhausted }
         var budget = Budget(value: value)
         return verifyJSON(value, depth: 0, nested: 0, budget: &budget)
     }
 
-    /// The serialized bytes of a whole artifact: parsed and verified by
-    /// structure, and verified again as text, numbers included. Anything
-    /// that is not JSON is not an artifact the recorder may write.
+    /// Anything that is not JSON is not an artifact the recorder may write.
     public func verifyRecordedArtifact(_ bytes: String) -> Verdict {
         guard !registrationFailed else { return .exhausted }
         let value: JSONValue
@@ -171,24 +112,17 @@ public struct SecretVerifier: Sendable {
         var budget = Budget(text: bytes)
         let structure = verifyJSON(value, depth: 0, nested: 0, budget: &budget)
         guard structure == .clean else { return structure }
-        // The bytes as they stand, numbers and punctuation included. The
-        // contract's decodings apply to values, and every value was just
-        // verified through them.
+        // The bytes as they stand, numbers included; the decodings apply to values, verified above.
         guard let normalised = SecretNormalization.stripped(bytes) else { return .exhausted }
         return hasWindow(normalised) || hasWindow(SecretNormalization.collapsed(normalised))
             ? .secretFragment
             : .clean
     }
 
-    /// The work one verification may do: bytes of candidate text across
-    /// every decoding (each candidate costs at least one), and bytes of
-    /// nested JSON decoded from strings.
     struct Budget {
         var bytes: Int
         var nested = 0
 
-        /// The work one verification may do: 16 times the bytes verified,
-        /// plus 64 KiB.
         static func workBound(bytes: Int) -> Int {
             16 * bytes + 64 * 1024
         }
@@ -197,7 +131,6 @@ public struct SecretVerifier: Sendable {
             bytes = Self.workBound(bytes: text.utf8.count)
         }
 
-        /// For a JSON value, the bytes of its serialized form.
         init(value: JSONValue) {
             bytes = Self.workBound(bytes: JSONWriter.byteCount(value))
         }
@@ -213,16 +146,8 @@ public struct SecretVerifier: Sendable {
         }
     }
 
-    /// One bounded work queue over the candidate and everything it decodes
-    /// to. Each candidate is normalised (case folded) for the fragment
-    /// check; every decoder reads the candidate and its case-kept
-    /// normalised form (compatibility forms and format characters removed,
-    /// case kept, so fullwidth `％６３` decodes and base64 inside it keeps
-    /// its case), so normalising and decoding compose in either order; and
-    /// each of those forms that is JSON is verified by structure, inside
-    /// the same budget. A candidate still decodable at the layer limit, a
-    /// malformed encoding, nesting past the bounds or the work bound fails
-    /// closed: a bound never accepts.
+    /// Decoders also read the case-kept normalised form, so fullwidth `％６３` decodes and base64
+    /// keeps its case: normalising and decoding compose in either order.
     func verifyText(_ text: String, depth: Int, nested: Int, budget: inout Budget) -> Verdict {
         guard !registrationFailed else { return .exhausted }
         // Breadth first, so a fragment at a shallow layer is found before
@@ -275,12 +200,6 @@ public struct SecretVerifier: Sendable {
         return .clean
     }
 
-    /// A candidate that is a JSON document (it starts with `{`, `[` or `"`
-    /// and parses) is verified by structure: four levels of JSON in strings
-    /// and 256 KiB of it in all, its containers counted with the `depth`
-    /// already around the string before it is parsed, since verification
-    /// walks the value level by level. Past any bound, fail closed; text
-    /// that is not JSON is only text.
     func verifyStructure(_ text: String, depth: Int, nested: Int, budget: inout Budget) -> Verdict {
         guard let first = text.unicodeScalars.first(where: { !" \t\r\n".unicodeScalars.contains($0) }),
               first == "{" || first == "[" || first == "\""
@@ -299,9 +218,7 @@ public struct SecretVerifier: Sendable {
         }
     }
 
-    /// `depth` counts the containers around `value`, across JSON held in
-    /// strings: a container is the (`depth` + 1)th, and one past
-    /// ``maximumJSONDepth`` fails closed, the count every entry point makes.
+    /// `depth` counts the containers around `value`, across JSON held in strings too.
     func verifyJSON(_ value: JSONValue, depth: Int, nested: Int, budget: inout Budget) -> Verdict {
         switch value {
         case .string(let text):
@@ -361,35 +278,26 @@ extension SecretVerifier: CustomStringConvertible, CustomDebugStringConvertible,
     public var customMirror: Mirror { Mirror(self, children: ["secretCount": wholeSecrets.count]) }
 }
 
-/// The normalisation both sides of the verifier use.
 enum SecretNormalization {
     static let maximumCombiningRun = 32
     static let maximumExpansion = 4
     static let marker: Unicode.Scalar = "\u{FFFC}"
-    /// Documented public key prefixes, normalised (case-folded).
+    /// Normalised. A public prefix is not secret, and its windows would match words such as
+    /// "project".
     static let publicPrefixes: [[Unicode.Scalar]] = ["sk-proj-", "sk-ant-", "sk-", "aizasy", "aiza", "aq.", "pplx-"]
         .map { Array($0.unicodeScalars) }
 
-    /// Scalars decomposed together. Foundation reorders a run of combining
-    /// marks as a whole, superlinearly, and a scalar can become a mark only
-    /// when decomposed (U+FF9E becomes U+3099), so no run can be bounded
-    /// before decomposing; decomposing a chunk at a time bounds the cost of
-    /// each run by the chunk instead. Marks are removed afterwards, so where
-    /// a run is split does not change the result.
+    /// Foundation reorders a run of combining marks superlinearly, and a scalar can become a mark
+    /// only once decomposed (U+FF9E to U+3099): decomposing by chunk bounds each run. Marks are
+    /// removed afterwards, so where a chunk splits a run does not matter.
     static let chunkScalars = 64
 
-    /// Whether `text` normalises within the bounds: no run of more than 32
-    /// combining marks once decomposed, and no expansion past four times.
     static func withinCombiningBound(_ text: String) -> Bool {
         stripped(text) != nil
     }
 
-    /// NFKD, full case folding, NFKD, then format, default-ignorable,
-    /// nonspacing, enclosing and spacing combining characters removed.
-    /// With `foldingCase` false, the same without the case folding (the form
-    /// the decoders read). Computed a chunk of scalars at a time, ASCII
-    /// without Foundation; `nil` past the bounds, checked as the
-    /// decomposition is produced.
+    /// Decomposes before stripping marks: composing first would turn `a` + U+0301 into `á` and
+    /// hide the fragment.
     static func stripped(_ text: String, foldingCase: Bool = true) -> [Unicode.Scalar]? {
         let scalars = Array(text.unicodeScalars)
         let limit = maximumExpansion * scalars.count + 16
@@ -420,8 +328,6 @@ enum SecretNormalization {
                     guard emit(folded) else { return nil }
                 }
             } else {
-                // A run of marks within one chunk is at most the chunk long,
-                // so Foundation's reordering of it is bounded too.
                 let piece = String(String.UnicodeScalarView(chunk))
                 let decomposed = foldingCase
                     ? piece.decomposedStringWithCompatibilityMapping
@@ -442,9 +348,6 @@ enum SecretNormalization {
         "\u{2588}", "\u{25CB}", "\u{25E6}", "\u{2027}", "\u{2026}",
     ]
 
-    /// Every masking run collapsed to one marker: masking characters, runs
-    /// of two or more dots, and runs of four or more `x` right after a key
-    /// prefix.
     static func collapsed(_ scalars: [Unicode.Scalar]) -> [Unicode.Scalar] {
         var output: [Unicode.Scalar] = []
         output.reserveCapacity(scalars.count)
@@ -481,8 +384,6 @@ enum SecretNormalization {
         return output
     }
 
-    /// The length of the documented public prefix a normalised secret
-    /// starts with, if any.
     static func publicPrefixLength(of secret: [Unicode.Scalar]) -> Int {
         publicPrefixes.first { secret.starts(with: $0) }?.count ?? 0
     }
@@ -508,7 +409,7 @@ enum LinearMatch {
         return table
     }
 
-    /// Every occurrence of `pattern` in `text`, overlapping ones included.
+    /// Overlapping occurrences included.
     static func ranges(of pattern: [Unicode.Scalar], in text: [Unicode.Scalar]) -> [Range<Int>] {
         guard !pattern.isEmpty, text.count >= pattern.count else { return [] }
         let table = failure(pattern)
@@ -530,32 +431,23 @@ enum LinearMatch {
     }
 }
 
-/// The decodings a recorded string is verified through, each bounded and
-/// each reporting a malformed input (which fails closed).
 enum SecretDecodings {
     enum Result: Equatable {
         case unchanged
         case malformed
-        /// Each decoding a separate candidate, never merged: a base64 text
-        /// yields one per run, alignment and segment.
+        /// Separate candidates, never merged: base64 yields one per run, alignment and segment.
         case decoded([String])
     }
 
-    /// Every decoder, each applied to the raw candidate and its case-kept
-    /// normalised form.
     static let ordered: [@Sendable (String) -> Result] = [jsonUnescaped, percentDecoded, htmlDecoded, base64Decoded]
 
-    /// `\uXXXX` and the short escapes in text that is not itself parsed as
-    /// JSON. A `\u` followed by one to three hex digits, or an unpaired
-    /// surrogate, is malformed; a `\u` followed by no hex digit is text
-    /// (`C:\users`).
+    /// A `\u` with no hex digit after it is text (`C:\users`); one to three digits is malformed.
     @Sendable static func jsonUnescaped(_ text: String) -> Result {
         guard text.contains("\\") else { return .unchanged }
         let scalars = Array(text.unicodeScalars)
         var output = String.UnicodeScalarView()
         var index = 0
         var changed = false
-        /// The hex digits from `at`, up to four.
         func hexDigits(_ at: Int) -> Int {
             var count = 0
             while count < 4, at + count < scalars.count, scalars[at + count].properties.isASCIIHexDigit { count += 1 }
@@ -608,11 +500,8 @@ enum SecretDecodings {
         return changed ? .decoded([String(output)]) : .unchanged
     }
 
-    /// `%XX` sequences decoded as UTF-8 (invalid sequences replaced). A
-    /// `%` that starts an escape and does not finish one is malformed: a hex
-    /// digit then anything but a hex digit (`%1G`, `%4` at the end), or a
-    /// letter or digit then a hex digit (`%G1`); a `%` before anything else
-    /// is text (`50% off`, `%ok`).
+    /// Malformed: `%` then a hex digit and no second one (`%1G`, a trailing `%4`), or a letter or
+    /// digit then a hex digit (`%G1`). Any other `%` is text (`50% off`, `%ok`).
     @Sendable static func percentDecoded(_ text: String) -> Result {
         guard text.contains("%") else { return .unchanged }
         let bytes = Array(text.utf8)
@@ -654,9 +543,7 @@ enum SecretDecodings {
         return changed ? .decoded([String(decoding: output, as: UTF8.self)]) : .unchanged
     }
 
-    /// The named references read: HTML's names for ASCII punctuation (the
-    /// characters keys and encodings are made of) and no-break space, any
-    /// letter case.
+    /// ASCII punctuation, the characters keys and encodings are made of, and no-break space.
     static let namedEntities: [String: Unicode.Scalar] = [
         "amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'", "nbsp": "\u{00A0}", "lowbar": "_", "underbar": "_",
         "period": ".", "sol": "/", "bsol": "\\", "plus": "+", "equals": "=", "percnt": "%", "num": "#", "semi": ";",
@@ -665,14 +552,9 @@ enum SecretDecodings {
         "lbrace": "{", "rbrace": "}", "verbar": "|", "vert": "|", "grave": "`", "hat": "^", "tab": "\t", "newline": "\n",
     ]
 
-    /// The longest numeric entity read (leading zeros included); a longer
-    /// one is malformed and fails closed.
     static let maximumEntityDigits = 64
 
-    /// Numeric entities (`&#115;`, `&#x73;`, any number of leading zeros,
-    /// the `;` optional as HTML allows) and the common named ones, read in
-    /// one forward pass. A numeric entity with no digits (`&#;`, `&#x;`) or
-    /// past the bounds is malformed.
+    /// The `;` after a numeric entity is optional, as HTML allows.
     @Sendable static func htmlDecoded(_ text: String) -> Result {
         guard text.contains("&") else { return .unchanged }
         let named = namedEntities
@@ -696,7 +578,6 @@ enum SecretDecodings {
                     cursor += 1
                     guard cursor - start <= maximumEntityDigits else { return .malformed }
                 }
-                // `&#` starts a numeric entity: one without digits is malformed.
                 guard cursor > start else { return .malformed }
                 let digits = String(String.UnicodeScalarView(scalars[start..<cursor]))
                 let trimmed = digits.drop { $0 == "0" }
@@ -723,18 +604,11 @@ enum SecretDecodings {
         return changed ? .decoded([String(output)]) : .unchanged
     }
 
-    /// The fewest base64 symbols that decode to four bytes, the shortest
-    /// text a window can be.
+    /// The fewest base64 symbols that decode to four bytes, one window.
     static let minimumBase64Symbols = 6
 
-    /// Every run of base64 or base64url characters holding at least six
-    /// symbols, split at its padding into segments and decoded at each of
-    /// the four group alignments: for each alignment, every segment's
-    /// groups from that offset, a short last group decoded as far as it
-    /// goes. An encoding that follows other base64 characters, or another
-    /// padded encoding, is read at its own alignment. Every run, alignment
-    /// and segment is its own candidate; output that decodes to nothing is
-    /// skipped.
+    /// Each run is split at padding and decoded at all four group alignments, so an encoding after
+    /// other base64 characters or another padded encoding is read at its own alignment.
     @Sendable static func base64Decoded(_ text: String) -> Result {
         let bytes = Array(text.utf8)
         func sextet(_ byte: UInt8) -> UInt8? {
@@ -788,9 +662,8 @@ enum SecretDecodings {
                 }
             }
             for alignment in 0..<4 {
-                // The segments read in a row (encodings back to back), and,
-                // when there are several, each segment on its own: every
-                // one a candidate, so each is verified by structure alone.
+                // Segments decode joined (encodings back to back) and each on its own, so each can
+                // be verified by structure alone.
                 var joined: [UInt8] = []
                 for segment in segments where segment.count > alignment {
                     var own: [UInt8] = []

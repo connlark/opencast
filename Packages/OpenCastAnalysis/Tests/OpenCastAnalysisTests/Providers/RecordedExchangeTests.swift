@@ -3,10 +3,6 @@ import Foundation
 @testable import OpenCastAnalysisProviders
 import Testing
 
-/// The live smokes' exchanges, kept as the recorder's structured fields and
-/// replayed with the provider body rebuilt from the recorded answer text,
-/// finish reason and usage: each transport builds exactly the request that
-/// was sent and turns the rebuilt answer into the same result.
 @Suite("Recorded provider exchanges")
 struct RecordedExchangeTests {
     struct Recorded {

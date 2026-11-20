@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// A tappable `m:ss` timestamp that seeks playback to the cited segment.
 struct TranscriptCitationChip: View {
     let time: TimeInterval
     let action: () -> Void

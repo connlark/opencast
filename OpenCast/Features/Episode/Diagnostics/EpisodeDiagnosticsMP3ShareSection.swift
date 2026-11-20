@@ -1,9 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// The Download & Share Audio controls: immediate share when a completed
-/// download exists, otherwise the reused foreground download with live byte
-/// progress and an explicit cancel that stops the download itself.
 struct EpisodeDiagnosticsMP3ShareSection: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext

@@ -2,9 +2,8 @@ import Foundation
 import OpenCastPlayback
 import SwiftData
 
-/// Download deletion, the played-download sweep and the Keep Downloaded
-/// trim, always routed through the transcription store's deletion hook so a
-/// transcript never outlives the audio it describes without knowing.
+/// Every deletion goes through the transcription store's deletion hook, so a transcript never
+/// outlives its audio without knowing.
 final class DownloadCleanupCoordinator {
     private let downloads: DownloadStore
     private let transcriptions: EpisodeTranscriptionStore
@@ -73,9 +72,8 @@ final class DownloadCleanupCoordinator {
         deletePlayedDownloads(modelContext: modelContext)
     }
 
-    /// The sweep's file I/O and saves must not land in the tap-to-audio
-    /// turn; one main-actor turn later is soon enough (same shape as
-    /// the app model's deferred playback teardown).
+    /// The sweep's file I/O and saves must not land in the tap-to-audio turn; one main-actor turn
+    /// later is soon enough.
     func deferPlayedSweep(modelContext: ModelContext) {
         guard deferredPlayedSweepTask == nil else {
             return
@@ -98,8 +96,7 @@ final class DownloadCleanupCoordinator {
         deleteDownloads(eligibleRecords, modelContext: modelContext)
     }
 
-    /// What Remove Played would delete now. Every state it reads is
-    /// observable, so a view's count follows protection as it changes.
+    /// Reads only observable state, so a view's count follows protection as it changes.
     func removablePlayedDownloadCount() -> Int {
         let remoteJobEpisodeIDs = remoteJobEpisodeIDs()
         return downloads.records.count {
@@ -107,13 +104,6 @@ final class DownloadCleanupCoordinator {
         }
     }
 
-    /// Keeps the show's most recently completed downloads up to its Keep
-    /// Downloaded limit and deletes the rest, played or not. A download in
-    /// use, or an unplayed episode's transcript audio, is never deleted but
-    /// still holds its place, so a show can sit above its limit. For a show
-    /// with Detect Ads in New Episodes the limit is hard: every new episode
-    /// it brings in is scanned, so sparing transcript audio would let a show
-    /// the listener does not keep up with grow without bound.
     func trimDownloadsToKeepLimit(forPodcastID podcastID: String, modelContext: ModelContext) {
         guard let maximumCount = settings.resolvedKeepLimit(forPodcastID: podcastID).maximumCount else {
             return
@@ -145,9 +135,8 @@ final class DownloadCleanupCoordinator {
         }
     }
 
-    /// A completion commits inside the download store; the trim's deletes
-    /// and saves run one main-actor turn later, outside that commit, and
-    /// completions landing in the same turn coalesce.
+    /// The trim's deletes and saves must run outside the download store's completion commit: one
+    /// main-actor turn later, coalescing completions that land in the same turn.
     func deferTrim(forPodcastID podcastID: String, modelContext: ModelContext) {
         pendingTrimPodcastIDs.insert(podcastID)
         guard deferredTrimTask == nil else {
@@ -167,9 +156,6 @@ final class DownloadCleanupCoordinator {
         }
     }
 
-    /// The played sweep and Remove Played delete a completed, played
-    /// download unless it is in use. A transcript of its bytes doesn't keep
-    /// it, so a replay needs a fresh scan for ad skips.
     private func isRemovablePlayedDownload(
         _ record: EpisodeDownloadRecord,
         remoteJobEpisodeIDs: Set<String>
@@ -179,12 +165,6 @@ final class DownloadCleanupCoordinator {
             && !isInUse(record, remoteJobEpisodeIDs: remoteJobEpisodeIDs)
     }
 
-    /// Downloads in use survive every automatic deletion and Remove Played:
-    /// the current episode (loaded, playing or paused), one with an active
-    /// transcription, one a transcription request holds (local or remote,
-    /// from its preparation on), one with a remote job that may still ask
-    /// for an exact-copy upload, and one an ad-free pass has queued, is
-    /// running or has parked remotely.
     private func isInUse(
         _ record: EpisodeDownloadRecord,
         remoteJobEpisodeIDs: Set<String>
@@ -204,12 +184,6 @@ final class DownloadCleanupCoordinator {
         }
     }
 
-    /// The trim's one other exception, and only while the episode is
-    /// unplayed and its show is without Detect Ads in New Episodes: a
-    /// download whose bytes its transcript describes is that
-    /// transcript's karaoke and ad-skip audio, which a re-download of a
-    /// dynamic enclosure may not reproduce. Once the episode is played it is
-    /// ordinary trim material.
     private func isUnheardTranscriptAsset(_ record: EpisodeDownloadRecord) -> Bool {
         TranscriptSourceAlignment.downloadMatchesTranscript(
             trustedDownloadSHA256: record.sourceFileSHA256,
@@ -217,9 +191,6 @@ final class DownloadCleanupCoordinator {
         ) && library.progressRecord(for: record.episodeID)?.isPlayed != true
     }
 
-    /// Newest completion first. Records completed before `completedAt`
-    /// existed fall back to when the episode was first requested; ties go
-    /// to the newer episode, then the episode ID.
     private static func isMoreRecentlyCompleted(_ lhs: EpisodeDownloadRecord, _ rhs: EpisodeDownloadRecord) -> Bool {
         let lhsCompletedAt = lhs.completedAt ?? lhs.createdAt
         let rhsCompletedAt = rhs.completedAt ?? rhs.createdAt

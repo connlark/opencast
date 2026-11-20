@@ -2,27 +2,16 @@ import Foundation
 import OpenCastTranscription
 import SwiftData
 
-/// A completed download whose bytes are trusted
-/// (`DownloadStore.completedSourceIdentity`): the audio an ad-free pass
-/// transcribes and a remote job reports and uploads, so the transcript either
-/// one makes attaches to the download it came from (D7).
 struct TrustedCompletedDownload {
     let record: EpisodeDownloadRecord
     let fileURL: URL
     let identity: OpenCastRemoteTranscriptionSourceIdentity
-    /// The file as this resolution measured it, when it hashed an unhashed
-    /// download to adopt its identity; nil when the record was already
-    /// trusted.
+    /// Set only when this resolution hashed an unhashed download to adopt its identity.
     let measuredIdentity: EpisodeTranscriptionSourceIdentity?
 
-    /// Ensures the episode's completed download and makes it trusted. An
-    /// unhashed record whose file has its recorded size adopts the hash of
-    /// that file. A file that is gone, or whose size disagrees with the
-    /// record, marks the record missing and downloads again, once; a second
-    /// such failure throws `CompletedDownloadError.fileMissing`. Any other
-    /// failure to read the file, the hash's included, is thrown as it is:
-    /// it says nothing about the bytes. `measure` hashes the file; a test
-    /// substitutes it to act while the hash runs.
+    /// A missing or wrong-size file is marked missing and downloaded again once; a second such
+    /// failure throws `fileMissing`. Any other read failure, the hash's included, is thrown as
+    /// it is: it says nothing about the bytes.
     static func ensure(
         for episode: EpisodeListItemSnapshot,
         downloads: DownloadStore,
@@ -82,10 +71,9 @@ struct TrustedCompletedDownload {
                 measuredIdentity: nil
             )
         }
-        // A hashed record whose file drifted cannot be vouched for by
-        // hashing it again: those bytes are not the ones it recorded. The
-        // file is stamped before it is hashed, so a download replaced while
-        // the hash runs does not adopt the hash of the bytes it replaced.
+        // Hashing a drifted file again cannot vouch for a hashed record: those are not the bytes
+        // it recorded. The stamp is taken before hashing, so a download replaced mid-hash does
+        // not adopt the hash of the bytes it replaced.
         guard try hasRecordedSize(fileURL, bytesReceived: record.bytesReceived),
               record.sourceFileSHA256.isEmpty,
               let measuredFile = downloads.completedFileStamp(of: record)
@@ -127,9 +115,7 @@ struct TrustedCompletedDownload {
         )
     }
 
-    /// Whether the download's file is there, a regular file of the size its
-    /// record holds. A file that is gone answers false; any other failure to
-    /// read its attributes is thrown.
+    /// A missing file answers false; any other failure to read its attributes throws.
     private static func hasRecordedSize(_ fileURL: URL, bytesReceived: Int64) throws -> Bool {
         let attributes: [FileAttributeKey: Any]
         do {

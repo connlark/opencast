@@ -1,7 +1,5 @@
 import Foundation
 
-/// Identity of the searched episode list, independent of query and mode. Used
-/// to invalidate the session's fetched show-notes cache when episodes change.
 nonisolated struct EpisodeSearchCorpusKey: Equatable, Sendable {
     let episodeCount: Int
     let newestEpisodeID: String?

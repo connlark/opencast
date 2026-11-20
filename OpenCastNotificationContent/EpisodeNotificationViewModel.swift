@@ -185,13 +185,8 @@ struct EpisodeNotificationViewModel {
     }
 
     // MARK: - Legacy body cleaning
-    //
-    // Mirrors `notification_text.rs` in the NotificationsWorker. The server
-    // ships cleaned prose in `episode_summary`; this fallback only sees the
-    // alert body of a payload that had to drop it. Same rules: inline elements
-    // add no whitespace, every other element boundary becomes a space,
-    // comments and script/style bodies vanish, entities decode to their real
-    // characters, and bare URLs shrink to their host.
+    // Keeps the rules of `notification_text.rs` in the NotificationsWorker. It runs only on the
+    // alert body of a payload that had to drop the server's cleaned `episode_summary`.
 
     private struct Prose {
         let text: String
@@ -264,9 +259,8 @@ struct EpisodeNotificationViewModel {
         return Prose(text: trimOrphanPunctuation(joined), urlOnly: wordCount > 0 && urlCount == wordCount)
     }
 
-    /// Removes tags, comments and hidden elements, mapping each element
-    /// boundary to a space or nothing. Structural characters are ASCII, so the
-    /// scan runs on UTF-8 bytes and copies multi-byte text through untouched.
+    /// Structural characters are ASCII, so the scan runs on UTF-8 bytes and copies multi-byte text
+    /// through untouched.
     private static func stripMarkup(_ value: String) -> String {
         let bytes = Array(value.utf8)
         var output: [UInt8] = []
@@ -399,8 +393,6 @@ struct EpisodeNotificationViewModel {
         (0x30...0x39).contains(byte)
     }
 
-    /// Decodes named and numeric character references; unknown names stay
-    /// verbatim, as does an `&` that starts no reference.
     private static func decodeEntities(in value: String) -> String {
         guard value.contains("&") else {
             return value
@@ -465,8 +457,8 @@ struct EpisodeNotificationViewModel {
         return Character(scalar)
     }
 
-    /// The named references seen in podcast feeds: XML's five, the Latin-1
-    /// block (`&nbsp;` … `&yuml;`, in code point order) and common typography.
+    /// `latin1Entities` lists `&nbsp;` … `&yuml;` in code point order: an index is its offset
+    /// from U+00A0.
     private static func namedEntity(_ name: String) -> String? {
         if let position = latin1Entities.firstIndex(of: name),
            let scalar = Unicode.Scalar(0xA0 + UInt32(position)) {
@@ -510,7 +502,6 @@ struct EpisodeNotificationViewModel {
         "Yuml": "\u{0178}", "fnof": "\u{0192}", "circ": "\u{02C6}", "tilde": "\u{02DC}",
     ]
 
-    /// Splits `(word)."` into its opening wrapper, core and closing punctuation.
     private static func splitWrappingPunctuation(_ token: String) -> (open: String, core: String, close: String) {
         let open = token.prefix { openingWrappers.contains($0) }
         let remainder = token[open.endIndex...]
@@ -524,9 +515,6 @@ struct EpisodeNotificationViewModel {
         return attributeDebrisPrefixes.contains { lowered.hasPrefix($0) }
     }
 
-    /// The host of a bare `http(s)://` or `www.` URL, without `www.`; `nil`
-    /// when the word is not a URL with a dotted host ("https://" alone,
-    /// "foo://").
     private static func urlHost(_ core: String) -> String? {
         let lowered = core.lowercased()
         let hostStart: Int

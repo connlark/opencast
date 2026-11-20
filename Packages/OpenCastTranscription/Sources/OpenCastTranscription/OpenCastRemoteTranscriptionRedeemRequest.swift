@@ -1,6 +1,3 @@
-/// Body of `purchases/redeem`: the signed StoreKit transaction JWS. The
-/// server verifies it with Apple's library before any crediting; the app
-/// finishes the transaction only after the server acknowledges.
 public struct OpenCastRemoteTranscriptionRedeemRequest: Codable, Sendable, Equatable {
     public var schemaVersion: Int
     public var transactionJWS: String

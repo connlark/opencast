@@ -2,13 +2,9 @@ import Foundation
 import Observation
 import OpenCastPlayback
 
-/// Keeps the loaded episode on its completed download and installs matching
-/// ad-analysis zones: the auto-skip tier goes to `PlaybackAdSkipPolicy`, while
-/// the sub-floor tier is published for the timeline only.
 @Observable
 final class PlaybackSkipZoneCoordinator {
-    /// Sub-floor confidence zones for the current episode: rendered dimmed on
-    /// the timeline, never handed to `PlaybackAdSkipPolicy`.
+    /// Below the auto-skip confidence floor; never handed to `PlaybackAdSkipPolicy`.
     private(set) var displayOnlySkipZones: [PlaybackSkipZone] = []
 
     @ObservationIgnored private let playback: AVFoundationPlaybackController
@@ -16,8 +12,6 @@ final class PlaybackSkipZoneCoordinator {
     @ObservationIgnored private let transcriptions: EpisodeTranscriptionStore
     @ObservationIgnored private let adAnalyses: EpisodeAdAnalysisStore
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
-    /// Which episode the installed zone tiers describe, so a slow document
-    /// load can never install zones for a switched-away episode.
     @ObservationIgnored private var installedEpisodeID: String?
 
     init(
@@ -32,9 +26,8 @@ final class PlaybackSkipZoneCoordinator {
         self.adAnalyses = adAnalyses
     }
 
-    /// Zone installation is asynchronous: the transcript and analysis
-    /// documents load and fingerprint off the main actor, so `play()` never
-    /// blocks on the decode and zones attach a beat after playback starts.
+    /// Zones attach a beat after playback starts: the documents load and fingerprint off the main
+    /// actor so `play()` never blocks on the decode.
     func refreshForCurrentEpisode() {
         refreshTask?.cancel()
         guard let episode = playback.currentEpisode else {
@@ -55,9 +48,8 @@ final class PlaybackSkipZoneCoordinator {
             episodeID: episodeID,
             sourceSHA256: transcriptions.record(for: episodeID)?.sourceFileSHA256 ?? ""
         ) {
-            // `playback.load` already reset the auto-skip policy for a
-            // switched episode; reset the display tier with it so both tiers
-            // stay coherent while the new episode's documents load.
+            // `playback.load` already reset the auto-skip tier; clearing the display tier with it
+            // keeps both tiers coherent while the new documents load.
             install(.empty, forEpisodeID: episodeID)
         }
         refreshTask = Task { [weak self] in
@@ -85,13 +77,11 @@ final class PlaybackSkipZoneCoordinator {
         refreshForCurrentEpisode()
     }
 
-    /// Awaits the in-flight refresh, if any. Test hook.
     func waitForRefresh() async {
         await refreshTask?.value
     }
 
-    /// Report detected zones even when source alignment prevents playback
-    /// from using them; refresh the playing episode before notifying.
+    /// Counts detected zones even when source alignment keeps playback from using them.
     func zoneCountAfterPass(for episode: EpisodeListItemSnapshot) async -> Int {
         if playback.currentEpisode?.id.rawValue == episode.episodeID {
             refreshForCurrentEpisode()
@@ -102,9 +92,6 @@ final class PlaybackSkipZoneCoordinator {
         return loaded.tiers.autoSkip.count
     }
 
-    /// Pill undo: jump back to the start of the last auto-skipped zone with a
-    /// `.scrub`-landing seek so the zone plays through once and re-arms after
-    /// exit (existing `PlaybackAdSkipPolicy` disarm semantics).
     func undoLastAutoSkip() {
         guard let target = NowPlayingAutoSkipUndo.seekTarget(
             for: playback.lastAutoSkipEvent,
@@ -130,8 +117,8 @@ final class PlaybackSkipZoneCoordinator {
         }
 
         return (
-            // RSS duration can exclude dynamic ads. These timestamps describe
-            // the transcribed file, including its full measured duration.
+            // Not the RSS duration, which can exclude dynamic ads: the zones describe the
+            // transcribed file.
             EpisodeAdAnalysisZoneMapper.zoneTiers(for: analysisDocument, duration: transcriptDocument.audioDuration),
             transcriptDocument.sourceFileSHA256
         )

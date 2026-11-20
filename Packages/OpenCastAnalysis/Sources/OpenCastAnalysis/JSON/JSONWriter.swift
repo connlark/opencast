@@ -1,11 +1,6 @@
-/// Compact JSON text, byte for byte what the Rust services' `serde_json`
-/// writes: members in the order given, no whitespace, only `"`, `\` and
-/// C0 controls escaped (with lowercase `\u00xx` for the ones without a short
-/// form), and floating-point values in `serde_json`'s shortest round-trip
-/// layout. Non-finite values are written as `null`. A
-/// ``JSONValue/tooDeepContainer`` is written as `maximumNesting` nested
-/// empty arrays, so a reader again reaches its limit inside it wherever it
-/// lands: a typed read rejects it, an ignored field tolerates it.
+/// Byte for byte what the Rust services' `serde_json` writes. A ``JSONValue/tooDeepContainer``
+/// becomes `maximumNesting` nested empty arrays, so a reader hits its limit inside it again,
+/// wherever it lands.
 public enum JSONWriter {
     public static func string(_ value: JSONValue) -> String {
         var output: [UInt8] = []
@@ -14,7 +9,6 @@ public enum JSONWriter {
         return String(decoding: output, as: UTF8.self)
     }
 
-    /// The serialized text's length in bytes, without building a String.
     public static func byteCount(_ value: JSONValue) -> Int {
         var output: [UInt8] = []
         write(value, into: &output)

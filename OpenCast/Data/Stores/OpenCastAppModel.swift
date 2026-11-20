@@ -12,12 +12,8 @@ import UserNotifications
 final class OpenCastAppModel {
     @ObservationIgnored lazy var systemActions = OpenCastSystemActionRouter(appModel: self)
     var systemSearchRequest: OpenCastSearchRequest?
-    /// The periodic synced flush only guards against a hard crash mid-listen
-    /// (losing up to this much position is accepted); every deliberate exit -
-    /// pause, seek, skip, background, completion, dismiss, episode switch -
-    /// flushes through a boundary immediately. Writing the CloudKit-synced
-    /// progress record every 5 seconds kept the export machinery churning for
-    /// entire listening sessions.
+    /// Only guards against a crash mid-listen: every deliberate exit flushes at once. A short
+    /// interval keeps CloudKit's export machinery churning for the whole session.
     static let playbackProgressPersistenceInterval = Duration.seconds(60)
 
     let cacheController: OpenCastCacheController
@@ -41,7 +37,6 @@ final class OpenCastAppModel {
     let adAnalyses: EpisodeAdAnalysisStore
     let transcriptAnalyses: EpisodeTranscriptAnalysisStore
     let publisherChapters: PublisherChaptersStore
-    /// Which episodes' Private Notes changed, for the views that fetch them.
     let episodeNotes = EpisodeNotesChangeTracker()
     let transcriptIntelligence: TranscriptIntelligenceStore
     let analysisPolicy: AnalysisPolicySnapshotStore
@@ -52,19 +47,12 @@ final class OpenCastAppModel {
     let analysisKeyNotice: AnalysisKeyNoticeStore
     let analysisKeyRequired: AnalysisKeyRequiredPresenter
     let analysisKeyTester: any AnalysisKeyTesting
-    /// The durable record of every analysis run (both features).
     let analysisRuns: AnalysisRunRecordStore
-    /// The install's trial status, cached for an hour.
     let analysisTrialStatus: AnalysisTrialStatusCache
     let analysisTrialReachability: AnalysisTrialReachability
-    /// Decides each analysis run's route: key, trial or key screen.
     let analysisRoutes: AnalysisRouteResolver
-    /// Builds each analysis run's transport from its route.
     let analysisTransports: AnalysisTransportFactory
-    /// The one-card rule shared by every continued-processing session.
     let analysisTaskArbiter: AnalysisContinuedTaskArbiterImpl
-    /// The Chapters & Summary continued-processing session: one app-wide
-    /// card, so a run can finish in the background.
     let analysisExecutionSession: AnalysisExecutionSession
     let adFreePass: EpisodeAdFreePassCoordinator
     let upNextQueue: UpNextQueueStore
@@ -94,9 +82,6 @@ final class OpenCastAppModel {
     let adFreePassPresentationOverride: EpisodeAdFreePassPresentation?
     let adFreePassNotificationCenter: any AdFreePassNotificationCenter
     private(set) var finishedPlaybackPresentation: FinishedPlaybackPresentation?
-    /// Tracked from the root lifecycle modifier. Completion notifications are
-    /// suppressed while active, and leaving active discards the session-only
-    /// Finished presentation.
     var isSceneActive = true {
         didSet {
             guard !isSceneActive, finishedPlaybackPresentation != nil else {
@@ -108,16 +93,10 @@ final class OpenCastAppModel {
     }
     var nowPlayingPresentationRequest = 0
     private(set) var addToPlaylistPresentationRequest: AddToPlaylistPresentationRequest?
-    /// Single source of truth for Now Playing presentation; the root layer
-    /// and tab views read this directly.
     var isNowPlayingPresented = false
     var hasNowPlayingPresentationContent: Bool {
         playback.currentEpisode != nil || finishedPlaybackPresentation != nil
     }
-    /// The queue head the tab accessory offers while nothing is loaded. Nil
-    /// until the launch restore has run and while the Finished card is
-    /// retained; skips unresolvable items so a stale head never renders a
-    /// blank accessory.
     var upNextAccessoryEpisode: EpisodeListItemSnapshot? {
         guard hasRestoredPlaybackSurface, !hasNowPlayingPresentationContent else {
             return nil
@@ -134,20 +113,12 @@ final class OpenCastAppModel {
         upNextAccessoryEpisode != nil
     }
     var onboardingPresentationRequest = 0
-    /// The nuke sheet stays hoisted at the root so `resetAfterDataNuke()` can
-    /// swap it for onboarding in one transaction; Delete Data requests it here.
     var dataNukeConfirmationPresentationRequest = 0
-    /// Opens Settings at AI Services from anywhere; the root owns the tab,
-    /// the navigation paths and Now Playing.
     var aiServicesSettingsPresentationRequest = 0
     var lastPlaybackError: String?
     var lastUpNextError: String?
     var lastPlaylistError: String?
-    /// The playlist the loaded episode was started from, or derived from the
-    /// queue row it was popped from; nil for any untagged start.
     private(set) var currentPlaylistSourceID: String?
-    /// Joined with the live playlist summary: a rename shows at once, and a
-    /// deleted playlist hides the source without touching the queue.
     var currentPlaylistSource: PlaylistPlaybackSource? {
         guard let currentPlaylistSourceID,
               let summary = playlists.playlists.first(where: { $0.playlistID == currentPlaylistSourceID })
@@ -156,18 +127,13 @@ final class OpenCastAppModel {
         }
         return PlaylistPlaybackSource(playlistID: summary.playlistID, name: summary.name)
     }
-    /// The library, downloads, Up Next, and playlist snapshots are all ready
-    /// for list views to derive cross-store state without observing partial
+    /// Every core store is loaded, so list views never derive cross-store state from partial
     /// startup data.
     private(set) var coreStoresHydrated = false
-    /// The launch's `library.load` succeeded, or a data nuke emptied the
-    /// store and the library together, so the library's subscriptions are
-    /// the stored ones. After a failed load they are empty, which Auto Add
-    /// to Up Next would read as every show turned off. `library.state`
-    /// cannot tell: a failed refresh also sets `.failed`.
+    /// The library's subscriptions are the stored ones: after a failed load they are empty, which
+    /// reads as every show turned off. `library.state` cannot tell, since a failed refresh also
+    /// sets `.failed`.
     @ObservationIgnored private(set) var hasLoadedLibrary = false
-    /// Unsubscribe outcome surface, presented by the removal confirmation
-    /// surfaces; unsubscribe failures never route through the playback error.
     var lastUnsubscribeErrorMessage: String?
     var importedSubscriptionsNotification: ImportedSubscriptionsNotification?
     var replacesNowPlayingArtworkWithPlaybackDiagnostics = false {
@@ -190,7 +156,6 @@ final class OpenCastAppModel {
     var displayOnlySkipZones: [PlaybackSkipZone] {
         skipZones.displayOnlySkipZones
     }
-    /// Chapters for the loaded episode, resolved embedded → feed → generated.
     var currentEpisodeChapters: PlaybackChapterList {
         chapters.current
     }
@@ -202,20 +167,15 @@ final class OpenCastAppModel {
     @ObservationIgnored private var coreStoresLoadTask: Task<Void, Never>?
     @ObservationIgnored private var playbackDependenciesLoadTask: Task<Void, Never>?
     @ObservationIgnored private var playbackSurfaceHydrationTask: Task<Void, Never>?
-    /// The latest Transcribe Remotely delivery decision in flight; the
-    /// remote card's expiration awaits it before completing the task.
     @ObservationIgnored private var remoteTranscriptionDeliveryTask: Task<Void, Never>?
     /// Flips in the same turn that loads the restorable episode, so the
     /// queue accessory can key off it without ever preceding a restore.
     private(set) var hasRestoredPlaybackSurface = false
     @ObservationIgnored private(set) var playbackSurfaceRestorationCount = 0
-    @ObservationIgnored var playbackSurfaceRestorationObserver: ((Float) -> Void)?
     @ObservationIgnored var playbackProgressFlushObserver: (() -> Void)?
     @ObservationIgnored private var progressPersistenceTask: Task<Void, Never>?
     @ObservationIgnored private var progressBoundaryPersistenceTask: Task<Void, Never>?
     @ObservationIgnored private let playbackRestorePreference = PlaybackRestorePreferenceStore()
-    /// Pending restore-key clear from the last playback teardown; tests
-    /// await it before inspecting the store.
     @ObservationIgnored private(set) var deferredPlaybackTeardownTask: Task<Void, Never>?
     /// Set by launch restore, cleared implicitly by drift: the flush guard
     /// compares against it so a never-played restore never persists its
@@ -223,11 +183,8 @@ final class OpenCastAppModel {
     @ObservationIgnored private var restoredUnplayedPlayback: (episodeID: String, position: TimeInterval)?
     @ObservationIgnored private let skipZones: PlaybackSkipZoneCoordinator
     @ObservationIgnored private let chapters: PlaybackChaptersCoordinator
-    // Internal for the `+DownloadSettings` extension.
     @ObservationIgnored let downloadCleanup: DownloadCleanupCoordinator
     @ObservationIgnored let autoDownloads: PodcastAutoDownloadCoordinator
-    // Lazy: its closures need the finished app model, and its enqueue the
-    // private context and skip zones.
     @ObservationIgnored private(set) lazy var newEpisodeAdDetection = makeNewEpisodeAdDetection(
         enqueueContext: adFreePassEnqueueContext,
         skipZones: skipZones
@@ -242,8 +199,6 @@ final class OpenCastAppModel {
     @ObservationIgnored private var importedSubscriptionsNotificationID = 0
     @ObservationIgnored private let unsubscribeSidecarCleanupOverride: ((String, [String], ModelContext) throws -> Void)?
     @ObservationIgnored private let transcriptAnalysisQueue: TranscriptAnalysisQueue
-    /// Playlists an earlier build kept on this device, copied into the synced
-    /// store by the first `ensureCoreStoresLoaded` and then dropped.
     @ObservationIgnored private var pendingLegacyLocalPlaylists: LegacyLocalPlaylistSnapshot?
     @ObservationIgnored private let playlistMigrationDefaults: UserDefaults
 
@@ -374,8 +329,8 @@ final class OpenCastAppModel {
             transcriptions: transcriptions,
             store: remoteTranscriptionJobStore
         )
-        // Cloud detect passes share the plain surface's job store (purpose-
-        // keyed references, one balance) through their own runner instance.
+        // Cloud detect passes get their own runner over the same job store: references are
+        // purpose-keyed and share one balance.
         self.remoteTranscriptionRunner = RemoteTranscriptionJobRunner(
             api: resolvedRemoteTranscriptionAPI,
             downloads: downloads,
@@ -662,8 +617,7 @@ final class OpenCastAppModel {
         self.adAnalyses.onEpisodeStateChanged = { [weak self] episodeID in
             self?.skipZones.refreshIfCurrentEpisode(episodeID: episodeID)
         }
-        // Built here, after the analysis members it reads; a test that
-        // injected its own environment keeps it.
+        // Built here, after the analysis members it reads.
         if adAnalyses.runEnvironment == nil {
             adAnalyses.runEnvironment = EpisodeAdAnalysisLiveRunEnvironment(
                 routes: analysisRoutes,
@@ -836,9 +790,6 @@ final class OpenCastAppModel {
         await task.value
     }
 
-    /// Brings playlist rows changed behind the store (an iCloud import, a
-    /// repair pass) into memory, and drops the Siri donation group of each
-    /// playlist that left or was renamed.
     @discardableResult
     func reloadPlaylistsAfterSyncedChange(modelContext: ModelContext) -> PlaylistReloadChange {
         let change = playlists.reload(modelContext: modelContext)
@@ -855,9 +806,8 @@ final class OpenCastAppModel {
         return change
     }
 
-    /// Runs duplicate repair and reloads playlists when the pass changed their
-    /// rows. A pass that failed reloads too: its save can have landed before
-    /// the failure, and memory must not write pre-merge content back.
+    /// A failed pass reloads playlists too: its save can have landed before the failure, and
+    /// memory must not write pre-merge content back.
     @discardableResult
     func repairSyncDuplicates(modelContext: ModelContext) async -> SyncRepairResult? {
         let result = await syncStatus.repairDuplicates(modelContext: modelContext, libraryStore: library)
@@ -867,8 +817,6 @@ final class OpenCastAppModel {
         return result
     }
 
-    /// Duplicate repair reported as the library activity. False when the
-    /// repair failed; the failure is the activity's.
     func repairSyncDuplicatesReportingActivity(modelContext: ModelContext) async -> Bool {
         syncStatus.beginLibraryActivity(.repairingDuplicates)
         await repairSyncDuplicates(modelContext: modelContext)
@@ -881,10 +829,6 @@ final class OpenCastAppModel {
         return true
     }
 
-    /// Reloads the library and its playlists from the store, then repairs
-    /// sync duplicates, each step reported as the library activity, and
-    /// reapplies the loaded episode's playback settings from the repaired
-    /// records. False when the reload or the repair failed.
     func reloadPersistedDataAndRepairDuplicates(modelContext: ModelContext) async -> Bool {
         syncStatus.beginLibraryActivity(.reloading)
 
@@ -922,10 +866,8 @@ final class OpenCastAppModel {
         }
     }
 
-    /// Everything playback reads before it can start correctly: transcripts and
-    /// ad analyses back the skip zones installed on load, and the auto-detect
-    /// decision on play. A CarPlay-only launch has no phone setup pass to load
-    /// them, so both surfaces share this one-shot.
+    /// Transcripts and ad analyses back the skip zones installed on load. A CarPlay-only launch has
+    /// no phone setup pass, so both surfaces share this one-shot.
     func ensurePlaybackDependenciesLoaded(modelContext: ModelContext) async {
         if let playbackDependenciesLoadTask {
             await playbackDependenciesLoadTask.value
@@ -958,10 +900,8 @@ final class OpenCastAppModel {
         await task.value
     }
 
-    /// CarPlay can be the first user-visible surface, so it needs the same
-    /// stale feed check the phone scene performs after its initial load. Keep
-    /// the network step out of playback hydration because Siri, App Intents,
-    /// and system actions share that short-lived path.
+    /// The stale-feed refresh stays out of playback hydration: Siri, App Intents and system actions
+    /// share that short-lived path.
     func ensureCarPlaySurfaceHydratedAndRefreshed(modelContext: ModelContext) async {
         await ensurePlaybackSurfaceHydrated(modelContext: modelContext)
         guard !Task.isCancelled else {
@@ -978,15 +918,12 @@ final class OpenCastAppModel {
 
         hasRestoredPlaybackSurface = true
         playbackSurfaceRestorationCount += 1
-        playbackSurfaceRestorationObserver?(playback.rate)
         startPlaybackProgressPersistence(modelContext: modelContext)
         restorePreviousPlaybackIfAvailable(modelContext: modelContext)
         restoreAdFreePassQueue(modelContext: modelContext)
     }
 
-    /// Progress persistence has to outlive any one scene: a CarPlay-only launch
-    /// never builds the phone scene, and without this a whole drive's listening
-    /// would be lost when the process goes away.
+    /// Outlives any one scene: a CarPlay-only launch never builds the phone scene.
     func startPlaybackProgressPersistence(modelContext: ModelContext) {
         guard progressPersistenceTask == nil else {
             return
@@ -1023,10 +960,7 @@ final class OpenCastAppModel {
         }
     }
 
-    /// An explicit start position bypasses smart resume and the skip-intro
-    /// floor. `requeuesCurrentEpisode` is off for the queue's own advance,
-    /// which replaces a finished or skipped episode rather than interrupting
-    /// one; it only takes effect with the Up Next playback setting on.
+    /// An explicit start position bypasses smart resume and the skip-intro floor.
     func playEpisode(
         _ episode: EpisodeListItemSnapshot,
         at startPosition: TimeInterval? = nil,
@@ -1149,11 +1083,9 @@ final class OpenCastAppModel {
         unloadPlaybackDeferringBookkeeping(modelContext: modelContext)
     }
 
-    /// Unloads synchronously so the frame that follows already shows the
-    /// post-playback state, then clears the restore key and sweeps played
-    /// downloads one main-actor turn later: neither needs to land in that
-    /// frame, and neither may be lost on process death, so they stay on the
-    /// main actor instead of a background queue.
+    /// Unloads synchronously so the next frame shows the post-playback state. The restore-key clear
+    /// and played sweep wait one main-actor turn, not a background queue: neither may be lost on
+    /// process death.
     private func unloadPlaybackDeferringBookkeeping(modelContext: ModelContext) {
         playback.unload()
         guard deferredPlaybackTeardownTask == nil else {
@@ -1185,11 +1117,8 @@ final class OpenCastAppModel {
         return false
     }
 
-    /// Play Next / Play Last for one episode. The episode in the player is
-    /// refused here, not only by a disabled button: a menu drawn before it
-    /// became current can still fire. A queued episode moves.
-    /// Returns `true` when the store saved it at the asked end, even if it was
-    /// already there; `false` for the episode in the player or a failed save.
+    /// Refuses the episode in the player here, not only by a disabled button: a menu drawn before
+    /// it became current can still fire.
     @discardableResult
     func enqueueInUpNext(
         _ episode: EpisodeListItemSnapshot,
@@ -1209,9 +1138,7 @@ final class OpenCastAppModel {
         }
     }
 
-    /// Generic so `create` and `add` still hand back their summary and count.
-    /// A successful mutation clears the store's message, so consuming after
-    /// every call is safe.
+    /// A successful mutation clears the store's message, so consuming after every call is safe.
     @discardableResult
     func performPlaylistMutation<Value>(_ mutation: () -> Value) -> Value {
         let value = mutation()
@@ -1221,8 +1148,6 @@ final class OpenCastAppModel {
         return value
     }
 
-    /// Deletes through the store, then the playlist's Siri donation group;
-    /// a failed delete leaves the donations alone.
     @discardableResult
     func deletePlaylist(_ playlistID: String, modelContext: ModelContext) -> Bool {
         let didDelete = performPlaylistMutation { playlists.delete(playlistID, modelContext: modelContext) }
@@ -1232,8 +1157,6 @@ final class OpenCastAppModel {
         return didDelete
     }
 
-    /// Renames through the store, then drops the donation group that carries
-    /// the old name; the next play from the playlist donates the new one.
     @discardableResult
     func renamePlaylist(_ playlistID: String, to name: String, modelContext: ModelContext) -> Bool {
         let didRename = performPlaylistMutation { playlists.rename(playlistID, to: name, modelContext: modelContext) }
@@ -1256,12 +1179,8 @@ final class OpenCastAppModel {
         return true
     }
 
-    /// Copies the playlist's unplayed, resolvable episodes into Up Next (a
-    /// smart playlist's first `smartPlaylistQueueLimit`); the playlist
-    /// itself is never consumed. `replace` starts the first episode before
-    /// touching the queue, so a failed start leaves the listener's queue as
-    /// it was. `addAfter` skips the episode already playing. Shuffle applies
-    /// to manual playlists only.
+    /// `replace` starts the first episode before touching the queue, so a failed start leaves the
+    /// queue as it was.
     @discardableResult
     func playPlaylist(
         _ playlistID: String,
@@ -1303,9 +1222,8 @@ final class OpenCastAppModel {
             }
             return true
         case .addAfter:
-            // The playing episode never joins the queue behind itself: it
-            // would replay from the start once the queue reached it, the
-            // same reason Play Next / Play Last are disabled for it.
+            // The playing episode never joins the queue behind itself: it would replay from the
+            // start once the queue reached it.
             let remainder = episodes.filter { !isCurrentEpisode($0) }
             guard upNextQueue.enqueueLast(remainder, source: playlistID, modelContext: modelContext) else {
                 lastUpNextError = upNextQueue.consumeLastErrorMessage()
@@ -1318,10 +1236,6 @@ final class OpenCastAppModel {
         }
     }
 
-    /// "Play from here" for a manual playlist row: starts the tapped row,
-    /// even a played one, then puts the unplayed, resolvable rows after it
-    /// at the front of Up Next, ahead of anything queued by hand. Nothing is
-    /// cleared.
     @discardableResult
     func playPlaylistItem(
         _ itemID: String,
@@ -1343,10 +1257,6 @@ final class OpenCastAppModel {
         )
     }
 
-    /// "Play from here" by episode, for either kind: a manual playlist's
-    /// rows in playlist order, or a smart playlist's evaluation in rule
-    /// order, where the tapped episode and those queued after it stay within
-    /// `smartPlaylistQueueLimit`. The tapped episode must still be listed.
     @discardableResult
     func playPlaylistEpisode(
         _ episodeID: String,
@@ -1416,10 +1326,8 @@ final class OpenCastAppModel {
         }
     }
 
-    /// Starts `tapped`, then queues the episodes `following` returns next,
-    /// both tagged with the playlist. `following` runs after the start, so
-    /// played state reflects the previous episode's final flush. A failed
-    /// start leaves the queue untouched.
+    /// `following` runs after the start, so played state reflects the previous episode's final
+    /// flush.
     private func playPlaylistEpisodes(
         _ tapped: EpisodeListItemSnapshot,
         in playlistID: String,
@@ -1446,8 +1354,6 @@ final class OpenCastAppModel {
         return true
     }
 
-    /// Play Next / Play Last for a whole playlist (a smart playlist's first
-    /// `smartPlaylistQueueLimit` candidates); never starts playback.
     @discardableResult
     func enqueuePlaylist(
         _ playlistID: String,
@@ -1459,10 +1365,8 @@ final class OpenCastAppModel {
             lastPlaylistError = Self.nothingToPlayMessage
             return false
         }
-        // The playing episode never joins the queue behind itself, as in
-        // `.addAfter`. When it was the only candidate there is nothing left
-        // to queue, which is a no-op rather than an error: it is neither
-        // played nor unavailable.
+        // The playing episode never joins the queue behind itself. When it was the only candidate
+        // this is a no-op, not the nothing-to-play error.
         let episodes = candidates.filter { !isCurrentEpisode($0) }
         guard !episodes.isEmpty else {
             return true
@@ -1485,19 +1389,13 @@ final class OpenCastAppModel {
         upNextQueue.items.count(where: { $0.sourcePlaylistID == playlistID })
     }
 
-    /// Unplayed, resolvable episodes a Download All would start. The download
-    /// menu's state is the truth: an in-flight download is excluded, since
-    /// restarting it would discard its progress, while paused, failed, and
-    /// missing-file downloads resume.
+    /// An in-flight download is excluded: restarting it would discard its progress.
     func playlistDownloadAllCandidates(_ playlistID: String) -> [EpisodeListItemSnapshot] {
         playlistPlaybackCandidates(playlistID).filter { downloadMenuState(for: $0) == .available }
     }
 
-    /// The Download All item's enabled state, without touching the disk: any
-    /// unplayed, resolvable episode with no download in flight or completed.
-    /// The tap-time list above also re-checks completed files on disk.
-    /// A smart playlist stops at its first candidate instead of building
-    /// the list, which a No Limit rule can make as long as the library.
+    /// Never touches the disk. A smart playlist stops at its first candidate, since a No Limit rule
+    /// can list the whole library.
     func hasPlaylistDownloadAllCandidates(_ playlistID: String) -> Bool {
         if let summary = playlist(playlistID), summary.kind == .smart {
             return smartPlaylistEvaluation(for: summary).episodes.contains { episode in
@@ -1516,9 +1414,8 @@ final class OpenCastAppModel {
         }
     }
 
-    /// Starts every Download All candidate. `DownloadStore` keeps only the
-    /// latest start failure, and a later successful start clears it, so the
-    /// failures are counted here and reported through the playlist alert.
+    /// `DownloadStore` keeps only the latest start failure and a later success clears it, so the
+    /// failures are counted here.
     @discardableResult
     func downloadAllPlaylistEpisodes(_ playlistID: String, modelContext: ModelContext) -> Bool {
         let candidates = playlistDownloadAllCandidates(playlistID)
@@ -1541,7 +1438,7 @@ final class OpenCastAppModel {
         return false
     }
 
-    static func downloadAllFailureMessage(failureCount: Int, candidateCount: Int, reason: String?) -> String {
+    private static func downloadAllFailureMessage(failureCount: Int, candidateCount: Int, reason: String?) -> String {
         // Grammar agreement resolves only on the attributed localization path.
         let subject = failureCount == candidateCount
             ? String(AttributedString(localized: "^[\(failureCount) episode](inflect: true)").characters)
@@ -1553,12 +1450,8 @@ final class OpenCastAppModel {
         return "\(sentence) \(reason)"
     }
 
-    /// A smart playlist's episodes, memoized per playlist in the store. The
-    /// key reads only the tokens the rule depends on — progress only for a
-    /// played-state clause, downloads only for Downloaded Only, the
-    /// reference date only for an age clause — so a view calling this
-    /// observes nothing else. Empty for a manual playlist or an unreadable
-    /// rule.
+    /// The memo key reads only the tokens the rule depends on, so a view calling this observes
+    /// nothing else.
     func smartPlaylistEvaluation(for summary: PlaylistSummary) -> SmartPlaylistEvaluation {
         guard summary.kind == .smart, let rule = summary.rule else {
             return .empty
@@ -1581,10 +1474,8 @@ final class OpenCastAppModel {
         }
     }
 
-    /// The most episodes one Play, Play Next, Play Last or play-from-here
-    /// takes from a smart playlist (the largest Limit preset): a No Limit
-    /// rule can list the whole library, and every Up Next edit refetches
-    /// every queued row. The list itself and Download All stay uncapped.
+    /// A No Limit rule can list the whole library, and every Up Next edit refetches every queued
+    /// row. Matches the largest Limit preset.
     static let smartPlaylistQueueLimit = 100
 
     private static let nothingToPlayMessage = "Nothing to play. Every episode in this playlist is played or unavailable."
@@ -1594,9 +1485,6 @@ final class OpenCastAppModel {
         playlists.playlists.first { $0.playlistID == playlistID }
     }
 
-    /// The playlist's resolvable, unplayed episodes: a manual playlist's in
-    /// playlist order, a smart playlist's in rule order, stopping after
-    /// `smartLimit` of them.
     private func playlistPlaybackCandidates(
         _ playlistID: String,
         smartLimit: Int? = nil
@@ -1616,8 +1504,6 @@ final class OpenCastAppModel {
             .filter { isPlaylistCandidate($0) }
     }
 
-    /// Whether Play would start anything, without starting it: the router and
-    /// the Siri handler answer "nothing to play" before touching playback.
     func hasPlaylistPlaybackCandidates(_ playlistID: String) -> Bool {
         if let summary = playlist(playlistID), summary.kind == .smart {
             return smartPlaylistEvaluation(for: summary).episodes.contains { isSmartPlaylistCandidate($0) }
@@ -1625,8 +1511,6 @@ final class OpenCastAppModel {
         return !playlistPlaybackCandidates(playlistID).isEmpty
     }
 
-    /// The count a collection row shows: a manual playlist's items, a smart
-    /// playlist's memoized evaluation.
     func playlistEpisodeCount(for summary: PlaylistSummary) -> Int {
         summary.kind == .smart ? smartPlaylistEvaluation(for: summary).count : summary.itemCount
     }
@@ -1635,16 +1519,13 @@ final class OpenCastAppModel {
         library.progressRecord(for: episode.episodeID)?.isPlayed != true
     }
 
-    /// The Episodes chip's definition of unplayed, which also counts a
-    /// position at the end as played, so a Played rule has nothing to play.
+    /// A position at the end counts as played too, so a Played rule has nothing to play.
     private func isSmartPlaylistCandidate(_ episode: EpisodeListItemSnapshot) -> Bool {
         !library.progressSummary(for: episode).isCompleted
     }
 
-    /// A completed download is the preferred source for any playback: it is
-    /// offline, byte-stable, and the copy that transcripts and ad analyses
-    /// describe. Dynamic enclosure URLs can return a different audio assembly
-    /// per request, so streaming is the fallback, not the default.
+    /// Dynamic enclosure URLs can return a different audio assembly per request, so a completed
+    /// download, the copy transcripts and ad analyses describe, wins over streaming.
     private func preferredPlaybackSource(for episodeID: String) -> EpisodePlaybackSource {
         guard let record = downloads.record(for: episodeID),
               record.state == .completed,
@@ -1678,11 +1559,8 @@ final class OpenCastAppModel {
         )
     }
 
-    /// Starts an episode from its transcript (a tapped line or the play
-    /// button), using the completed download only when its trusted byte
-    /// identity matches the transcript's recorded source hash. An unproven
-    /// local file or a fresh dynamic-stream response can be a different audio
-    /// assembly than the one transcribed, which no seek can realign.
+    /// Uses the download only when its trusted hash matches the transcript's source: a different
+    /// audio assembly cannot be realigned by any seek.
     func playEpisode(
         _ episode: EpisodeListItemSnapshot,
         at startPosition: TimeInterval?,
@@ -1727,9 +1605,8 @@ final class OpenCastAppModel {
         lastUnsubscribeErrorMessage = nil
         let podcastID = PodcastID(rawValue: feedURL)
         if playback.currentEpisode?.podcastID == podcastID {
-            // Unsubscribe keeps listening history by default, so the position
-            // since the last periodic flush must land before unload discards
-            // it. Pointless when the history is being cleared anyway.
+            // The position since the last periodic flush must land before unload discards it,
+            // unless the history is being cleared.
             if !clearListeningHistory {
                 _ = flushPlaybackProgress(modelContext: modelContext)
             }
@@ -1762,10 +1639,8 @@ final class OpenCastAppModel {
         if !upNextQueue.removeAll(forPodcastID: feedURL, modelContext: modelContext) {
             sidecarErrorMessage = upNextQueue.lastErrorMessage
         }
-        // Downloads are destroyed only after the delete is confirmed — files
-        // cannot be rolled back, and dynamic enclosures mean a re-download
-        // may not be byte-identical — and route through the transcription
-        // hook like every other download-deletion path.
+        // Downloads go only after the delete is confirmed: files cannot be rolled back, and a
+        // re-download may not be byte-identical.
         do {
             try downloadCleanup.deleteDownloads(forPodcastID: feedURL, modelContext: modelContext)
         } catch {
@@ -1930,11 +1805,6 @@ final class OpenCastAppModel {
         )
     }
 
-    /// Apple-preferred Generate runs are foreground-only, including their
-    /// Whisper fallback. Otherwise, one system card at a time: an armed
-    /// ad-free drain or remote transcription keeps its card and Generate
-    /// stays lifecycle-managed instead of competing for a second
-    /// continued-processing task.
     func armTranscriptGenerationBackgroundSessionIfNeeded(episodeTitle: String) {
         guard !transcriptionEngineSettings.prefersAppleSpeech,
               !transcriptGenerationBackgroundSession.isArmed,
@@ -1994,9 +1864,6 @@ final class OpenCastAppModel {
         }
     }
 
-    /// Resume for a remote transcription parked on the server: re-attaches
-    /// the current episode's persisted reference without a new estimate
-    /// sheet, since no new job is created.
     @discardableResult
     func resumeRemoteTranscriptionForCurrentEpisode(
         modelContext: ModelContext
@@ -2014,9 +1881,6 @@ final class OpenCastAppModel {
         }
     }
 
-    /// Resume and Try Again taps from episode detail, the More menu and Now
-    /// Playing: re-attaches the persisted reference and, being a user
-    /// action, may arm the system card.
     @discardableResult
     func resumeRemoteTranscription(
         episode: EpisodeListItemSnapshot,
@@ -2031,11 +1895,8 @@ final class OpenCastAppModel {
         )
     }
 
-    /// One continued-processing card per app: while the ad-free or the
-    /// transcript-generation card is armed, the remote run stays
-    /// foreground-only. Reached only from a user's start or resume, after
-    /// the coordinator reserved the episode and created the run; launch and
-    /// activation re-attach never arm.
+    /// Call only from a user's start or resume, after the run exists: launch and activation
+    /// re-attach never arm the card.
     private func armRemoteTranscriptionBackgroundSessionIfNeeded(episode: EpisodeListItemSnapshot) {
         guard !remoteTranscriptionBackgroundSession.isArmed else {
             return
@@ -2130,8 +1991,6 @@ final class OpenCastAppModel {
         transcriptions.deleteTranscript(episodeID: episodeID, modelContext: modelContext)
     }
 
-    /// The listener's Detect Ads: a run that needs the listener's own key
-    /// ends on the key screen.
     func analyzeEpisodeTranscript(_ document: EpisodeTranscriptDocument, modelContext: ModelContext) {
         adAnalyses.startAnalysis(
             transcript: document,
@@ -2147,24 +2006,14 @@ final class OpenCastAppModel {
 
     // MARK: - Chapters & Summary (transcript analysis)
 
-    /// Explicit episode-detail action for an already-transcribed episode —
-    /// the only way a new analysis starts; `TranscriptAnalysisQueue` owns
-    /// the eligibility checks and the single-flight drain.
     func generateChaptersAndSummary(episodeID: String, modelContext: ModelContext) {
         transcriptAnalysisQueue.generate(episodeID: episodeID, modelContext: modelContext)
     }
 
-    /// Resumes Chapters & Summary runs a background card expiry or a
-    /// relaunch interrupted, with their run ids.
     func resumeInterruptedTranscriptAnalyses(modelContext: ModelContext) {
         transcriptAnalysisQueue.resumeInterruptedRuns(modelContext: modelContext)
     }
 
-    /// Generate's route check before the disclosure, made without a
-    /// request: with no key for Chapters & Summary and no trial route on
-    /// this build, or a cached trial status that already refuses, the key
-    /// screen opens instead and this returns true. Otherwise the run's own
-    /// route resolution decides.
     func presentChaptersSummaryKeyScreenIfNoRoute() -> Bool {
         guard effectiveAnalysisProvider(for: .chaptersSummary) == nil,
               !AnalysisProvider.allCases.contains(where: analysisKeys.lastReadFailed)
@@ -2253,8 +2102,6 @@ final class OpenCastAppModel {
         startAdFreePass(for: episode, modelContext: modelContext, transcriptionEngine: transcriptionEngine)
     }
 
-    /// Sound Lab entry: a visible cloud-unavailable outcome runs the one-tap
-    /// on-device fallback directly; otherwise the prompt policy decides.
     /// Returns the episode when the caller must present the mode dialog.
     func startOrContinueAdFreePassForCurrentEpisodeResolvingMode(
         modelContext: ModelContext
@@ -2309,10 +2156,6 @@ final class OpenCastAppModel {
         )
     }
 
-    /// Decision table for a manual Detect Ads tap: a completed transcript of
-    /// the trusted download always runs the free on-device analysis, a
-    /// stored mode runs directly, and only an unset mode with the remote
-    /// surface visible prompts.
     func detectAdsTapDecision(for episode: EpisodeListItemSnapshot) -> AdDetectionModePromptPolicy.Decision {
         AdDetectionModePromptPolicy(
             storedMode: adDetectionSettings.mode,
@@ -2322,10 +2165,8 @@ final class OpenCastAppModel {
         ).decision
     }
 
-    /// First-tap dialog choice: remember the mode device-locally, then run
-    /// the pass it selected. A failed preference save never blocks the pass
-    /// — the mode travels explicitly below, the Settings section renders the
-    /// store's error, and the next tap simply prompts again.
+    /// A failed preference save never blocks the pass: the mode travels explicitly, and the next
+    /// tap prompts again.
     func chooseAdDetectionMode(
         _ mode: AdDetectionMode,
         for episode: EpisodeListItemSnapshot,
@@ -2335,8 +2176,7 @@ final class OpenCastAppModel {
         startAdFreePass(for: episode, modelContext: modelContext, mode: mode)
     }
 
-    /// Runs the Detect Ads tap through the prompt policy; returns true when
-    /// the caller must present the mode dialog instead.
+    /// Returns true when the caller must present the mode dialog instead.
     func startAdFreePassResolvingMode(
         for episode: EpisodeListItemSnapshot,
         modelContext: ModelContext
@@ -2365,12 +2205,8 @@ final class OpenCastAppModel {
         }
     }
 
-    /// Lifecycle protection counts only local on-device work. A live
-    /// ad-free card whose drain is running a cloud item still on the server
-    /// protects nothing on this device, so an unrelated local transcript
-    /// still takes its lifecycle interrupt; once that item's ad detection
-    /// runs here, the card protects it. The remote transcription card never
-    /// counts.
+    /// Counts only local on-device work: a card whose drain runs a cloud item still on the server
+    /// protects nothing here, and the remote transcription card never counts.
     var isProtectingLocalBackgroundWork: Bool {
         let protectsLocalPass = adFreePassBackgroundSession.isProtectingBackgroundExecution
             && !adFreePass.isActiveItemOnServerOnly
@@ -2381,7 +2217,6 @@ final class OpenCastAppModel {
     @ObservationIgnored var isLowPowerModeEnabled: @MainActor () -> Bool = {
         ProcessInfo.processInfo.isLowPowerModeEnabled
     }
-    /// Stands in for `playback.state` in those decisions; tests only.
     @ObservationIgnored var unattendedQueueWorkPlaybackStateOverride: PlaybackState?
     @ObservationIgnored var unattendedQueueWorkObservationTask: Task<Void, Never>?
 
@@ -2401,11 +2236,8 @@ final class OpenCastAppModel {
         adFreePass.republishCurrentStage()
     }
 
-    /// Re-attaches kept remote job references on launch and on scene
-    /// activation (`RemoteJobReattacher`). An activation that arrives before
-    /// the launch restore has loaded the library does nothing; the launch
-    /// trigger covers it. Returns the recovery pass, shared with any pass
-    /// already running.
+    /// An activation before the launch restore has loaded the library does nothing; the launch
+    /// trigger covers it.
     @discardableResult
     func reattachRemoteJobsIfNeeded(
         modelContext: ModelContext,
@@ -2481,8 +2313,6 @@ final class OpenCastAppModel {
         }
     }
 
-    /// Both reads are observed, so a view that asks in `body` follows
-    /// playback and the queue.
     func upNextMenuState(for episode: EpisodeListItemSnapshot) -> EpisodeUpNextMenuState {
         EpisodeUpNextMenuState(
             isCurrentEpisode: isCurrentEpisode(episode),
@@ -2490,9 +2320,6 @@ final class OpenCastAppModel {
         )
     }
 
-    /// One continued-processing card per app: while the transcript
-    /// generation or remote transcription card is armed the drain stays
-    /// foreground-only. A drain of cloud items alone never asks for GPU.
     private func armAdFreePassBackgroundSessionIfNeeded(
         episodeID: String,
         episodeTitle: String,
@@ -2526,7 +2353,6 @@ final class OpenCastAppModel {
         requestLocalNotificationAuthorizationIfNeeded()
     }
 
-    /// The remote-job trail notes how a cloud item's card request ended.
     private func recordCloudSessionEvent(
         _ kind: RemoteJobDiagnosticEvent.Kind,
         episodeID: String,
@@ -2556,9 +2382,6 @@ final class OpenCastAppModel {
         }
     }
 
-    /// The remote-job trail records the decisions that concern a remote
-    /// job: the parked cloud head's notification, and each remote-owned
-    /// outcome the local summary left out.
     private func scheduleAdFreePassCompletionNotificationIfNeeded(
         terminal: AdFreePassQueueTerminalOutcome,
         wasCardArmed: Bool
@@ -2603,9 +2426,8 @@ final class OpenCastAppModel {
         }
     }
 
-    /// One delivery decision per plain run ending. The owner is the run's
-    /// own snapshot. A parked reference also tells delivery whether a server
-    /// job may exist; a completed or failed run has already cleared it.
+    /// The owner comes from the run's own snapshot; a completed or failed run has already cleared
+    /// its reference.
     private func scheduleRemoteTranscriptionNotificationIfNeeded(
         episodeID: String,
         phase: RemoteTranscriptionRequestPhase,
@@ -2701,12 +2523,10 @@ final class OpenCastAppModel {
         playback.seek(to: chapter.startTime, intent: .chapter)
     }
 
-    /// Awaits the in-flight skip-zone refresh, if any. Test hook.
     func waitForSkipZoneRefresh() async {
         await skipZones.waitForRefresh()
     }
 
-    /// Awaits the in-flight chapter refresh, if any. Test hook.
     func waitForChapterRefresh() async {
         await chapters.waitForRefresh()
     }
@@ -2715,10 +2535,6 @@ final class OpenCastAppModel {
         skipZones.undoLastAutoSkip()
     }
 
-    /// The scene-exit interrupt. The queue's own transcription for an item
-    /// nobody tapped runs on while the rule allows it and is otherwise held
-    /// to resume by itself; every other transcription (a manual item's, one
-    /// the queue joined, Generate, Improve) takes the plain interrupt.
     func interruptActiveTranscriptionForLifecycleExit(modelContext: ModelContext) {
         guard adFreePass.ownsUnattendedActiveTranscription else {
             transcriptionRequests.prepareForLifecycleExit(modelContext: modelContext)
@@ -2734,16 +2550,14 @@ final class OpenCastAppModel {
     /// session cancels the drain first, which is never a hold.
     func configureBackgroundSessionExpirations(modelContext: ModelContext) {
         adFreePassBackgroundSession.onExpiration = { [weak self] in
-            // The run stays resumable with the replies it kept.
             self?.adFreePass.cancelActiveAnalysisRun(reason: .expiration)
             self?.transcriptionRequests.prepareForLifecycleExit(modelContext: modelContext)
         }
         transcriptGenerationBackgroundSession.onExpiration = { [weak self] in
             self?.transcriptionRequests.prepareForLifecycleExit(modelContext: modelContext)
         }
-        // The server keeps working: expiration only stops local polling and
-        // keeps the reference for Resume. It never touches local
-        // transcription and never cancels the job.
+        // The server keeps working: expiration only stops local polling and keeps the reference
+        // for Resume.
         remoteTranscriptionBackgroundSession.onExpiration = { [weak self] episodeID in
             guard let self, remoteTranscription.store.activeEpisodeID == episodeID else {
                 return nil
@@ -2847,16 +2661,12 @@ final class OpenCastAppModel {
         guard let episode = playback.currentEpisode else {
             return false
         }
-        // A restored-but-never-touched episode sits at the smart-resume
-        // rewound position (3–20s behind the stored one). Persisting that
-        // would walk the synced resume point backward on every browse-only
-        // open/close cycle and generate a CloudKit export per app open.
+        // A restored, untouched episode sits at the smart-resume rewind. Persisting it would walk
+        // the synced resume point back on every browse-only open and export to CloudKit each time.
         if let restored = restoredUnplayedPlayback, restored.episodeID == episode.id.rawValue {
             if playback.state != .playing, abs(playback.position - restored.position) < 1.0 {
                 return false
             }
-            // Playback or a seek engaged the restored episode; every later
-            // flush persists normally.
             restoredUnplayedPlayback = nil
         }
 
@@ -2970,8 +2780,6 @@ final class OpenCastAppModel {
         await analysisPolicy.refreshIfDue()
     }
 
-    /// The provider `feature` runs on with the listener's key, or `nil` when
-    /// no saved key has an entry for it.
     func effectiveAnalysisProvider(for feature: AnalysisFeature) -> AnalysisProvider? {
         analysisProviderSelection.effectiveProvider(
             for: feature,
@@ -2980,9 +2788,6 @@ final class OpenCastAppModel {
         )
     }
 
-    /// Stops every analysis run that sends with the listener's key for
-    /// `provider`, right after the listener removed that key, and ends it as
-    /// needing a key; a trial run or a run on another provider goes on.
     func cancelAnalysisRuns(onProvider provider: AnalysisProvider) {
         if adAnalyses.activeDirectProvider == provider {
             adAnalyses.cancelActiveRun(reason: .keyRemoved)
@@ -2990,8 +2795,6 @@ final class OpenCastAppModel {
         transcriptAnalyses.cancelActiveRun(onProvider: provider)
     }
 
-    /// Shows the key screen for `feature`, with the trial status that
-    /// explains `reason`.
     func presentAnalysisKeyRequired(feature: AnalysisFeature, reason: AnalysisKeyRequiredReason) {
         analysisKeyRequired.present(
             feature: feature,
@@ -3006,8 +2809,6 @@ final class OpenCastAppModel {
         )
     }
 
-    /// The notice would be due if the trial service proves reachable, which
-    /// is not known yet.
     func isAnalysisKeyNoticeAwaitingReachability() -> Bool {
         analysisKeyNotice.isAwaitingReachability(
             hasSavedKey: analysisKeys.hasSavedKey,
@@ -3051,11 +2852,9 @@ final class OpenCastAppModel {
         dataNuke.clearError()
     }
 
-    /// Pre-nuke teardown the runner cannot own: request and install resets,
-    /// library invalidation, and the analysis-queue cancel — which must
-    /// precede the store nuke, because that nuke's cancel wakes a drain
-    /// suspended on the store's change stream that would otherwise start a
-    /// fresh network analysis mid-nuke.
+    /// The analysis-queue cancel must precede the store nuke: the nuke's cancel wakes a drain
+    /// suspended on the store's change stream, which would otherwise start a fresh network
+    /// analysis mid-nuke.
     private func prepareRuntimeForDataNuke() async {
         autoDownloads.cancelPendingWork()
         transcriptionRequests.resetForDataNuke()
@@ -3072,7 +2871,8 @@ final class OpenCastAppModel {
         let didSave = library.markEpisodePlayed(episode, modelContext: modelContext)
         _ = upNextQueue.remove(episodeID: episode.episodeID, modelContext: modelContext)
         if isCurrentEpisode(episode) {
-            // Mark Played is a playback command too, so unload even when persistence was already complete.
+            // Mark Played is a playback command too, so unload even when persistence was already
+            // complete.
             dismissNowPlayingAndDiscardFinishedPlayback()
             playback.unload()
             playbackRestorePreference.clear(modelContext: modelContext)
@@ -3128,11 +2928,8 @@ final class OpenCastAppModel {
         return didSave
     }
 
-    /// Archives the episode out of the Inbox and takes it out of Up Next.
-    /// Archiving is Inbox membership, not a listen: the current episode is
-    /// archived like any other and keeps playing, and nothing here unloads
-    /// playback, touches the restore preference or sweeps downloads. Returns
-    /// false when nothing was archived.
+    /// Archiving is Inbox membership, not a listen: the current episode keeps playing, and nothing
+    /// here unloads playback or sweeps downloads.
     @discardableResult
     func archiveEpisode(
         _ episode: EpisodeListItemSnapshot,
@@ -3153,22 +2950,16 @@ final class OpenCastAppModel {
         library.unarchive(episode, modelContext: modelContext)
     }
 
-    /// What Archive All would archive of these rows: those not already
-    /// archived, the current episode included.
     func archivableEpisodes(_ episodes: [EpisodeListItemSnapshot]) -> [EpisodeListItemSnapshot] {
         let archivedEpisodeIDs = library.archivedEpisodeIDs
         return episodes.filter { !archivedEpisodeIDs.contains($0.episodeID) }
     }
 
-    /// What Unarchive All would return to the Inbox of these rows: the
-    /// archived ones.
     func unarchivableEpisodes(_ episodes: [EpisodeListItemSnapshot]) -> [EpisodeListItemSnapshot] {
         let archivedEpisodeIDs = library.archivedEpisodeIDs
         return episodes.filter { archivedEpisodeIDs.contains($0.episodeID) }
     }
 
-    /// Archive All: archives `archivableEpisodes(episodes)` in one save and
-    /// takes them out of Up Next. Returns false when nothing was archived.
     @discardableResult
     func archiveEpisodes(
         _ episodes: [EpisodeListItemSnapshot],
@@ -3184,9 +2975,6 @@ final class OpenCastAppModel {
         return true
     }
 
-    /// Unarchive All: returns `unarchivableEpisodes(episodes)` to the Inbox
-    /// in one save. Up Next is left alone, as a single Unarchive leaves it.
-    /// Returns false when nothing was unarchived.
     @discardableResult
     func unarchiveEpisodes(
         _ episodes: [EpisodeListItemSnapshot],
@@ -3196,8 +2984,6 @@ final class OpenCastAppModel {
         return !unarchivable.isEmpty && library.unarchive(unarchivable, modelContext: modelContext)
     }
 
-    /// Reapplies the playback settings to the loaded episode, its show's own
-    /// speed included.
     func refreshCurrentPlaybackSettings(modelContext: ModelContext) {
         let podcastID = playback.currentEpisode?.podcastID.rawValue
         playbackSettings.load(
@@ -3209,9 +2995,8 @@ final class OpenCastAppModel {
         )
     }
 
-    /// Refetches the playing show's subscription before reapplying: the
-    /// fetch lays a speed another device saved over the live record the
-    /// library reads, which a plain reapply would miss.
+    /// The refetch lays a speed another device saved over the live record the library reads; a
+    /// plain reapply would miss it.
     func refreshCurrentPlaybackSettingsFromStore(modelContext: ModelContext) {
         if let feedURL = playback.currentEpisode?.podcastID.rawValue {
             let descriptor = FetchDescriptor<SubscriptionRecord>(
@@ -3233,8 +3018,6 @@ final class OpenCastAppModel {
         appearanceSettings.setMode(mode, modelContext: modelContext)
     }
 
-    /// Edits the playing show's own speed while that show has one, the
-    /// global speed otherwise.
     @discardableResult
     func setPlaybackRate(
         _ rate: Float,
@@ -3452,11 +3235,8 @@ final class OpenCastAppModel {
     #endif
 
     private func resetRuntimeStateAfterDataNuke(modelContext: ModelContext) async {
-        // The unload must precede this method's first suspension: the row
-        // wipe has just run, and the unload's boundary flush sees no episode
-        // only because the playback snapshot is cleared first. Anything that
-        // suspends before it lets a periodic flush re-insert a progress row
-        // the wipe deleted (DataNukeRunner.run names the same invariant).
+        // The unload must precede this method's first suspension: the row wipe has just run, and a
+        // periodic flush during an earlier suspension would re-insert a progress row it deleted.
         dismissNowPlayingAndDiscardFinishedPlayback()
         playback.unload()
         // Also before the first suspension: a custom skip sound import that
@@ -3472,11 +3252,8 @@ final class OpenCastAppModel {
         playbackRestorePreference.resetAfterDataNuke()
         currentPlaylistSourceID = nil
         library.resetAfterDataNuke()
-        // The run journals go before any store reloads: every run has
-        // stopped, and a reload's recovery (a stranded run closed, a run
-        // whose usage never saved counted) would otherwise add a deleted
-        // run's tokens to the wiped usage, together with the totals the
-        // usage store still holds from before the wipe.
+        // The run journals go before any store reloads: a reload's recovery would otherwise count a
+        // deleted run's tokens into the wiped usage.
         analysisRuns.deleteAll()
         await downloads.load(modelContext: modelContext)
         downloadSettings.load(modelContext: modelContext)
@@ -3489,9 +3266,8 @@ final class OpenCastAppModel {
         adFreePass.reset()
         upNextQueue.resetAfterDataNuke()
         playlists.resetAfterDataNuke()
-        // The wipe took every playlist with it. A legacy copy that had not
-        // finished (a failed read or save leaves the flag unset) must not be
-        // retried on the next launch and bring those playlists back.
+        // A legacy copy that had not finished must not be retried on the next launch and bring the
+        // wiped playlists back.
         pendingLegacyLocalPlaylists = nil
         playlistMigrationDefaults.set(true, forKey: PlaylistLocalStoreMigration.completedDefaultsKey)
         adFreePassBackgroundSession.reset()
@@ -3508,9 +3284,7 @@ final class OpenCastAppModel {
         playlistDisplaySettings.load(modelContext: modelContext)
         playlists.sortOrder = playlistDisplaySettings.sortOrder
         inboxEpisodeListSettings.load(modelContext: modelContext)
-        // Provider keys are Keychain credentials and survive the wipe; only
-        // the device-local choices, usage, the key's tier and the notice
-        // flag reset.
+        // Provider keys are Keychain credentials and survive the wipe.
         analysisProviderSelection.load(modelContext: modelContext)
         analysisUsage.load(modelContext: modelContext)
         analysisKeyTier.load(modelContext: modelContext)
@@ -3662,11 +3436,7 @@ final class OpenCastAppModel {
             return
         }
 
-        // Auto passes never arm the background session;
-        // continuation requires an explicit tap. They follow the stored
-        // detection mode: cloud mode enqueues a cloud job on
-        // play with no per-episode confirmation; the authoritative credits
-        // check lives inside the cloud pass itself.
+        // Auto passes never arm the background session; continuation requires an explicit tap.
         adFreePass.enqueue(
             episode: episode,
             origin: .auto,
@@ -3698,10 +3468,6 @@ final class OpenCastAppModel {
         )
     }
 
-    /// The loaded episode that starting `snapshot` would cut off, for the
-    /// head of Up Next so it resumes right after. Nil when nothing is loaded,
-    /// when `snapshot` is that episode (a restart), or when the flush just
-    /// marked it played: a finished episode has nothing to come back to.
     private func interruptedPlaybackEpisode(
         replacedBy snapshot: EpisodeListItemSnapshot
     ) -> EpisodeListItemSnapshot? {
@@ -3741,9 +3507,6 @@ final class OpenCastAppModel {
         return episode
     }
 
-    /// Apple stays the ranking authority; the Podcast Index Worker is a
-    /// supplement, so a disabled directory backend degrades to the
-    /// Apple-only service.
     private static func defaultPodcastDirectoryService(
         httpClient: any OpenCastHTTPClient
     ) -> any PodcastDirectoryService {

@@ -1,23 +1,14 @@
 import SwiftUI
 
-/// Identifies one hosting navigation stack for as long as SwiftUI keeps it:
-/// the stack container's `NavigationStack`, or one split detail stack (a new
-/// one per detail root). Its host owns it in state; writers hold it weakly,
-/// so once the host is gone (a switch, a new head, even a return to an
-/// earlier head) everything that host handed out stops writing.
+/// Owned in state by one hosting stack and held weakly by its writers, so once
+/// the host is gone (a switch, a new head, even a return to an earlier head)
+/// everything it handed out stops writing.
 final class TwoPaneRootWriterToken {}
 
-/// The writes one hosting stack may make to its section's canonical path:
-/// its `NavigationStack` binding, its pages' visit scope and its detail
-/// root's close. Each write is applied only while the writer is current:
-/// its host is alive, the scene's container is the writer's, and, for a
-/// split detail stack, its head is still the path's head. Reads always see
-/// the live path.
 struct TwoPaneRootWriter {
     enum Kind: Equatable {
-        /// The stack container's `NavigationStack`, over the root content.
         case stack
-        /// A split detail stack built for `head` (nil: the placeholder).
+        /// A nil head is the placeholder.
         case detail(head: AppRoute?)
     }
 
@@ -60,7 +51,6 @@ struct TwoPaneRootWriter {
         }
     }
 
-    /// The stack container's path: the whole section path.
     var stackPath: Binding<[AppRoute]> {
         Binding(
             get: { path.wrappedValue },
@@ -75,7 +65,6 @@ struct TwoPaneRootWriter {
         )
     }
 
-    /// A split detail stack's path: the routes after the head.
     var detailSuffix: Binding<[AppRoute]> {
         Binding(
             get: { TwoPaneRootPath.suffix(of: path.wrappedValue) },
@@ -96,7 +85,6 @@ struct TwoPaneRootWriter {
         )
     }
 
-    /// The ledger as this stack's pages see it.
     func visitScope(_ state: TwoPaneRootVisitState) -> TwoPaneRootVisitScope {
         TwoPaneRootVisitScope(
             state: state,
@@ -106,8 +94,6 @@ struct TwoPaneRootWriter {
         )
     }
 
-    /// The detail root's own close: clears the path while this detail stack
-    /// is current and `route` is still its head.
     func closeAction(for route: AppRoute) -> TwoPaneRootCloseAction {
         TwoPaneRootCloseAction(route: route) {
             guard isCurrent, let updated = TwoPaneRootPath.closingRoot(route, in: path.wrappedValue) else {

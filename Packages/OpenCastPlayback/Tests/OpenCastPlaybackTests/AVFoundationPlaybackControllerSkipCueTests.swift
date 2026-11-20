@@ -3,17 +3,15 @@ import OpenCastCore
 import Testing
 @testable import OpenCastPlayback
 
-/// The skip cue through the factory seam. Tests on `episode(duration:)`
-/// (remote audio that never loads here) run without yielding after setup,
-/// so no player callback can interleave; tests that need a real seek or a
-/// real tick play a local fixture.
+// Tests on `episode(duration:)`, remote audio that never loads here, must not
+// yield after setup, so no player callback interleaves. A real seek or tick
+// needs a local fixture.
 @MainActor
 @Suite
 struct AVFoundationPlaybackControllerSkipCueTests {
     private let cueURL = URL(filePath: "/tmp/opencast-skip-cue-a.m4a")
     private let otherCueURL = URL(filePath: "/tmp/opencast-skip-cue-b.m4a")
 
-    // 1
     @Test("A tick into a zone while playing plays the cue once")
     func tickIntoZoneWhilePlayingPlaysOnce() async throws {
         try await AVFoundationPlaybackTestGate.acquire()
@@ -37,13 +35,13 @@ struct AVFoundationPlaybackControllerSkipCueTests {
         try await waitUntil { controller.lastAutoSkipEvent != nil }
 
         #expect(controller.lastAutoSkipEvent == PlaybackAutoSkipEvent(zoneID: 7, sequence: 1))
+        #expect(controller.snapshot.position >= 2)
         #expect(factory.requestedURLs == [cueURL])
         #expect(factory.latestCue?.playCount == 1)
         #expect(skipMessages(in: messages).count == 1)
         #expect(skipMessages(in: messages).first?.hasSuffix(" cue=played") == true)
     }
 
-    // 2
     @Test(
         "While playback is not requested the skip happens and the cue stays silent",
         arguments: zip(["zonesAtStart", "restore", "skipButton"], ["0.000", "3.000", "2.500"])
@@ -85,7 +83,6 @@ struct AVFoundationPlaybackControllerSkipCueTests {
         #expect(skipMessages(in: messages) == ["auto-skip zone=3 from=\(from) to=4.000 cue=none(paused)"])
     }
 
-    // 3
     @Test(
         "Auto-Skip switched on inside a zone, and replay from the end into a zone, play while playing",
         arguments: ["enable", "replay"]
@@ -124,7 +121,6 @@ struct AVFoundationPlaybackControllerSkipCueTests {
         #expect(factory.latestCue?.playCount == 1)
     }
 
-    // 4
     @Test(
         "A skip that ends the episode stays silent; one with an unknown duration plays",
         arguments: zip(
@@ -162,7 +158,6 @@ struct AVFoundationPlaybackControllerSkipCueTests {
         #expect(skipMessages(in: messages) == [expectedMessage])
     }
 
-    // 5
     @Test("A skip-button landing inside a zone while playing plays the cue once")
     func skipButtonLandingWhilePlayingPlaysOnce() async throws {
         try await AVFoundationPlaybackTestGate.acquire()
@@ -187,7 +182,6 @@ struct AVFoundationPlaybackControllerSkipCueTests {
         #expect(skipMessages(in: messages) == ["auto-skip zone=5 from=6.000 to=8.000 cue=played"])
     }
 
-    // 6
     @Test("A skip while the cue is still sounding does not start it again")
     func skipWhileSoundingPlaysOnce() async throws {
         try await AVFoundationPlaybackTestGate.acquire()
@@ -221,7 +215,6 @@ struct AVFoundationPlaybackControllerSkipCueTests {
         ])
     }
 
-    // 7
     @Test("With no cue set the factory is never called and both skip messages read as before")
     func noCueLeavesMessagesAsBefore() async throws {
         try await AVFoundationPlaybackTestGate.acquire()
@@ -250,14 +243,12 @@ struct AVFoundationPlaybackControllerSkipCueTests {
         #expect(controller.lastAutoSkipEvent == PlaybackAutoSkipEvent(zoneID: 2, sequence: 2))
         #expect(factory.requestedURLs.isEmpty)
         #expect(!controller.hasAutoSkipCueForTesting)
-        // Copied from the controller before the cue existed.
         #expect(skipMessages(in: messages) == [
             "auto-skip zone=1 from=30.000 to=40.000",
             "auto-skip zone=2 from=80.000 reached outro=90.000"
         ])
     }
 
-    // 8
     @Test("A cue set before load is opened only when the activation completes, once per URL")
     func cueOpensOnlyInsideTheActivatedSession() async throws {
         try await AVFoundationPlaybackTestGate.acquire()
@@ -289,7 +280,6 @@ struct AVFoundationPlaybackControllerSkipCueTests {
         #expect(factory.cues.count == 2)
     }
 
-    // 8
     @Test("A cue that cannot be opened leaves playback alone and logs one message")
     func failedCueLeavesPlaybackAlone() async throws {
         try await AVFoundationPlaybackTestGate.acquire()
@@ -368,7 +358,6 @@ struct AVFoundationPlaybackControllerSkipCueTests {
         #expect(skipMessages(in: messages) == ["auto-skip zone=1 from=0.000 to=10.000 cue=none(inactive)"])
     }
 
-    // 9
     @Test(
         "Interruption, a lost route, None, a media-services reset and unload each stop or drop a sounding cue",
         arguments: ["interruption", "route", "none", "reset", "unload"]
@@ -474,8 +463,7 @@ struct AVFoundationPlaybackControllerSkipCueTests {
         )
     }
 
-    /// Marks the session held, so `setAutoSkipCue` opens the cue at once, then
-    /// requests playback.
+    // The session is marked held first so `setAutoSkipCue` opens the cue at once.
     private func startPlaying(
         _ controller: AVFoundationPlaybackController,
         episode current: Episode,
@@ -497,8 +485,7 @@ struct AVFoundationPlaybackControllerSkipCueTests {
         messages.filter { $0.hasPrefix("auto-skip zone=") }
     }
 
-    /// The event-log line without its timestamp, episode, source, position
-    /// and duration fields.
+    // Drops the timestamp, episode, source, position and duration fields.
     private static func eventLogMessage(_ line: String) -> String {
         String(line.split(separator: " ", maxSplits: 5)[5])
     }

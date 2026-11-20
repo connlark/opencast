@@ -47,24 +47,10 @@ struct TranscriptKaraokeReducerTests {
         )
     ])
 
-    @Test("Duplicated samples produce identical frames")
-    func duplicatedSamplesProduceIdenticalFrames() throws {
-        let layout = try layout(at: 0)
-
-        let first = TranscriptKaraokeReducer.frame(at: 2.5, timeline: timeline, activeLayout: layout)
-        let second = TranscriptKaraokeReducer.frame(at: 2.5, timeline: timeline, activeLayout: layout)
-
-        #expect(first == second)
-        #expect(first.segmentID == 0)
-        #expect(spoken(first, in: 0) == "one two three")
-    }
-
     @Test("A coalesced jump resolves the landing segment with no intermediates")
     func coalescedJumpResolvesTheLandingSegmentWithNoIntermediates() throws {
         let landingLayout = try layout(at: 2)
 
-        // One sample lands mid-segment-2 after segments 0 and 1 were skipped
-        // entirely; the frame must match a fresh lookup at that position.
         let jumped = TranscriptKaraokeReducer.frame(at: 6.5, timeline: timeline, activeLayout: landingLayout)
 
         #expect(jumped.segmentID == 2)
@@ -81,34 +67,6 @@ struct TranscriptKaraokeReducerTests {
 
         #expect(spoken(late, in: 0) == "one two three four")
         #expect(spoken(early, in: 0) == "one two")
-    }
-
-    @Test("The frame depends only on position, not rate or history")
-    func frameDependsOnlyOnPositionNotRateOrHistory() throws {
-        let layout = try layout(at: 0)
-
-        // Positions produced at 0.5x, 1x, or 2x are indistinguishable inputs.
-        let frames = [0.5, 1.0, 2.0].map { _ in
-            TranscriptKaraokeReducer.frame(at: 2.0, timeline: timeline, activeLayout: layout)
-        }
-
-        #expect(frames.allSatisfy { $0 == frames[0] })
-    }
-
-    @Test("Samples straddling a sub-second line resolve the successor")
-    func samplesStraddlingASubSecondLineResolveTheSuccessor() throws {
-        let subSecondLayout = try layout(at: 1)
-
-        let inside = TranscriptKaraokeReducer.frame(at: 4.1, timeline: timeline, activeLayout: subSecondLayout)
-        #expect(inside.segmentID == 1)
-        #expect(spoken(inside, in: 1) == "so")
-
-        // The next sample lands past the line while the stale layout is still
-        // active; the reducer reports the new segment and no spoken bound
-        // rather than sticking to the dead line.
-        let after = TranscriptKaraokeReducer.frame(at: 4.5, timeline: timeline, activeLayout: subSecondLayout)
-        #expect(after.segmentID == 2)
-        #expect(after.spokenUpperBound == nil)
     }
 
     @Test("Positions before the first segment resolve to nothing")

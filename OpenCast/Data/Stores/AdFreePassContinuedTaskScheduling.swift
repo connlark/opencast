@@ -11,9 +11,7 @@ protocol AdFreePassContinuedTaskHandle: AnyObject {
 
 @MainActor
 protocol AdFreePassContinuedTaskScheduling {
-    /// Whether the platform grants background GPU to continued processing
-    /// tasks (`BGTaskScheduler.supportedResources` contains `.gpu`). iPads
-    /// report it; iPhones and simulators do not.
+    /// iPads report `.gpu` in `BGTaskScheduler.supportedResources`; iPhones and simulators do not.
     var supportsGPUResources: Bool { get }
 
     func registerLaunchHandler(

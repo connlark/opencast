@@ -1,10 +1,8 @@
 import Foundation
 import SwiftData
 
-/// Every side-effecting operation the diagnostics model performs, injected so
-/// tests can prove nothing runs before the sheet opens and can drive each
-/// flow deterministically. `live()` wires the real file system, network,
-/// player, and download store.
+/// Every side effect of the diagnostics model goes through here; none may run before the
+/// sheet opens.
 struct EpisodeDiagnosticsDependencies {
     var fileInspector: any EpisodeDiagnosticsFileInspecting
     var networkProber: any EpisodeDiagnosticsNetworkProbing

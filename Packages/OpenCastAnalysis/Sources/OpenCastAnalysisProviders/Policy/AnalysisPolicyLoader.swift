@@ -1,28 +1,13 @@
 import Foundation
 import OpenCastAnalysis
 
-/// Fetches, verifies, clamps and caches the analysis policy bundle, and says
-/// which bundle the app runs under.
-///
-/// The active bundle is a downloaded one only while it verifies against the
-/// pinned key, suits this app build, sits inside the clamp, is newer than the
-/// baked copy and was confirmed by the server within `maximumCacheAge`.
-/// Otherwise the baked copy is active and the snapshot names why. A rejected
-/// download never replaces an accepted one, and the loader never accepts a
-/// lower version than it already has.
-///
-/// A refresh reads the current signature first, then the immutable bundle of
-/// the version it names, and verifies the signature over those bytes, so it
-/// can never pair a signature with another generation's bundle. When the
-/// signature still names the accepted bundle only the signature is fetched.
-///
-/// Call `refreshIfDue()` at launch: it fetches when the last success is a day
-/// old, or an hour after a failure.
+/// The signature is read first, then the immutable bundle of the version it names, so a
+/// signature never pairs with another generation's bundle. A rejected download never replaces
+/// an accepted one, and no version lower than one already accepted is taken.
 public actor AnalysisPolicyLoader {
     public static let refreshInterval: TimeInterval = 24 * 60 * 60
     public static let failureRetryInterval: TimeInterval = 60 * 60
-    /// A downloaded bundle the server has not re-served for this long is no
-    /// longer trusted over the baked copy.
+    /// Counted from the server's last confirmation; past it, the baked copy wins.
     public static let maximumCacheAge: TimeInterval = 30 * 24 * 60 * 60
 
     public static var defaultDirectory: URL {
@@ -59,7 +44,6 @@ public actor AnalysisPolicyLoader {
         self.now = now
     }
 
-    /// The bundle to run under now.
     public func snapshot() -> AnalysisPolicySnapshot {
         loadIfNeeded()
         let lastFailure = metadata.lastFailure
@@ -85,7 +69,6 @@ public actor AnalysisPolicyLoader {
         return AnalysisPolicySnapshot(bundle: baked, source: .baked, fallbackReason: fallbackReason, lastRefreshFailure: lastFailure)
     }
 
-    /// Whether a refresh would fetch now.
     public func isRefreshDue() -> Bool {
         loadIfNeeded()
         guard let lastAttempt = metadata.lastAttemptAt else { return true }
@@ -94,7 +77,6 @@ public actor AnalysisPolicyLoader {
         return elapsed >= (metadata.lastFailure == nil ? Self.refreshInterval : Self.failureRetryInterval)
     }
 
-    /// Fetches when due, then returns the snapshot.
     public func refreshIfDue() async -> AnalysisPolicySnapshot {
         if isRefreshDue() {
             return await refresh()
@@ -102,7 +84,6 @@ public actor AnalysisPolicyLoader {
         return snapshot()
     }
 
-    /// Fetches now. Concurrent callers share one fetch.
     public func refresh() async -> AnalysisPolicySnapshot {
         loadIfNeeded()
         if let refreshTask {
@@ -131,8 +112,7 @@ public actor AnalysisPolicyLoader {
             }
             let bundleData: Data
             if let cached, cached.bundle.bundleVersion == binding.bundleVersion {
-                // Same version: the validator below proves the new signature
-                // covers the bytes already held, so nothing else is fetched.
+                // The validator below proves the new signature covers the bytes already held.
                 bundleData = cached.data
             } else {
                 bundleData = try await download(
@@ -165,7 +145,6 @@ public actor AnalysisPolicyLoader {
         try await fetcher.fetch(url, maximumBytes: maximumBytes)
     }
 
-    /// Reads the cache once per process and re-verifies it as if downloaded.
     private func loadIfNeeded() {
         guard !loaded else { return }
         loaded = true

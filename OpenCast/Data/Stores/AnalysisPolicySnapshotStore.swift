@@ -4,14 +4,10 @@ import OpenCastAnalysis
 import OpenCastAnalysisProviders
 import OpenCastTranscription
 
-/// The analysis policy the app runs under now, and the key pacers of this
-/// app session. Starts as the baked copy; `refreshIfDue()` adopts the
-/// loader's cached bundle, then fetches when due.
 @Observable
 final class AnalysisPolicySnapshotStore {
     private(set) var snapshot: AnalysisPolicySnapshot
-    /// One per app session; the analysis runs reuse it, so a rate limit one
-    /// run meets paces every later run on the same key.
+    /// One per app session, so a rate limit one run meets paces every later run on the same key.
     @ObservationIgnored let pacing: AnalysisKeyPacing
     @ObservationIgnored private let loader: AnalysisPolicyLoader?
 
@@ -25,9 +21,8 @@ final class AnalysisPolicySnapshotStore {
         snapshot = initial
     }
 
-    /// The model gateway's policy route. Until that route serves a bundle,
-    /// every refresh fails and the snapshot is the baked copy with its
-    /// `fallbackReason` set, by design.
+    /// Until the gateway's policy route serves a bundle, every refresh fails and the baked copy
+    /// stands with `fallbackReason` set; that is expected.
     static func live() -> AnalysisPolicySnapshotStore {
         AnalysisPolicySnapshotStore(loader: AnalysisPolicyLoader(
             appBuild: OpenCastAppVersion.buildNumber ?? 0,
@@ -35,7 +30,6 @@ final class AnalysisPolicySnapshotStore {
         ))
     }
 
-    /// UI tests and previews: a fixed snapshot that never fetches.
     static func fixed(_ snapshot: AnalysisPolicySnapshot) -> AnalysisPolicySnapshotStore {
         AnalysisPolicySnapshotStore(loader: nil, initial: snapshot)
     }

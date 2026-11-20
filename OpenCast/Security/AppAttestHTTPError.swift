@@ -7,7 +7,6 @@ nonisolated struct AppAttestHTTPError: Error, LocalizedError, Equatable, Sendabl
     let detail: String?
     var failure: OpenCastAdAnalysisFailure? = nil
 
-    /// A capped read stopped at its cap.
     static let responseTooLarge = AppAttestHTTPError(statusCode: -1, code: "response_too_large", detail: nil)
 
     var errorDescription: String? {
@@ -21,9 +20,8 @@ nonisolated struct AppAttestHTTPError: Error, LocalizedError, Equatable, Sendabl
         AppAttestRecoverableCredentialFailure.contains(statusCode: statusCode, code: code)
     }
 
-    /// A lost counter race specifically — the key is fine, only this
-    /// assertion's counter arrived stale, so one fresh assertion suffices
-    /// where the recoverable-credential path would delete and re-attest.
+    /// The key is fine and only this assertion's counter arrived stale, so one fresh assertion
+    /// suffices, with no delete and re-attest.
     var isCounterRaceFailure: Bool {
         statusCode == 401 && code == "invalid_counter"
     }

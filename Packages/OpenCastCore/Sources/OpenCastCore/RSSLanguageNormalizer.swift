@@ -1,8 +1,5 @@
 import Foundation
 
-/// Normalizes RSS 2.0 channel `<language>` values (BCP-47-ish tags like
-/// `en`, `en-us`, `de-DE`). Locale equivalence is resolved downstream by the
-/// speech stack; this only rejects values that are not language tags at all.
 public enum RSSLanguageNormalizer {
     public static func normalized(_ rawValue: String?) -> String? {
         guard let trimmed = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines),

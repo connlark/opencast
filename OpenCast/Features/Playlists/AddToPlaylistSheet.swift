@@ -1,8 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// Files one episode into manual playlists. Each row toggles membership as
-/// it is tapped, so the sheet only needs Done.
 struct AddToPlaylistSheet: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
@@ -102,8 +100,6 @@ struct AddToPlaylistSheet: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// Manual playlists, most recently updated first, until the first change
-    /// pins the order; playlists created after that lead the list.
     private var orderedManualPlaylists: [PlaylistSummary] {
         let manualPlaylists = appModel.playlists.playlists
             .filter { $0.kind == .manual }

@@ -1,8 +1,6 @@
 import Foundation
 import SQLite3
 
-/// Thin forwarders so the index's call sites keep their established names
-/// while the single shared implementation lives in `LocalCacheSQLite`.
 nonisolated extension SQLiteEpisodeSearchIndex {
     static func execute(
         _ sql: String,

@@ -51,9 +51,6 @@ enum OpenCastUITestSeedData {
     private static let detachedAdAnalysisEnvironmentKey = "OPENCAST_SEED_DETACHED_AD_ANALYSIS"
     private static let liveAdAnalysisTranscriptPathEnvironmentKey = "OPENCAST_SEED_LIVE_AD_ANALYSIS_TRANSCRIPT_PATH"
     private static let liveAdAnalysisResponsePathEnvironmentKey = "OPENCAST_SEED_LIVE_AD_ANALYSIS_RESPONSE_PATH"
-    /// A v3 transcript fixture (`segments` of id/start/end/text) that replaces
-    /// the two-line seeded transcript, absolute or relative to Documents, so a
-    /// device run can recap real speech through the seeded library.
     private static let transcriptFixturePathEnvironmentKey = "OPENCAST_SEED_TRANSCRIPT_FIXTURE_PATH"
     private static let episodeProgressPositionEnvironmentKey = "OPENCAST_SEED_EPISODE_PROGRESS_POSITION"
     private static let libraryNewEpisodesEnvironmentKey = "OPENCAST_SEED_LIBRARY_NEW_EPISODES"
@@ -61,20 +58,10 @@ enum OpenCastUITestSeedData {
     private static let playlistsEnvironmentKey = "OPENCAST_SEED_PLAYLISTS"
     private static let playlistQueueItemsEnvironmentKey = "OPENCAST_SEED_PLAYLIST_QUEUE_ITEMS"
     private static let playlistPlaybackSourceEnvironmentKey = "OPENCAST_SEED_PLAYLIST_PLAYBACK_SOURCE"
-    /// `top` or `bottom` turns Auto Add to Up Next on for the seeded show
-    /// with a watermark older than every seeded episode, so the launch pass
-    /// queues the ones that qualify.
     private static let upNextAutoAddEnvironmentKey = "OPENCAST_SEED_UP_NEXT_AUTO_ADD"
-    /// A raw `UpNextAutoAddLimit` value, such as `10`.
     private static let upNextAutoAddLimitEnvironmentKey = "OPENCAST_SEED_UP_NEXT_AUTO_ADD_LIMIT"
-    /// `top` seeds If Limit Reached as Only Add to Top.
     private static let upNextAutoAddLimitReachedEnvironmentKey = "OPENCAST_SEED_UP_NEXT_AUTO_ADD_LIMIT_REACHED"
-    /// `1`, with `OPENCAST_SEED_UP_NEXT_QUEUE`, queues each extra show's
-    /// episode (`OPENCAST_SEED_EXTRA_FEED_COUNT`) after the three seeded
-    /// rows, in show order, so Up Next can start at an Auto Add Limit.
     private static let upNextQueueIncludesExtraFeedsEnvironmentKey = "OPENCAST_SEED_UP_NEXT_QUEUE_INCLUDES_EXTRA_FEEDS"
-    /// Gives each extra feed's episode a completed download of a different
-    /// size, so the Downloads storage bar has several shows to draw.
     private static let extraFeedDownloadsEnvironmentKey = "OPENCAST_SEED_EXTRA_FEED_DOWNLOADS"
     private static let extraFeedDownloadSeconds = [720, 480, 240, 150, 90, 45, 20, 10]
     private static let missingPlaylistPodcastID = "https://example.com/ui-test-removed-show.xml"
@@ -147,8 +134,6 @@ enum OpenCastUITestSeedData {
         let audioURL = if usesBadAudioURL {
             "file:///tmp/opencast-ui-test-missing-audio.wav"
         } else if let overrideAudioFileURL, !overrideAudioFileURL.isEmpty {
-            // A bare filename resolves against Documents so device runs can
-            // pre-seed fixtures via `devicectl device copy to`.
             overrideAudioFileURL.contains("://")
                 ? overrideAudioFileURL
                 : URL.documentsDirectory.appending(path: overrideAudioFileURL).absoluteString
@@ -394,8 +379,7 @@ enum OpenCastUITestSeedData {
             ))
         }
 
-        // Automatic is stored as the absence of a row, as the settings store
-        // writes it.
+        // Automatic is stored as the absence of a row.
         let seededLibraryLayout = ProcessInfo.processInfo.environment[libraryLayoutEnvironmentKey]
             .flatMap(LibraryLayoutPreference.init(rawValue:))
         if let seededLibraryLayout, seededLibraryLayout != .automatic {
@@ -414,8 +398,6 @@ enum OpenCastUITestSeedData {
         ] == "1"
         let shouldSeedAdAnalysisSpanAtStart = includesAdAnalysisSpanAtStart
             || ProcessInfo.processInfo.environment["OPENCAST_SEED_AD_ANALYSIS_SPAN_AT_START"] == "1"
-        // The analysed episode without the download its transcript was made
-        // from, as after Remove Played: the analysis is current but detached.
         let shouldSeedDetachedAdAnalysis = ProcessInfo.processInfo.environment[
             detachedAdAnalysisEnvironmentKey
         ] == "1"
@@ -458,8 +440,8 @@ enum OpenCastUITestSeedData {
         }
 
         if includesFailedDownload, !shouldSeedCompletedDownload {
-            // Seeding `.downloading` is useless here: `DownloadStore.reconcile`
-            // flips in-flight records to `.failed` on load anyway.
+            // Not `.downloading`: `DownloadStore.reconcile` flips in-flight
+            // records to `.failed` on load.
             context.insert(
                 EpisodeDownloadRecord(
                     episodeID: episodeID,
@@ -518,9 +500,6 @@ enum OpenCastUITestSeedData {
         try context.save()
     }
 
-    /// The rows `UpNextAutoAddSettingsStore` reads: the seeded show's
-    /// watermark when it is on, and the limit and rule when asked for.
-    /// Unknown values seed nothing.
     private static func seedUpNextAutoAddSettings(isEnabled: Bool, context: ModelContext) {
         let environment = ProcessInfo.processInfo.environment
         if isEnabled {
@@ -543,11 +522,6 @@ enum OpenCastUITestSeedData {
         }
     }
 
-    /// Inserts rows directly, as the Up Next seed does, so the fixture needs no
-    /// store. The commute playlist holds an unplayed item, a played item and
-    /// one whose episode resolves nowhere, then any queued episodes passed in;
-    /// the second playlist stays empty; the third is a smart playlist on the
-    /// default rule, so it has no item rows.
     private static func seedPlaylists(
         seededEpisode: Episode,
         playedEpisode: Episode,
@@ -787,12 +761,11 @@ enum OpenCastUITestSeedData {
             transcriptFingerprint: fingerprint
         )
         // Seeds must carry the current policy or the staleness gate silently
-        // kills their zones; the outdated-policy variant exercises exactly that.
+        // kills their zones.
         let currentPolicy = OpenCastUITestWordBoundaryFixture.isEnabled
             ? EpisodeAdAnalysisContract.wordBoundaryPolicy : EpisodeAdAnalysisContract.expectedPolicy
         let policy = hasOutdatedPolicy ? "ads_only" : currentPolicy
-        // The low-confidence variant sits below the 0.8 auto-skip floor:
-        // rendered dimmed, never auto-skipped.
+        // The low-confidence variant sits below the 0.8 auto-skip floor.
         let confidence = hasLowConfidenceSpan ? 0.5 : 0.92
         var span = startsAtBeginning
             ? EpisodeAdAnalysisSpan(
@@ -820,9 +793,8 @@ enum OpenCastUITestSeedData {
         if OpenCastUITestWordBoundaryFixture.isEnabled {
             span = OpenCastUITestWordBoundaryFixture.anchored(span)
         }
-        // The second low-confidence span sits mid-timeline so the dimmed
-        // display-only rendering is legible in screenshots (the 4-9s zone
-        // hides behind the playhead thumb on a ~5-minute bar).
+        // Mid-timeline: the 4-9 s zone hides behind the playhead thumb on a
+        // ~5-minute bar.
         let spans = hasLowConfidenceSpan
             ? [
                 span,
@@ -1165,8 +1137,6 @@ enum OpenCastUITestSeedData {
         "ui-test-extra-episode-\(index)"
     }
 
-    /// Writes a fresh WAV of `durationSeconds` straight into the episode's
-    /// download slot, leaving the shared seed audio file untouched.
     private static func seedCompletedDownload(
         episodeID: String,
         podcastID: String,
@@ -1204,10 +1174,8 @@ enum OpenCastUITestSeedData {
         context.insert(download)
     }
 
-    /// The main show's badge fixtures around its subscription 20 days before
-    /// `seedNow`: three unplayed episodes count as new; a completed one, one
-    /// released before the subscription, and one not yet released don't.
-    /// The show's older seeded episodes predate the subscription, so its
+    /// Around a subscription 20 days before `seedNow`: three count as new; the
+    /// completed, pre-subscription and unreleased ones don't, so the show's
     /// Library count is exactly 3.
     private static func libraryNewEpisodeFixtures(
         seedNow: Date,
@@ -1239,10 +1207,9 @@ enum OpenCastUITestSeedData {
         }
     }
 
-    /// Two more shows, followed 60 days before `seedNow`, whose title order
-    /// (Aardvark, UI Test Show, Zephyr) differs from their newest-release
-    /// order (Zephyr, UI Test Show, Aardvark). Aardvark has one new episode;
-    /// Zephyr's 120 run past the badge's 99+ cap, all inside 30 days.
+    /// Title order (Aardvark, UI Test Show, Zephyr) differs from newest-release
+    /// order (Zephyr, UI Test Show, Aardvark); Zephyr's 120 new episodes run
+    /// past the badge's 99+ cap, all inside 30 days.
     private static func seedLibraryNewEpisodeShows(
         seedNow: Date,
         cacheStore: SQLiteLocalLibraryCacheStore,
@@ -1307,10 +1274,8 @@ enum OpenCastUITestSeedData {
         }
     }
 
-    /// Seed-side cache writer: feeds the same parsed-feed shapes production
-    /// refresh feeds into `upsertCache`, so harness data exercises the real
-    /// cache path — validator columns, language, and artwork-preview
-    /// admission included (finding 49).
+    /// Goes through `upsertCache` as a production refresh does, so seeded data
+    /// takes the real cache path.
     static func upsertSeedFeed(
         into cacheStore: SQLiteLocalLibraryCacheStore,
         feedURL: String,
@@ -1345,11 +1310,9 @@ enum OpenCastUITestSeedData {
             languageCode: languageCode
         )
         let snapshot = FeedSnapshot(podcast: podcast, episodes: episodes, fetchedAt: refreshedAt)
-        // Launch seeding is synchronous main-actor code, but the cache store
-        // is an actor; park until its seed turn completes so the rows are
-        // durable before the first read. The store's SQLite work never needs
-        // the main actor, so the bounded wait cannot deadlock. Test-only
-        // launch path — production never seeds.
+        // Launch seeding is synchronous main-actor code: block until the store
+        // actor's write lands so rows are durable before the first read. Its
+        // SQLite work never needs the main actor, so the wait cannot deadlock.
         let outcome = SeedWriteOutcome()
         let semaphore = DispatchSemaphore(value: 0)
         Task.detached {
@@ -1534,8 +1497,6 @@ enum OpenCastUITestSeedData {
     }
 }
 
-/// Carries the seed write's failure across the synchronous bridge in
-/// `upsertSeedFeed` back to the throwing caller.
 private nonisolated final class SeedWriteOutcome: @unchecked Sendable {
     private let lock = NSLock()
     private var error: (any Error)?

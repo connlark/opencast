@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// What a split's detail column shows when its section's path is empty.
 enum TwoPaneRootPlaceholder {
     case library
     case inbox
@@ -38,9 +37,8 @@ enum TwoPaneRootPlaceholder {
     }
 }
 
-/// The root of a split's detail stack: the page for the path's head, through
-/// the same destination switch the stacks use, or the placeholder. Only this
-/// root gets the close action; the pages pushed above it keep `dismiss`.
+/// Only this root gets the close action; the pages pushed above it keep
+/// `dismiss`.
 struct TwoPaneRootDetailRoot: View {
     let route: AppRoute?
     let placeholder: TwoPaneRootPlaceholder

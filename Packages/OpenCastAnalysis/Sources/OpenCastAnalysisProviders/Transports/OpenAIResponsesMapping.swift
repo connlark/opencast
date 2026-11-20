@@ -1,11 +1,8 @@
 import OpenCastAnalysis
 
-/// The canonical (Gemini-shaped) payload as an OpenAI Responses request,
-/// and a Responses body reduced to the provider-neutral answer: the shapes
-/// the evaluation harness's Responses adapter sent and read when the models
-/// were qualified.
+/// The models were qualified on these request and answer shapes, as the evaluation harness's
+/// Responses adapter sent and read them.
 public enum OpenAIResponsesMapping {
-    /// The structured-output format name per feature.
     public static func schemaName(for feature: AnalysisFeature) -> String {
         switch feature {
         case .adDetection: "podcast_ad_breaks"
@@ -13,21 +10,10 @@ public enum OpenAIResponsesMapping {
         }
     }
 
-    /// The Responses request: `instructions` from the system instruction;
-    /// `input` from the turns (the first as an `input_text` part, later ones
-    /// as plain text, `model` turns as `assistant`); strict `json_schema`
-    /// output with every object closed; `reasoning.effort` from the request's
-    /// thinking level (omitted when it has none); `max_output_tokens` from the
-    /// entry; no tools, nothing stored, foreground, the default service tier
-    /// and explicit prompt caching. `nil` when the payload has no user turn
-    /// or no response schema. Sampling settings in the canonical payload are
-    /// not sent.
     public static func body(for request: AnalysisProviderRequest) -> JSONValue? {
         body(feature: request.feature, model: request.model, payload: request.payload, thinking: request.thinking)
     }
 
-    /// The Responses request for a canonical payload sent for `feature` on
-    /// `model` at `thinking`.
     public static func body(
         feature: AnalysisFeature,
         model: AnalysisModelEntry,
@@ -86,8 +72,7 @@ public enum OpenAIResponsesMapping {
         return .object((body.objectMembers ?? []).filter { kept.contains($0.key) })
     }
 
-    /// `schema` with `additionalProperties: false` on every object, as
-    /// strict structured output requires.
+    /// Strict structured output requires `additionalProperties: false` on every object.
     public static func closedSchema(_ schema: JSONValue) -> JSONValue {
         switch schema {
         case .array(let values):
@@ -107,21 +92,9 @@ public enum OpenAIResponsesMapping {
         }
     }
 
-    /// A Responses body as the pipeline's answer, plus the billed usage.
-    /// Texts are the `output_text` parts of the `message` items, and only
-    /// when the whole envelope is a finished answer: the response completed
-    /// with no error or incomplete details, `output` is an array of objects,
-    /// every item that reports a status completed (reasoning included),
-    /// every message completed, and every message's `content` is an array
-    /// of `output_text` parts. Anything else yields no texts and a finish
-    /// reason other than `STOP`, always from ``AnalysisFinishReason``:
-    /// `MAX_TOKENS` for `max_output_tokens`, `CONTENT_FILTER`, `REFUSAL`,
-    /// `INCOMPLETE`, `FAILED`, or `MALFORMED_RESPONSE` for any shape or value
-    /// it does not know. No provider string is passed through.
+    /// Texts come only from a wholly finished answer; anything else ends with a finish reason
+    /// other than `STOP`. No provider string is passed through.
     public static func answer(fromBody text: String) -> (answer: AnalysisProviderAnswer, usage: AnalysisBilledUsage?) {
-        // A body nested past the provider bound is refused before it is
-        // parsed (what is read from it is walked level by level), so it is
-        // malformed too.
         guard !ProviderJSON.refusesBody(text), let root = ProviderJSON.parse(text), case .object = root,
               let status = root["status"]?.stringValue
         else {
@@ -140,9 +113,8 @@ public enum OpenAIResponsesMapping {
         var texts: [String] = []
         for item in output {
             guard case .object = item, let type = item["type"]?.stringValue else { return ended(.malformedResponse) }
-            // Any item that reports a status must have completed; one that
-            // did not makes the whole answer unfinished, whatever its type
-            // and whatever the response's own status says.
+            // An unfinished item of any type makes the whole answer unfinished, whatever the
+            // response's own status says.
             if !ProviderJSON.isAbsent(item["status"]) {
                 guard let itemStatus = item["status"]?.stringValue else { return ended(.malformedResponse) }
                 guard itemStatus == "completed" else { return ended(itemEnding(itemStatus)) }
@@ -163,13 +135,11 @@ public enum OpenAIResponsesMapping {
                 }
             }
         }
-        // The provider bound holds for the answer texts the pipeline parses
-        // next: one nested past it is malformed.
+        // The bound covers the answer texts too, which the pipeline parses next.
         guard !ProviderJSON.answerTooDeep(texts) else { return ended(.malformedResponse) }
         return (AnalysisProviderAnswer(texts: texts, finishReason: AnalysisFinishReason.stop.rawValue, usage: usage), billed)
     }
 
-    /// The ending of a response that did not complete cleanly.
     static func responseEnding(status: String, incompleteReason: String?, hasError: Bool) -> AnalysisFinishReason {
         switch status {
         case "failed", "cancelled":
@@ -188,8 +158,6 @@ public enum OpenAIResponsesMapping {
         }
     }
 
-    /// The ending of an output item that reports a status other than
-    /// `completed`.
     static func itemEnding(_ status: String) -> AnalysisFinishReason {
         switch status {
         case "incomplete", "in_progress", "queued": .incomplete
@@ -198,8 +166,6 @@ public enum OpenAIResponsesMapping {
         }
     }
 
-    /// `usage` as billed: `input_tokens` and `output_tokens` required,
-    /// cached and cache-write input and reasoning output default to 0.
     static func billedUsage(_ usage: JSONValue?) -> AnalysisBilledUsage? {
         guard let usage, case .object = usage,
               let input = ProviderJSON.count(usage["input_tokens"]),
@@ -224,9 +190,6 @@ public enum OpenAIResponsesMapping {
         return AnalysisBilledUsage(input: input, cached: cached, write: write, output: output, reasoning: reasoning)
     }
 
-    /// Billed usage in the pipeline's Gemini-shaped counts: prompt = input,
-    /// candidates = output less reasoning, thoughts = reasoning, total =
-    /// prompt plus the larger of output and reasoning.
     public static func neutralUsage(_ billed: AnalysisBilledUsage) -> AnalysisUsage {
         AnalysisUsage(
             promptTokenCount: billed.input,

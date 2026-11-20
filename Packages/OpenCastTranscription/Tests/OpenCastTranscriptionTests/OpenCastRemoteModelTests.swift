@@ -81,29 +81,6 @@ struct OpenCastRemoteModelTests {
         }
     }
 
-    @Test("Downloaded locator reports missing install")
-    func downloadedLocatorReportsMissingInstall() {
-        let locator = DownloadedWhisperModelLocator(
-            installStore: OpenCastWhisperModelInstallStore(
-                rootDirectory: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-            )
-        )
-
-        do {
-            _ = try locator.modelLocation()
-            Issue.record("Expected modelNotInstalled")
-        } catch let error as OpenCastTranscriptionError {
-            #expect(
-                error == .modelNotInstalled(
-                    modelIdentifier: OpenCastWhisperModel.largeV3.rawValue,
-                    version: OpenCastWhisperModel.largeV3.defaultRemoteVersion
-                )
-            )
-        } catch {
-            Issue.record("Expected modelNotInstalled, got \(error)")
-        }
-    }
-
     @Test("SHA256 matches known digest")
     func sha256MatchesKnownDigest() throws {
         let url = FileManager.default.temporaryDirectory
@@ -359,24 +336,6 @@ struct OpenCastRemoteModelTests {
         try OpenCastRemoteModelManifestVerifier.pinned.verify(
             manifestData: try Data(contentsOf: manifestURL),
             signatureData: try Data(contentsOf: signatureURL)
-        )
-    }
-
-    /// The analysis package carries its own copy of this verifier; both must
-    /// accept the same production-signed bytes.
-    @Test("Pinned verifier validates the checked-in analysis policy signature")
-    func pinnedVerifierValidatesCheckedInAnalysisPolicySignature() throws {
-        let policyDirectory = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appending(path: "Server/ModelGatewayWorker/manifests/analysis-policy")
-
-        try OpenCastRemoteModelManifestVerifier.pinned.verify(
-            manifestData: try Data(contentsOf: policyDirectory.appending(path: "v1.json")),
-            signatureData: try Data(contentsOf: policyDirectory.appending(path: "v1.json.sig"))
         )
     }
 

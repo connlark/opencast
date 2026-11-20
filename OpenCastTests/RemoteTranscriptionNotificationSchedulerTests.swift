@@ -29,8 +29,6 @@ struct RemoteTranscriptionNotificationSchedulerTests {
         #expect(request.identifier.hasPrefix(RemoteTranscriptionNotificationScheduler.threadIdentifier))
         #expect(request.content.sound != nil)
         #expect(request.trigger == nil)
-        // The delegate routes only "episode" and "diagnostic"; this kind is
-        // a deliberate no-op tap.
         let payload = request.content.userInfo["opencast"] as? [String: Any]
         #expect(payload?["kind"] as? String == "remote-transcription")
     }
@@ -54,31 +52,35 @@ struct RemoteTranscriptionNotificationSchedulerTests {
         #expect(center.authorizationStatusReadCount == 0)
     }
 
-    @Test("Authorization gates delivery: denied and undetermined suppress, provisional delivers")
-    func authorizationTable() async {
-        for (status, expectsDelivery) in [
-            (UNAuthorizationStatus.authorized, true),
-            (.provisional, true),
-            (.ephemeral, true),
-            (.denied, false),
-            (.notDetermined, false),
-        ] {
-            let center = FakeAdFreePassNotificationCenter()
-            center.authorizationStatusValue = status
-            let scheduler = RemoteTranscriptionNotificationScheduler(center: center)
+    @Test(
+        "Authorization gates delivery: denied and undetermined suppress, provisional delivers",
+        arguments: [
+            (UNAuthorizationStatus.authorized, CompletionDeliveryDecision.scheduled, 1),
+            (.provisional, .scheduled, 1),
+            (.ephemeral, .scheduled, 1),
+            (.denied, .suppressed(.unauthorized), 0),
+            (.notDetermined, .suppressed(.unauthorized), 0),
+        ]
+    )
+    func authorizationTable(
+        status: UNAuthorizationStatus,
+        expected: CompletionDeliveryDecision,
+        addedCount: Int
+    ) async {
+        let center = FakeAdFreePassNotificationCenter()
+        center.authorizationStatusValue = status
+        let scheduler = RemoteTranscriptionNotificationScheduler(center: center)
 
-            let decision = await scheduler.scheduleIfNeeded(
-                phase: .completed,
-                episodeTitle: "Episode",
-                deliveryOwner: .local,
-                isSceneActive: false
-            )
+        let decision = await scheduler.scheduleIfNeeded(
+            phase: .completed,
+            episodeTitle: "Episode",
+            deliveryOwner: .local,
+            isSceneActive: false
+        )
 
-            let expected: CompletionDeliveryDecision = expectsDelivery ? .scheduled : .suppressed(.unauthorized)
-            #expect(decision == expected, "status \(status)")
-            #expect(center.addedRequests.count == (expectsDelivery ? 1 : 0), "status \(status)")
-            #expect(center.authorizationStatusReadCount == 1, "status \(status)")
-        }
+        #expect(decision == expected)
+        #expect(center.addedRequests.count == addedCount)
+        #expect(center.authorizationStatusReadCount == 1)
     }
 
     @Test("A remote owner suppresses the completion and a failure before reading authorization, but never the paused notification")

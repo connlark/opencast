@@ -1,29 +1,18 @@
 import Foundation
 import OpenCastAnalysis
 
-/// Sends canonical payloads through the opencast-funded trial service,
-/// which adds opencast's Gemini key and forwards the request unchanged. The
-/// transport holds no key: each window goes out as the service's wrapper
-/// (`feature`, `run_id`, `window_index`, the Gemini body as `request`, and
-/// the call's own budget as `timeout_seconds`) through an
-/// ``AnalysisTrialProxyExchange``. A refusal from the service itself (a
-/// body whose `error` is a string) is read from its closed vocabulary;
-/// every other reply is Gemini's and is read as the Gemini transport reads
-/// it. A busy service (another window of this install is in flight) is
-/// waited out inside the send, a fresh post each time, and never spends the
-/// pipeline's retries.
+/// Holds no key: the trial service adds opencast's Gemini key and forwards the request unchanged.
+/// A busy service (another window of this install in flight) is waited out inside the send, a
+/// fresh post each time, never spending the pipeline's retries.
 public struct TrialProxyAnalysisTransport: AnalysisProviderTransport {
     public static let analyzePath = "/v1/trial/analyze"
     public static let statusPath = "/v1/trial/status"
-    /// The largest wrapper the service accepts, in bytes.
+    // Limits the service enforces.
     public static let maximumWrapperBytes = 1_572_864
-    /// The highest `window_index` the service accepts.
     public static let maximumWindowIndex = 1_023
-    /// The longest `timeout_seconds` the service accepts.
     public static let maximumTimeoutSeconds = 600
-    /// Posts after the first that a busy service may ask for in one send.
+
     public static let maximumBusyRetries = 8
-    /// The longest busy wait the service asks for.
     public static let maximumBusyWaitSeconds = 10
 
     public let runID: String
@@ -31,10 +20,6 @@ public struct TrialProxyAnalysisTransport: AnalysisProviderTransport {
     private let clock: any AnalysisClock
     private let exchange: AnalysisProviderExchange
 
-    /// - Parameters:
-    ///   - runID: The run record's id: 1 to 64 of `[A-Za-z0-9_-]`. Any other
-    ///     id refuses every send before anything is sent.
-    ///   - observer: Receives a record of every send.
     public init(
         runID: String,
         exchange proxy: any AnalysisTrialProxyExchange,
@@ -68,9 +53,7 @@ public struct TrialProxyAnalysisTransport: AnalysisProviderTransport {
         )
     }
 
-    /// Why a request cannot go to the service at all; `nil` when it can.
-    /// The size check uses the widest `timeout_seconds`, so no later post of
-    /// the same request can be larger.
+    /// The size check uses the widest `timeout_seconds`, so no later post of the request is larger.
     func refusal(for request: AnalysisProviderRequest) -> AnalysisProviderErrorClassification? {
         guard Self.isValidRunID(runID),
               (0...Self.maximumWindowIndex).contains(request.purpose.windowIndex ?? 0)
@@ -84,9 +67,6 @@ public struct TrialProxyAnalysisTransport: AnalysisProviderTransport {
         return nil
     }
 
-    /// Posts the window, then again after each busy wait while the service
-    /// asks for one, the retries last, and the wait and one more second fit
-    /// before the deadline. The last reply goes back as it is.
     private func post(
         _ request: AnalysisProviderRequest,
         deadline: Double,
@@ -120,10 +100,8 @@ public struct TrialProxyAnalysisTransport: AnalysisProviderTransport {
         }
     }
 
-    /// The service's wrapper for one post. `request` is the canonical
-    /// payload as a JSON object, written by the same writer that wrote
-    /// `payloadText`, so its bytes are the Gemini body the direct route
-    /// sends. `timeout_seconds` is the whole seconds left, 1 to 600.
+    /// `request` goes through the writer that wrote `payloadText`, so its bytes are the Gemini body
+    /// the direct route sends.
     static func wrapper(_ request: AnalysisProviderRequest, runID: String, timeoutSeconds: Double) -> String {
         let seconds = timeoutSeconds.isNaN
             ? 1
@@ -144,9 +122,6 @@ public struct TrialProxyAnalysisTransport: AnalysisProviderTransport {
         }
     }
 
-    /// The wait a busy refusal asks for (its body's `retry_after_seconds`,
-    /// else its `Retry-After`, else the longest), at least a second and at
-    /// most ``maximumBusyWaitSeconds``; `nil` for any other reply.
     static func busyWaitSeconds(_ response: AnalysisHTTPResponse) -> Int? {
         guard response.status == 409,
               let text = String(validating: response.body, as: UTF8.self),
@@ -159,10 +134,8 @@ public struct TrialProxyAnalysisTransport: AnalysisProviderTransport {
         return min(max(asked, 1), maximumBusyWaitSeconds)
     }
 
-    /// Classifies a non-2xx reply: the service's own refusals by their code,
-    /// everything else (Gemini's errors, passed through) by the Gemini table.
-    /// A passed-through error is about opencast's key, never the listener's,
-    /// so a trial run cannot produce a free-tier answer.
+    /// A passed-through Gemini error is about opencast's key, never the listener's, so a trial run
+    /// never reports free tier.
     public static func classify(status: Int, retryAfter: String?, body: String) -> AnalysisProviderErrorClassification {
         guard let refusal = TrialProxyRefusal(body: body) else {
             var classification = GeminiProviderErrors.classify(status: status, retryAfter: retryAfter, body: body)
@@ -209,9 +182,7 @@ extension TrialProxyAnalysisTransport: CustomStringConvertible, CustomDebugStrin
     public var customMirror: Mirror { Mirror(self, children: [:]) }
 }
 
-/// A refusal the trial service answers itself: `{"error": "<code>"}` with a
-/// string `error`, optionally `retry_after_seconds`. Gemini's errors carry
-/// an object there and are not refusals.
+/// The service's own refusals carry a string `error`; Gemini's errors carry an object there.
 struct TrialProxyRefusal: Sendable, Hashable {
     enum Code: Sendable, Hashable {
         case trialExhausted
@@ -223,9 +194,7 @@ struct TrialProxyRefusal: Sendable, Hashable {
         case providerTimeout
         case providerUnreachable
         case providerBodyTooLarge
-        /// Any other code: a request the service refused (`request_invalid`,
-        /// `payload_too_large`, an App Attest code the app's recovery did not
-        /// clear, an operator-only code). A device bug, never retried.
+        /// A request the service refused: a device bug, never retried.
         case other
 
         init(_ code: String) {
@@ -261,8 +230,7 @@ struct TrialProxyRefusal: Sendable, Hashable {
     }
 }
 
-/// The trial transport supplies its own exchange; the shared send path's
-/// client is never called.
+/// Never called: the trial transport supplies its own exchange.
 private struct TrialProxyUnusedHTTPClient: AnalysisHTTPClient {
     func send(
         _ request: AnalysisHTTPRequest,

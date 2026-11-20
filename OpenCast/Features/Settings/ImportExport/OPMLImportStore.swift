@@ -6,8 +6,7 @@ import SwiftData
 @Observable
 final class OPMLImportStore {
     private nonisolated static let maximumImportFileByteCount = 10 * 1_024 * 1_024
-    /// Hard cap on unique outlines per import; beyond it the import aborts
-    /// before subscribing anything (security triage P2).
+    /// Beyond this many unique outlines the import aborts before subscribing anything.
     nonisolated static let maximumImportedFeedCount = 300
 
     private(set) var state = OPMLImportState.idle

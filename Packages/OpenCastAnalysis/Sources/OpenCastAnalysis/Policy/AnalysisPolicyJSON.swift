@@ -1,8 +1,6 @@
 import Foundation
 
-/// A JSON value carried verbatim by the policy bundle, such as a feature's
-/// response schema. Numbers are `Double`; the schemas the bundle carries hold
-/// none, so nothing round-trips through a lossy conversion.
+/// Numbers decode as `Double`, which is lossless only because a bundle's schemas hold no numbers.
 public enum AnalysisPolicyJSON: Sendable, Hashable, Codable {
     case null
     case bool(Bool)
@@ -40,8 +38,7 @@ public enum AnalysisPolicyJSON: Sendable, Hashable, Codable {
         }
     }
 
-    /// Compact JSON with sorted keys, the form the workers' `serde_json`
-    /// writes for the same value.
+    /// The form the workers' `serde_json` writes for the same value.
     public func sortedKeysData() throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]

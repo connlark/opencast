@@ -2,10 +2,8 @@ import OpenCastAnalysis
 import OpenCastAnalysisProviders
 import SwiftUI
 
-/// Adds, tests, re-syncs or removes one provider's key. The typed key lives
-/// only in the field's state: it is turned into an `AnalysisProviderKey`
-/// inside Test and Save, and cleared after Save and on dismissal. A test
-/// never changes what is stored.
+/// The typed key lives only in the field's state: it becomes an `AnalysisProviderKey` only
+/// inside Test and Save, and is cleared after Save and on dismissal.
 struct AnalysisProviderKeySheet: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
@@ -20,9 +18,8 @@ struct AnalysisProviderKeySheet: View {
     @State private var testTask: Task<Void, Never>?
     @State private var errorMessage: String?
     @State private var isConfirmingRemove = false
-    /// What the confirmation said, so Remove deletes exactly that: a synced
-    /// copy that arrives while the dialog is open is not part of it. Unless
-    /// the synced copy is known to be absent, Remove includes it.
+    /// What the confirmation said, so Remove deletes exactly that: a synced copy that arrives
+    /// while the dialog is open is not part of it.
     @State private var removalScope = AnalysisSyncedCopyStatus.absent
     @State private var isConfirmingSyncedCopyRemoval = false
 
@@ -188,8 +185,6 @@ struct AnalysisProviderKeySheet: View {
         AnalysisProviderKeyFormat.isPlausible(draft.text)
     }
 
-    /// A whole typed key, or (with the field empty) a changed sync choice
-    /// for the saved key.
     private var canSave: Bool {
         if hasDraft {
             return isDraftPlausible
@@ -304,10 +299,8 @@ struct AnalysisProviderKeySheet: View {
         dismiss()
     }
 
-    /// Only this call's failure decides: a save with sync off that wrote the
-    /// key and failed at deleting the synced copy saved it here, so the
-    /// typed key goes and the sheet says what remains; any other failure
-    /// keeps the typed key.
+    /// A sync-off save that wrote the key but failed to delete the synced copy did save it here,
+    /// so the typed key goes; any other failure keeps it.
     private func showSaveFailure(_ error: AnalysisProviderKeyStoreError) {
         if error.savedLocallyLeavingSyncedCopy(syncs: syncs) {
             errorMessage = AIServicesCopy.syncOffIncomplete

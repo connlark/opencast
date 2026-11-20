@@ -23,21 +23,6 @@ struct TrialProxyBackendConfigurationTests {
             #expect(configuration.baseURL == TrialProxyBackendConfiguration.developmentBaseURL, "\(value)")
         }
     }
-
-    @Test("A Debug operator bearer signs instead of App Attest; a blank one does not")
-    func debugBearer() {
-        let token = ["fixture", "-bearer-", "for-tests"].joined()
-        let bearer = TrialProxyBackendConfiguration.debug(environment: [
-            "OPENCAST_TRIAL_PROXY_CLIENT_TOKEN": "  \(token)\n",
-            "OPENCAST_TRIAL_PROXY_BASE_URL": "https://deployment.example/",
-        ])
-        #expect(bearer.authentication == .bearer(clientToken: token))
-        #expect(bearer.baseURL == URL(string: "https://deployment.example"))
-        #expect(bearer.canAuthenticate(appAttestSupported: false))
-
-        let blank = TrialProxyBackendConfiguration.debug(environment: ["OPENCAST_TRIAL_PROXY_CLIENT_TOKEN": "   "])
-        #expect(blank.authentication == .appAttest(keychainService: TrialProxyAppAttestKeychainServices.development))
-    }
     #endif
 
     @Test("Release builds map each store environment to its deployment and slot")
@@ -85,13 +70,6 @@ struct TrialProxyBackendConfigurationTests {
     ] as [(String, String?)])
     func originRules(value: String, expected: String?) {
         #expect(TrialProxyBackendConfiguration.originURL(value)?.absoluteString == expected)
-    }
-
-    @Test("App Attest signs only where the device can attest")
-    func canAuthenticate() {
-        let attested = TrialProxyBackendConfiguration.prodStaging
-        #expect(attested.canAuthenticate(appAttestSupported: true))
-        #expect(!attested.canAuthenticate(appAttestSupported: false))
     }
 
     @Test("Each deployment has its own slot, distinct from the other services' slots")

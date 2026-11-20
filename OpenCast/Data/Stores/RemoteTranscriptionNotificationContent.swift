@@ -1,7 +1,3 @@
-/// Copy for the plain Transcribe Remotely local notification. `nil` means
-/// the run ending never notifies: live phases, a cancel (the person is in
-/// the app for their own, and a server cancel shares the phase), and a park
-/// other than expiration.
 struct RemoteTranscriptionNotificationContent: Equatable {
     enum Kind: Equatable {
         case completed
@@ -51,16 +47,13 @@ struct RemoteTranscriptionNotificationContent: Equatable {
         }
     }
 
-    /// Completion and failure belong to the job's delivery owner; the
-    /// paused copy is local lifecycle feedback and posts for either owner.
+    /// The paused copy is local lifecycle feedback, so it posts whoever owns delivery.
     var honorsDeliveryOwner: Bool {
         kind != .paused
     }
 
-    /// The paused copy both remote flows post for a park, or nil when the
-    /// park stays silent. Only an expiration park is certain to happen while
-    /// the person is away: a connection loss can surface as the app returns
-    /// from suspension, and the next activation re-attaches either one.
+    /// Only an expiration park is certain to happen while the person is away; a connection
+    /// loss can surface as the app returns from suspension.
     static func pausedCopy(for exit: RemoteTranscriptionJobExit) -> (title: String, body: String)? {
         guard exit == .parked else {
             return nil

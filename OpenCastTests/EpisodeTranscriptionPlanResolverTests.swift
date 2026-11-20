@@ -21,30 +21,6 @@ struct EpisodeTranscriptionPlanResolverTests {
         #expect(harness.provider.installRequests.isEmpty)
     }
 
-    @Test("Missing podcast language resolves as en-US")
-    func missingLanguageResolvesAsEnUS() async throws {
-        let harness = Harness()
-
-        let plan = try await harness.resolver.resolve(requestedEngine: .productDefault, podcastLanguageCode: nil)
-
-        #expect(plan.runEngine == .appleSpeech)
-        #expect(plan.languageCode == "en-US")
-    }
-
-    @Test("Region-less language resolves through locale equivalence")
-    func regionlessLanguageResolvesThroughEquivalence() async throws {
-        let harness = Harness(
-            resolvedLocalesByLanguage: ["fr": "fr_FR"],
-            statusesByLocaleIdentifier: ["fr_FR": .installed]
-        )
-
-        let plan = try await harness.resolver.resolve(requestedEngine: .productDefault, podcastLanguageCode: "fr")
-
-        #expect(plan.runEngine == .appleSpeech)
-        #expect(plan.modelIdentity.modelIdentifier == "apple-speech-transcriber.fr_FR")
-        #expect(plan.languageCode == "fr")
-    }
-
     @Test("Product default installs installable assets then picks Apple")
     func productDefaultInstallsThenPicksApple() async throws {
         let harness = Harness(statusesByLocaleIdentifier: ["en_US": .supported])
@@ -168,14 +144,12 @@ struct EpisodeTranscriptionPlanResolverTests {
 
         init(
             isTranscriberAvailable: Bool = true,
-            resolvedLocalesByLanguage: [String: String] = ["en-us": "en_US"],
             statusesByLocaleIdentifier: [String: AppleSpeechAssetLocaleStatus] = ["en_US": .installed],
             tinyInstalled: Bool = false,
             prefersRevocationDurableEngine: Bool = false
         ) {
             provider = FakeAppleSpeechAssetProvider(
                 isTranscriberAvailable: isTranscriberAvailable,
-                resolvedLocalesByLanguage: resolvedLocalesByLanguage,
                 statusesByLocaleIdentifier: statusesByLocaleIdentifier
             )
             transcriptionModels = TranscriptionModelStore(

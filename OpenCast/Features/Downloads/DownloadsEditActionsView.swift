@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// Edit mode's actions under the list. They confirm with alerts: from
-/// this bar a confirmation dialog's popover sits beside its button and
-/// zooms in from the wrong point.
+/// Confirms with alerts: from this bar a confirmation dialog's popover zooms in from the
+/// wrong point.
 struct DownloadsEditActionsView: View {
     let selectedCount: Int
     let playedDownloadCount: Int
@@ -61,8 +60,7 @@ struct DownloadsEditActionsView: View {
         }
     }
 
-    /// Short enough to stay on one line beside Remove Played; the count
-    /// appears once something is selected.
+    /// Short enough to stay on one line beside Remove Played.
     private var deleteTitle: String {
         selectedCount == 0 ? "Delete" : "Delete (\(selectedCount))"
     }

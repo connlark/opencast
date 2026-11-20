@@ -1,19 +1,14 @@
 import Foundation
 import NaturalLanguage
 
-/// Word-vector embeddings for episode lines: the mean of the on-device
-/// `NLEmbedding.wordEmbedding` vectors of a text's words (lowercased,
-/// stop-listed words skipped), scaled to unit length. The NaturalLanguage
-/// objects are not Sendable, so every call creates, uses and drops its own
-/// and only plain vectors leave it.
+/// NaturalLanguage objects are not Sendable: every call creates, uses and drops its own, and only
+/// plain vectors leave it.
 nonisolated enum EpisodeWordVectorEmbedder {
     private static let languageSampleCount = 100
     private static let cancellationStride = 64
     private static let minimumLinesPerTask = 128
     private static let maximumConcurrentTasks = 4
 
-    /// The dominant language of up to the first 100 lines; English when the
-    /// recognizer cannot tell.
     static func language(for lines: [EpisodeMetadataLine]) -> NLLanguage {
         let recognizer = NLLanguageRecognizer()
         recognizer.processString(lines.prefix(languageSampleCount).map(\.semanticText).joined(separator: "\n"))
@@ -23,9 +18,7 @@ nonisolated enum EpisodeWordVectorEmbedder {
         return language
     }
 
-    /// nil when the language has no word embedding on this device. Long shows
-    /// embed in a few concurrent chunks, each with its own embedding; a line's
-    /// vector depends only on its text, so the result matches a serial pass.
+    /// A line's vector depends only on its text, so the concurrent chunks match a serial pass.
     @concurrent
     static func index(lines: [EpisodeMetadataLine], language: NLLanguage) async throws -> EpisodeVectorIndex? {
         guard let dimension = NLEmbedding.wordEmbedding(for: language)?.dimension else {
@@ -60,8 +53,6 @@ nonisolated enum EpisodeWordVectorEmbedder {
         return EpisodeVectorIndex(dimension: dimension, positions: lines.map(\.position), vectors: vectors)
     }
 
-    /// The vector of the request with its stop-listed words removed; nil when
-    /// the language has no embedding or no word of the request is known to it.
     @concurrent
     static func queryVector(_ query: String, language: NLLanguage) async -> [Float]? {
         guard let embedding = NLEmbedding.wordEmbedding(for: language) else {

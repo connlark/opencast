@@ -1,13 +1,3 @@
-/// Copy for the queue-terminal completion notification. `nil` means the
-/// terminal never notifies. A drained queue reports its locally owned
-/// results; a remote owner delivers its own. An on-device interrupt explains
-/// the pause — the system posts an unsuppressable "Task failed" banner when
-/// it revokes the continued-processing task, so this is the honest
-/// counterpart telling the user nothing is lost — and an expiration park of
-/// a cloud item says the server is still working. Model consent, a cloud
-/// user cancel and the other cloud parks stay silent (the queue screen
-/// carries those). Work nobody tapped stays quiet: a pause that holds such
-/// an item to resume by itself, and the results of new episodes' items.
 struct AdFreePassCompletionNotificationContent: Equatable {
     let title: String
     let body: String

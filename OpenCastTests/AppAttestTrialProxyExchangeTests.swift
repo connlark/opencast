@@ -11,14 +11,12 @@ struct AppAttestTrialProxyExchangeTests {
     static let analyzePath = "/v1/trial/analyze"
     static let payload = #"{"feature":"ad_detection","request":{"note":"a/b ü"},"run_id":"run-1","timeout_seconds":90,"window_index":0}"#
 
-    /// A Keychain slot of its own for one test. Key ids are unique per
-    /// test too: the assertion gate is process-wide per key id.
+    /// Key ids are unique per test: the assertion gate is process-wide per key id.
     struct Slot {
         let service = "opencast-trial-exchange-tests-\(UUID().uuidString)"
         let seededKeyID = "seeded-key-\(UUID().uuidString)"
         var keychain: AppAttestKeychain { AppAttestKeychain(service: service) }
 
-        /// Registers a key in the slot, as an earlier post would have.
         func seed() throws -> (installID: String, keyID: String) {
             let installID = try keychain.loadOrCreateInstallID()
             try keychain.saveAppAttestKeyID(seededKeyID)
@@ -220,8 +218,6 @@ struct AppAttestTrialProxyExchangeTests {
         #expect(transport.paths.count { $0 == "/v1/app-attest/register" } == 1)
         #expect(transport.paths.count { $0 == Self.analyzePath } == 2)
 
-        // A registration that fails after the rejection also leaves the
-        // rejection as the reply.
         let failingSlot = Slot()
         defer { failingSlot.remove() }
         _ = try failingSlot.seed()
@@ -304,7 +300,6 @@ struct AppAttestTrialProxyExchangeTests {
             _ = try await oversized.value
         }
         backstop.cancel()
-        // The load was stopped (cancelled) while its body was still open.
         for _ in 0..<500 where !TrialStubURLProtocol.isStopped("capped-large.example") {
             try await Task.sleep(for: .milliseconds(10))
         }
@@ -420,8 +415,7 @@ nonisolated final class TrialEventLog: Sendable {
     }
 }
 
-/// Opens once; every waiter, earlier or later, then proceeds. Waiting does
-/// not stop for cancellation.
+/// Waiting does not stop for cancellation.
 nonisolated final class TrialLatch: Sendable {
     private let state = Mutex<(open: Bool, waiters: [CheckedContinuation<Void, Never>])>((false, []))
 
@@ -446,8 +440,6 @@ nonisolated final class TrialLatch: Sendable {
     }
 }
 
-/// Issues assertions tagged with an increasing counter, as DeviceCheck's
-/// issuance-ordered counter, and records what each one signed.
 nonisolated final class TrialAssertionService: AppAttestServiceProtocol {
     struct Issued: Sendable, Equatable {
         var keyID: String
@@ -516,9 +508,7 @@ nonisolated struct TrialCapturedEnvelope: Decodable, Sendable, Equatable {
     }
 }
 
-/// Answers the deployment's challenge and register routes, and every other post
-/// from its script (200 `{}` once the script runs out), recording each
-/// request. Reads whole bodies, so the cap is the protocol's default check.
+/// Reads whole bodies, so the cap is the protocol's default check.
 nonisolated final class TrialRoutingTransport: AppAttestHTTPTransport {
     enum Step: Sendable {
         case respond(Int, headers: [String: String] = [:], body: String)
@@ -605,11 +595,9 @@ nonisolated final class TrialRoutingTransport: AppAttestHTTPTransport {
     }
 }
 
-/// Serves canned replies by host for the URLSession capped read.
 nonisolated final class TrialStubURLProtocol: URLProtocol, @unchecked Sendable {
     enum Behavior: Sendable {
         case respond(status: Int, body: Data)
-        /// Sends the chunks with no Content-Length and never finishes.
         case streamUnfinished(status: Int, chunks: [Data])
         case redirect(to: URL)
     }

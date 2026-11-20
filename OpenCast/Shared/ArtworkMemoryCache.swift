@@ -3,17 +3,15 @@ import SwiftUI
 // NSCache synchronizes the pixel store; aliasLock protects the key maps.
 // MemoryWarningObserver only stores its token for deinit removal.
 nonisolated final class ArtworkMemoryCache: @unchecked Sendable {
-    /// Decoded pixels keyed by content hash and pixel size. Different episodes
-    /// often publish identical cover bytes at different URLs; keying by content
-    /// retains and charges such an image once however many URLs alias it.
+    /// Keyed by content hash and pixel size: episodes often publish identical cover bytes at
+    /// different URLs, and a content key holds and charges such an image once.
     private let images = NSCache<NSString, UIImage>()
     /// `ArtworkRequest.cacheKey` (URL and size) to content key.
     private var exactAliases: [String: String] = [:]
     /// `ArtworkRequest.imageKey` (URL) to the content key of its latest decode at any size.
     private var latestAliases: [String: String] = [:]
-    /// `ArtworkRequest.imageKey` (URL) to the biggest decode made for it. The
-    /// Now Playing surfaces need the largest bitmap the app holds, not the one
-    /// a list row happened to decode last.
+    /// `ArtworkRequest.imageKey` (URL) to its biggest decode: Now Playing needs the largest
+    /// bitmap held, not the one a list row decoded last.
     private var largestAliases: [String: LargestDecode] = [:]
     private let aliasLock = NSLock()
     private let aliasLimit: Int
@@ -56,14 +54,8 @@ nonisolated final class ArtworkMemoryCache: @unchecked Sendable {
         images.object(forKey: key as NSString)
     }
 
-    /// The cached decode for the request's URL that actually reaches the
-    /// requested pixel size: the exact entry when one exists, otherwise the
-    /// biggest decode that is still large enough.
-    ///
-    /// A decode is only ever as large as its source, so the check runs against
-    /// the decoded bitmap rather than the requested size. Artwork whose source
-    /// is smaller than the request never qualifies — the caller has to load it
-    /// to find out.
+    /// A decode is only as large as its source, so the check runs against the decoded bitmap,
+    /// not the requested size; artwork with a smaller source never qualifies.
     func imageMeetingSize(for request: ArtworkRequest) -> UIImage? {
         if let image = image(for: request), meetsPixelSize(image, request) {
             return image
@@ -102,10 +94,8 @@ nonisolated final class ArtworkMemoryCache: @unchecked Sendable {
         }
     }
 
-    /// Keeps the biggest decode of the URL's current bytes. A thumbnail
-    /// decoded after a full-size one must not displace it, but a decode of
-    /// different bytes for the URL (a revalidation) does at any size: the
-    /// old bitmap can stay resident long after it stopped being the artwork.
+    /// A smaller decode of the same bytes never displaces the biggest one, but a decode of new
+    /// bytes (a revalidation) does at any size: the old bitmap is no longer the artwork.
     private func recordLargestDecode(_ request: ArtworkRequest, contentKey: String) {
         let candidate = LargestDecode(
             contentKey: contentKey,
@@ -123,9 +113,7 @@ nonisolated final class ArtworkMemoryCache: @unchecked Sendable {
         largestAliases[request.imageKey] = candidate
     }
 
-    /// Drops aliases whose image the store evicted; if live aliases alone exceed
-    /// the bound, arbitrary ones go. A dropped live alias costs one disk read
-    /// and hash on its next request, never a decode.
+    /// A dropped live alias costs one disk read and hash on its next request, never a decode.
     private func trimAliasesIfNeeded() {
         if exactAliases.count > aliasLimit {
             exactAliases = exactAliases.filter { image(forContentKey: $0.value) != nil }
@@ -168,8 +156,6 @@ nonisolated final class ArtworkMemoryCache: @unchecked Sendable {
         return max(pixelWidth * pixelHeight * 4, 1)
     }
 
-    /// The biggest decode recorded for a URL, with the pixel size it was
-    /// requested at.
     private struct LargestDecode {
         let contentKey: String
         let pixelWidth: Int

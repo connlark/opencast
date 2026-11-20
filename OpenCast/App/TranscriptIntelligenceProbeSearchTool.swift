@@ -2,9 +2,7 @@
 import FoundationModels
 import Synchronization
 
-/// Stage-0 probe tool: lexical search over a built-in twelve-line transcript.
-/// Its `Output` is `String`, the tool result type the 27 SDK accepts, and it
-/// logs every query so the report can prove PCC drove the call.
+/// `Output` is `String`, the tool result type the 27 SDK accepts.
 nonisolated final class TranscriptIntelligenceProbeSearchTool: Tool {
     typealias Arguments = TranscriptIntelligenceProbeSearchArguments
 
@@ -38,7 +36,6 @@ nonisolated final class TranscriptIntelligenceProbeSearchTool: Tool {
     let description = "Finds transcript passages that mention the given words. Returns up to three lines as [#segmentID start–end] text."
     private let queries = Mutex<[String]>([])
 
-    /// Queries received since the last drain, in call order.
     func drainQueries() -> [String] {
         queries.withLock { queries in
             defer { queries.removeAll() }

@@ -3,9 +3,6 @@ import Observation
 import OpenCastTranscription
 import OSLog
 
-/// Apple Speech asset lifecycle for the resolver, onboarding, and settings:
-/// per-locale status, install-with-progress, and locale reservation. The
-/// system inventory sits behind `AppleSpeechAssetProviding` for testability.
 @Observable
 final class AppleSpeechAssetStore {
     private static let localeLastUsedDefaultsKey = "appleSpeech.localeLastUsedAt"
@@ -78,9 +75,6 @@ final class AppleSpeechAssetStore {
         return (localeIdentifier, await provider.status(forLocaleIdentifier: localeIdentifier))
     }
 
-    /// Resolves the locale for `languageCode` and installs its assets when
-    /// they are installable, publishing install progress through `state`.
-    /// Returns the installed locale identifier.
     func ensureInstalledAssets(forLanguageCode languageCode: String) async throws -> String {
         guard provider.isTranscriberAvailable else {
             setState(.unavailable)
@@ -157,8 +151,6 @@ final class AppleSpeechAssetStore {
         return localeIdentifier
     }
 
-    /// Reservation policy: reserve on first successful install; when the
-    /// system cap is hit, release the least-recently-transcribed locale.
     private func reserveAfterInstall(_ localeIdentifier: String) async {
         let maximum = provider.maximumReservedLocales
         let reservedBefore = await provider.reservedLocaleIdentifiers()
@@ -187,8 +179,7 @@ final class AppleSpeechAssetStore {
             do {
                 try await provider.reserveLocale(localeIdentifier)
             } catch {
-                // The run log is DEBUG-only; the logger line is the Release
-                // artifact for a reservation that silently never happened.
+                // The run log is DEBUG-only; the logger line is the Release record.
                 AdFreePassBackgroundRunLog.record(
                     "apple assets reserve retry failed locale=\(localeIdentifier) error=\(error.localizedDescription)"
                 )

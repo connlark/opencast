@@ -1,7 +1,5 @@
 import Foundation
 
-/// Maps store state to the Now Playing screen's button row. Pure, so the
-/// surface that has no UI-test bridge stays covered by plain unit tests.
 enum CarPlayNowPlayingModelBuilder {
     static func buttonState(
         rate: Float,

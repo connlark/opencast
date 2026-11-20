@@ -1,11 +1,8 @@
 import RealityKit
 
-/// The fixed parts of the About hero's RealityKit scene. The camera and
-/// lights stay on +Z while a turntable entity turns the icon, so the
-/// engraved −Z back faces the camera after a half turn.
+/// The camera and lights stay on +Z while the turntable turns the icon, so the engraved −Z back
+/// faces the camera after a half turn.
 enum SettingsAboutHeroScene {
-    /// A fixed stage that holds the camera and lights, and a turntable child
-    /// that holds the icon.
     static func makeStage(holding icon: Entity) -> (stage: Entity, turntable: Entity) {
         let stage = Entity()
         let turntable = Entity()

@@ -216,8 +216,7 @@ struct ShowNotesChaptersParserTests {
 
     @Test("Two lists separated only by blank lines share a block, so the selection mixes them")
     func backToBackListsMix() {
-        // The accepted cost of tolerating a typo'd start such as a mid-list 00:00: a second list that goes back to
-        // the start stays in the block. Every kept entry is still a real time and title from the same notes.
+        // The cost of tolerating a typo'd mid-list 00:00: a second list that restarts at zero stays in the block.
         let chapters = parse(["0:00 A", "5:00 B", "10:00 C", "", "0:00 D", "6:00 E", "12:00 F", "18:00 G"])
 
         #expect(chapters.map(\.startTime) == [0, 300, 360, 720, 1_080])
@@ -255,16 +254,6 @@ struct ShowNotesChaptersParserTests {
         #expect(parse(lines, duration: 1_800).map(\.startTime) == [0, 300, 600, 900])
         #expect(parse(lines, duration: 1_800).map(\.title) == ["A", "B", "C", "D"])
         #expect(parse(lines).map(\.startTime) == [0, 300, 3_000, 3_060, 3_120])
-    }
-
-    @Test("A prose line still ends a block: two blocks are never joined")
-    func proseEndsBlock() {
-        #expect(parse(["0:00 A", "1:00 B", "Sponsored by a mattress company", "2:00 C", "3:00 D"]).isEmpty)
-    }
-
-    @Test("Entries in descending order yield nothing")
-    func descendingEntries() {
-        #expect(parse(["10:00 A", "5:00 B", "1:00 C", "0:30 D"]).isEmpty)
     }
 
     @Test("The longest selection wins over an earlier block's shorter one")
@@ -458,18 +447,6 @@ struct ShowNotesChaptersParserTests {
         #expect(chapters.allSatisfy { $0.endTime == nil })
     }
 
-    @Test("A list longer than the decoder's chapter cap keeps its earliest entries")
-    func chapterCap() {
-        let lines = (0..<5_000).map { "\(clock($0)) Entry \($0)" }
-        let chapters = parse(lines)
-
-        #expect(chapters.count == PublisherChaptersDocumentDecoder.maximumChapterCount)
-        #expect(chapters.map(\.id) == Array(0..<1_000))
-        #expect(chapters.map(\.startTime) == (0..<1_000).map(TimeInterval.init))
-        #expect(chapters.first?.title == "Entry 0")
-        #expect(chapters.last?.title == "Entry 999")
-    }
-
     @Test("A two-megabyte line returns without trapping, alone or as a title", .timeLimit(.minutes(1)))
     func hugeLine() {
         let filler = String(repeating: "- ( 1:00 ) - 12:34 [", count: 100_000)
@@ -523,6 +500,7 @@ struct ShowNotesChaptersParserTests {
         let chapters = parse(lines)
 
         #expect(chapters.count == PublisherChaptersDocumentDecoder.maximumChapterCount)
+        #expect(chapters.map(\.id) == Array(0..<1_000))
         #expect(chapters.map(\.startTime) == (0..<1_000).map(TimeInterval.init))
         #expect(chapters.first?.title == "Entry 0")
         #expect(chapters.last?.title == "Entry 999")
@@ -530,7 +508,6 @@ struct ShowNotesChaptersParserTests {
 
     @Test("A hundred thousand entries with one start keep only the first, and one entry is not three", .timeLimit(.minutes(1)))
     func manyEntriesWithOneStart() {
-        // An equal start never replaces a pile's top, so the selection holds the first entry alone.
         let lines = (0..<100_000).map { "1:00 Entry \($0)" }
 
         #expect(parse(lines).isEmpty)

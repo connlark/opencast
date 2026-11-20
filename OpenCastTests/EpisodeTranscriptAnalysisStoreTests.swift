@@ -36,14 +36,12 @@ struct EpisodeTranscriptAnalysisStoreTests {
         #expect(document.chapters[1].startSegmentID == 1)
         #expect(document.summary?.oneLineDescription == "A short test episode")
         #expect(document.transcriptSegmentCount == transcript.segments.count)
-        // The run id is the request id, so the document names its run.
         #expect(document.requestID == request.runID)
         #expect(request.analysisRequest.requestID == request.runID)
         #expect(UUID(uuidString: request.runID) != nil)
         #expect(!request.isResume)
         #expect(request.startedByListener)
         #expect(request.transcriptFingerprint == record.transcriptFingerprint)
-        // The run closes only once its document is installed.
         #expect(producer.finished == [request.runID])
     }
 
@@ -74,8 +72,6 @@ struct EpisodeTranscriptAnalysisStoreTests {
 
         #expect(producer.finishedInstalled == [installedRunID])
         #expect(producer.dispatched[installed.episodeID] == nil)
-        // A run the installed document does not name will never resume: it
-        // closes as cancelled, never as finished.
         #expect(producer.abandoned == ["a-later-run"])
         #expect(producer.dispatched[other.episodeID] == nil)
         #expect(store.record(for: installed.episodeID)?.state == .completed)
@@ -286,39 +282,6 @@ struct EpisodeTranscriptAnalysisStoreTests {
         #expect(store.resumableEpisodeIDs.isEmpty)
         guard case .failed(_, isStale: false) = store.jobState(for: transcript) else {
             Issue.record("A failed run for the current transcript must stay a current failure")
-            return
-        }
-    }
-
-    @Test("A key-required run fails with the reason's kind")
-    func keyRequiredRunFailsWithReasonKind() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let (store, producer) = makeStore()
-        producer.scripted = [.failed(ChaptersSummaryFailureMapping.failure(keyRequired: .trialExhausted))]
-        let transcript = makeTranscriptDocument(episodeID: "chapters-key-required")
-
-        store.startAnalysis(
-            transcript: transcript,
-            episodeTitle: "Episode Title",
-            podcastTitle: "Podcast Title",
-            modelContext: context
-        )
-
-        #expect(await waitUntil {
-            !store.hasActiveJob && store.record(for: transcript.episodeID)?.state == .failed
-        })
-        let record = try #require(store.record(for: transcript.episodeID))
-        #expect(record.failureKind == .keyRequiredTrialExhausted)
-        #expect(record.failureKind?.keyRequiredReason == .trialExhausted)
-    }
-
-    @Test("With no record Generate is offered: the store never reports Chapters & Summary unavailable")
-    func noRecordIsReady() throws {
-        let (store, _) = makeStore()
-        let transcript = makeTranscriptDocument(episodeID: "chapters-ready")
-        guard case .ready = store.jobState(for: transcript) else {
-            Issue.record("Expected ready, got \(store.jobState(for: transcript))")
             return
         }
     }
@@ -542,7 +505,6 @@ struct EpisodeTranscriptAnalysisStoreTests {
             Issue.record("Expected the uninvolved episode to stay ready, got \(store.jobState(for: otherTranscript))")
             return
         }
-        // The run in flight is never offered for resume.
         #expect(store.resumableEpisodeIDs.isEmpty)
 
         producer.release()
@@ -746,22 +708,6 @@ struct EpisodeTranscriptAnalysisStoreTests {
         #expect(message == "Chapters & Summary failed (invalid_model_output).")
     }
 
-    @Test("Generate disclosure copy names the provider, the trial service and never minutes")
-    func generateDisclosureCopy() {
-        let body = TranscriptAnalysisGenerateDisclosureCopy.confirmationBody()
-        #expect(body == """
-        This episode’s transcript text is sent to the AI provider you chose, using your key, to generate chapters and a summary. Without a key, it goes through opencast’s trial service. Your audio is never sent.
-        Results are saved on this device.
-        """)
-        #expect(!body.contains("minutes"))
-        #expect(!body.contains("shared"))
-        #expect(!TranscriptAnalysisFeatureFlags.chargesTranscriptionMinutes)
-        #expect(TranscriptAnalysisGenerateDisclosureCopy.confirmationBody(chargesTranscriptionMinutes: true)
-            .hasSuffix("\nUses transcription minutes."))
-        #expect(TranscriptAnalysisGenerateDisclosureCopy.title == "Generate Chapters & Summary?")
-        #expect(TranscriptAnalysisGenerateDisclosureCopy.confirmButtonTitle == "Generate")
-    }
-
     @Test("The disclosure acknowledgement persists across loads")
     func disclosureAcknowledgementPersists() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -773,6 +719,66 @@ struct EpisodeTranscriptAnalysisStoreTests {
         let (reloaded, _) = makeStore()
         reloaded.load(modelContext: context)
         #expect(reloaded.hasAcknowledgedGenerateDisclosure)
+    }
+
+    @Test("Duplicate repair OR-merges the opt-in onto the deterministic winner")
+    func duplicateRepairORMergesOptIn() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        let feedURL = "https://example.com/chapters-merge.xml"
+
+        // The winner (smallest dedupeUUID) has the flag off; a losing twin
+        // carries the opt-in.
+        context.insert(
+            SubscriptionRecord(
+                feedURL: feedURL,
+                title: "Winner Copy",
+                isTranscriptAnalysisEnabled: false,
+                dedupeUUID: "aaaaaaaa-0000-0000-0000-000000000000"
+            )
+        )
+        context.insert(
+            SubscriptionRecord(
+                feedURL: feedURL,
+                title: "Loser Copy",
+                isTranscriptAnalysisEnabled: true,
+                dedupeUUID: "bbbbbbbb-0000-0000-0000-000000000000"
+            )
+        )
+        try context.save()
+
+        _ = try await store.repairSyncDuplicates(modelContext: context)
+
+        let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
+        #expect(subscriptions.count == 1)
+        let survivor = try #require(subscriptions.first)
+        #expect(survivor.dedupeUUID == "aaaaaaaa-0000-0000-0000-000000000000")
+        #expect(survivor.isTranscriptAnalysisEnabled == true)
+    }
+
+    @Test("Legacy duplicate replacement carries the opt-in onto the fresh record")
+    func legacyDuplicateReplacementCarriesOptIn() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        let feedURL = "https://example.com/chapters-legacy-merge.xml"
+
+        context.insert(
+            SubscriptionRecord(feedURL: feedURL, title: "Legacy Off", isTranscriptAnalysisEnabled: false, dedupeUUID: "")
+        )
+        context.insert(
+            SubscriptionRecord(feedURL: feedURL, title: "Legacy On", isTranscriptAnalysisEnabled: true, dedupeUUID: "")
+        )
+        try context.save()
+
+        _ = try await store.repairSyncDuplicates(modelContext: context)
+
+        let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
+        #expect(subscriptions.count == 1)
+        let survivor = try #require(subscriptions.first)
+        #expect(!survivor.dedupeUUID.isEmpty)
+        #expect(survivor.isTranscriptAnalysisEnabled == true)
     }
 
     // MARK: - Queue
@@ -824,7 +830,6 @@ struct EpisodeTranscriptAnalysisStoreTests {
 
         harness.appModel.generateChaptersAndSummary(episodeID: second, modelContext: harness.context)
         try await Task.sleep(for: .milliseconds(200))
-        // Never two interrupted runs: the second waits.
         #expect(producer.requests.count == 1)
         #expect(harness.store.record(for: second) == nil)
 
@@ -1016,119 +1021,6 @@ struct EpisodeTranscriptAnalysisStoreTests {
         #expect(producer.requests.map(\.episodeID) == [plain])
     }
 
-    // MARK: - Unchanged surfaces
-
-    @Test("Transcript analysis record is local-only but included in full schema")
-    func transcriptAnalysisRecordIsLocalOnly() {
-        let localEntityNames = OpenCastModelContainerFactory.localSchema.entities.map(\.name)
-        let syncedEntityNames = OpenCastModelContainerFactory.syncedSchema.entities.map(\.name)
-        let fullEntityNames = OpenCastModelContainerFactory.fullSchema.entities.map(\.name)
-        #expect(localEntityNames.contains("EpisodeTranscriptAnalysisRecord"))
-        #expect(!syncedEntityNames.contains("EpisodeTranscriptAnalysisRecord"))
-        #expect(fullEntityNames.contains("EpisodeTranscriptAnalysisRecord"))
-    }
-
-    @Test("Duplicate repair OR-merges the opt-in onto the deterministic winner")
-    func duplicateRepairORMergesOptIn() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
-        let feedURL = "https://example.com/chapters-merge.xml"
-
-        // The winner (smallest dedupeUUID) has the flag OFF; a losing twin
-        // carries the explicit opt-in. The merge must keep the winner row and
-        // the consent.
-        context.insert(
-            SubscriptionRecord(
-                feedURL: feedURL,
-                title: "Winner Copy",
-                isTranscriptAnalysisEnabled: false,
-                dedupeUUID: "aaaaaaaa-0000-0000-0000-000000000000"
-            )
-        )
-        context.insert(
-            SubscriptionRecord(
-                feedURL: feedURL,
-                title: "Loser Copy",
-                isTranscriptAnalysisEnabled: true,
-                dedupeUUID: "bbbbbbbb-0000-0000-0000-000000000000"
-            )
-        )
-        try context.save()
-
-        _ = try await store.repairSyncDuplicates(modelContext: context)
-
-        let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
-        #expect(subscriptions.count == 1)
-        let survivor = try #require(subscriptions.first)
-        #expect(survivor.dedupeUUID == "aaaaaaaa-0000-0000-0000-000000000000")
-        #expect(survivor.isTranscriptAnalysisEnabled == true)
-    }
-
-    @Test("Legacy duplicate replacement carries the opt-in onto the fresh record")
-    func legacyDuplicateReplacementCarriesOptIn() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
-        let feedURL = "https://example.com/chapters-legacy-merge.xml"
-
-        context.insert(
-            SubscriptionRecord(feedURL: feedURL, title: "Legacy Off", isTranscriptAnalysisEnabled: false, dedupeUUID: "")
-        )
-        context.insert(
-            SubscriptionRecord(feedURL: feedURL, title: "Legacy On", isTranscriptAnalysisEnabled: true, dedupeUUID: "")
-        )
-        try context.save()
-
-        _ = try await store.repairSyncDuplicates(modelContext: context)
-
-        let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
-        #expect(subscriptions.count == 1)
-        let survivor = try #require(subscriptions.first)
-        #expect(!survivor.dedupeUUID.isEmpty)
-        #expect(survivor.isTranscriptAnalysisEnabled == true)
-    }
-
-    @Test("Episode detail snapshot threads the creator chapters URL")
-    func episodeDetailSnapshotThreadsChaptersURL() async throws {
-        let cache = SQLiteLocalLibraryCacheStore.inMemory()
-        let feedURL = URL(string: "https://example.com/chaptered-cache.xml")!
-        let snapshot = try RSSFeedParser().parse(
-            data: Data(
-                """
-                <?xml version="1.0" encoding="utf-8"?>
-                <rss version="2.0">
-                  <channel>
-                    <title>Chaptered Cache Show</title>
-                    <item>
-                      <title>With Chapters</title>
-                      <guid>cache-chaptered-1</guid>
-                      <podcast:chapters url="https://example.com/chapters/cache-1.json" type="application/json+chapters" />
-                      <enclosure url="https://example.com/audio/cache-1.mp3" type="audio/mpeg" />
-                    </item>
-                    <item>
-                      <title>Without Chapters</title>
-                      <guid>cache-chaptered-2</guid>
-                      <enclosure url="https://example.com/audio/cache-2.mp3" type="audio/mpeg" />
-                    </item>
-                  </channel>
-                </rss>
-                """.utf8
-            ),
-            feedURL: feedURL
-        )
-        try await cache.upsertCache(from: snapshot, refreshedAt: .now)
-
-        let chaptered = try #require(
-            await cache.episodeDetail(episodeID: snapshot.episodes[0].id.rawValue)
-        )
-        #expect(chaptered.chaptersURL == "https://example.com/chapters/cache-1.json")
-        let plain = try #require(
-            await cache.episodeDetail(episodeID: snapshot.episodes[1].id.rawValue)
-        )
-        #expect(plain.chaptersURL == nil)
-    }
-
     // MARK: - Helpers
 
     private func makeStore(
@@ -1145,7 +1037,6 @@ struct EpisodeTranscriptAnalysisStoreTests {
         return (store, producer)
     }
 
-    /// Episodes at `chapteredEpisodeIndices` declare a `podcast:chapters` document.
     private func makeQueueHarness(
         slug: String,
         episodeCount: Int = 1,

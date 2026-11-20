@@ -1,13 +1,10 @@
 import Foundation
 import OpenCastPlayback
 
-/// Converts between a show's stored speed (`SubscriptionRecord.playbackRate`,
-/// a `Double` where 0 follows the global speed) and the controller's `Float`
-/// rate. Stored values go through the global clamp, never a step snap, so an
-/// off-step value synced from another device plays as written.
+/// Stored values go through the global clamp, never a step snap, so an off-step value
+/// synced from another device plays as written.
 nonisolated enum PodcastPlaybackRateOverride {
-    /// The rate a stored value plays at, or nil when the show follows the
-    /// global speed.
+    /// Nil when the show follows the global speed.
     static func resolved(_ stored: Double) -> Float? {
         guard stored.isFinite, stored > 0 else {
             return nil

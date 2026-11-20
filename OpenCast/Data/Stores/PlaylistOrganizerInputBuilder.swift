@@ -1,22 +1,13 @@
 import Foundation
 import OpenCastCore
 
-/// Turns one show's episodes into the numbered lines a Make a Playlist turn
-/// sends, within a token budget measured with the on-device tokenizer. The
-/// richest line format that fits wins; when none fits, the last format keeps
-/// the newest (or best-matching) episodes that fit. A long show with a
-/// specific request sends only its best matches, and suggested groups read
-/// only its newest episodes.
 nonisolated enum PlaylistOrganizerInputBuilder {
     static let defaultTokenBudget = 20_000
-    /// A request prefilters only above this many episodes.
     static let prefilterEpisodeThreshold = 150
-    /// Suggested groups read at most this many of the newest episodes. Apple's
-    /// model declined or ran past the deadline on longer lists without a request.
+    /// Apple's model declined or ran past the deadline on longer lists without a request.
     static let suggestionEpisodeLimit = 150
     static let snippetCharacterLimit = 200
     static let boilerplateShare = 0.25
-    /// The boilerplate and title-prefix rules need at least this many episodes.
     static let sharedRuleMinimumEpisodeCount = 8
     static let maximumTrimPasses = 6
 
@@ -37,7 +28,6 @@ nonisolated enum PlaylistOrganizerInputBuilder {
         retrievalMilliseconds: Double
     )
 
-    /// Library snapshots + raw summary HTML → builder episodes (HTML cleaned and cut off the main actor).
     @concurrent
     static func episodes(
         from snapshots: [EpisodeListItemSnapshot],
@@ -55,8 +45,6 @@ nonisolated enum PlaylistOrganizerInputBuilder {
         }
     }
 
-    /// Date + title + snippet lines for retrieval (boilerplate snippets dropped, show-wide title prefix stripped
-    /// from `semanticText`). Synchronous and pure.
     static func metadataLines(for episodes: [PlaylistOrganizerEpisode]) -> [EpisodeMetadataLine] {
         prepare(sortedByIndex(episodes)).map(metadataLine(for:))
     }
@@ -82,9 +70,8 @@ nonisolated enum PlaylistOrganizerInputBuilder {
             isPrompted: isPrompted,
             requestText: requestText
         )
-        // Numbered once over the candidates, so the numbers stay small and
-        // every rung and trim of this build (trims only drop candidates)
-        // sends the same number for the same episode.
+        // Numbered once over the candidates, so every rung and trim of this build sends the same
+        // number for the same episode.
         let lineNumberByIndex: [Int: Int]? = switch options.lineNumbers {
         case .index:
             nil
@@ -238,8 +225,6 @@ nonisolated enum PlaylistOrganizerInputBuilder {
         }
     }
 
-    /// The retrieval window cut to what a trim kept, so it always describes
-    /// exactly the lines that were sent.
     private static func window(_ window: EpisodeCandidateWindow?, keeping ranked: [Int]) -> EpisodeCandidateWindow? {
         guard var window, ranked.count < window.rankedPositions.count else {
             return window
@@ -253,7 +238,6 @@ nonisolated enum PlaylistOrganizerInputBuilder {
 
     // MARK: Lines
 
-    /// `number` is the episode index, or its gapped line number.
     private static func line(for episode: PreparedEpisode, number: Int, rung: PlaylistOrganizerInput.Rung) -> String {
         switch rung {
         case .snippets, .titles:
@@ -269,9 +253,8 @@ nonisolated enum PlaylistOrganizerInputBuilder {
         }
     }
 
-    /// Publication dates participate in word matching so a year request can
-    /// retrieve episodes whose titles never mention that year. The word-vector
-    /// text uses prose only and drops the show-wide title prefix.
+    /// Dates join the word-matching text so a year request finds episodes whose titles never
+    /// mention that year.
     private static func metadataLine(for episode: PreparedEpisode) -> EpisodeMetadataLine {
         EpisodeMetadataLine(
             position: episode.index,
@@ -289,10 +272,8 @@ nonisolated enum PlaylistOrganizerInputBuilder {
             .filter { seen.insert($0.index).inserted }
     }
 
-    /// Whitespace collapsed everywhere, so a title holding a newline cannot
-    /// start a line of its own; boilerplate snippets dropped; the show-wide
-    /// title prefix found; dates read in UTC so every device renders the same
-    /// day and year.
+    /// Whitespace collapses so a title holding a newline cannot start a line of its own; dates
+    /// read in UTC so every device renders the same day and year.
     private static func prepare(_ ordered: [PlaylistOrganizerEpisode]) -> [PreparedEpisode] {
         let titles = ordered.map { episode in
             let title = collapsingWhitespace(episode.title)
@@ -327,8 +308,6 @@ nonisolated enum PlaylistOrganizerInputBuilder {
         }
     }
 
-    /// Snippets repeated across a quarter or more of a show are feed
-    /// boilerplate ("Support the show…"): they are never sent or indexed.
     private static func boilerplateSnippets(_ snippets: [String?]) -> Set<String> {
         guard snippets.count >= sharedRuleMinimumEpisodeCount else {
             return []
@@ -341,9 +320,8 @@ nonisolated enum PlaylistOrganizerInputBuilder {
         return Set(counts.filter { Double($0.value) >= threshold }.keys)
     }
 
-    /// Titles without a show-name prefix shared by a quarter or more of the
-    /// show ("Show EP 12 — "), with episode numbers ignored when comparing
-    /// prefixes. Titles without the winning prefix stay whole.
+    /// Strips a prefix like "Show EP 12 — " that a quarter or more of titles share, ignoring
+    /// episode numbers when comparing.
     private static func titlesWithoutSharedPrefix(_ titles: [String]) -> [String] {
         guard titles.count >= sharedRuleMinimumEpisodeCount else {
             return titles
@@ -399,9 +377,8 @@ nonisolated enum PlaylistOrganizerInputBuilder {
         return cut + "…"
     }
 
-    /// The cache hands over markup cut at a fixed length. A tag, style or
-    /// script block severed by that cut never closes, so cleaning would
-    /// keep its source as text.
+    /// The cache cuts markup at a fixed length; a tag, style or script block severed there never
+    /// closes, and cleaning would keep its source as text.
     private static func droppingSeveredMarkup(_ html: String) -> String {
         var html = html[...]
         for (open, close) in [("<style", "</style"), ("<script", "</script")] {

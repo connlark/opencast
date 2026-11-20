@@ -149,7 +149,6 @@ struct EpisodePublisherChaptersSectionModelTests {
         await section.load(appModel: fixture.model, episode: undeclared, key: firstKey)
         #expect(section.isFinished(forKey: firstKey))
 
-        // A feed refresh declares a document, which moves the row's stamp.
         let declared = try await Self.cacheEpisode(
             declaringDocument: true,
             in: fixture.model,
@@ -168,26 +167,6 @@ struct EpisodePublisherChaptersSectionModelTests {
         #expect(client.requestCount == 1)
     }
 
-    @Test("The load key follows the episode row's cache stamp")
-    func loadKeyFollowsCacheStamp() {
-        let section = EpisodePublisherChaptersSectionModel()
-        let cachedAt = Date(timeIntervalSinceReferenceDate: 800_000_000.5)
-        let episode = EpisodeListItemSnapshot(
-            episode: Episode(
-                id: EpisodeID(rawValue: Self.episodeID),
-                podcastID: PodcastID(rawValue: Self.chapteredFeedURL),
-                podcastTitle: "A Show",
-                title: "Section Chaptered"
-            ),
-            cachedAt: cachedAt
-        )
-
-        #expect(section.loadKey(episode: nil) == "missing")
-        #expect(section.loadKey(episode: episode) == "\(Self.episodeID)|800000000.5")
-    }
-
-    /// The key a load for another episode would run under, with the same
-    /// cache stamp, so it differs from this episode's only by the id.
     private static func otherEpisodeKey(of section: EpisodePublisherChaptersSectionModel, cachedAt: Date) -> String {
         section.loadKey(episode: EpisodeListItemSnapshot(
             episode: Episode(

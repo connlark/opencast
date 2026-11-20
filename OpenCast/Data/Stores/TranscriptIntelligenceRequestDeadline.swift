@@ -1,9 +1,8 @@
 import Synchronization
 
-/// Races one request against a wall-clock deadline. A PCC turn with tool
-/// calling forced to `.required` hung past five minutes without ever raising
-/// `LanguageModelError.timeout`, so the app owns the clock: the losing
-/// request is cancelled and whatever it eventually produces is dropped.
+/// A PCC turn with tool calling `.required` hung past five minutes without raising
+/// `LanguageModelError.timeout`, so the app owns the clock; the losing request is cancelled and
+/// whatever it eventually produces is dropped.
 enum TranscriptIntelligenceRequestDeadline {
     static let `default`: Duration = .seconds(60)
 

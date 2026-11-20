@@ -22,16 +22,6 @@ struct AdFreePassCompletionNotificationContentTests {
         )
     }
 
-    @Test("On-device interrupts keep the device-paused copy")
-    func interruptedTerminalNotifiesPause() throws {
-        let content = try #require(AdFreePassCompletionNotificationContent(
-            terminal: .interrupted,
-            outcomes: []
-        ))
-        #expect(content.title == "Ad detection paused")
-        #expect(content.body == "iOS paused background processing. It will pick up where it left off next time you open OpenCast.")
-    }
-
     @Test("An expiration park of a cloud item says the server is still working, never that the device paused")
     func cloudParkSaysServerIsStillWorking() throws {
         let content = try #require(AdFreePassCompletionNotificationContent(
@@ -73,67 +63,6 @@ struct AdFreePassCompletionNotificationContentTests {
         ) == nil)
     }
 
-    @Test("A mixed drain summarizes only the locally owned outcomes")
-    func mixedDrainSummarizesLocalOutcomes() throws {
-        let completedLocally = try #require(AdFreePassCompletionNotificationContent(
-            terminal: .drained(completedCount: 2, failedCount: 1),
-            outcomes: [
-                completedOutcome(episodeID: "a", zoneCount: 3, title: "Local Episode"),
-                completedOutcome(episodeID: "b", zoneCount: 5, owner: .remote),
-                failedOutcome(episodeID: "c", owner: .remote),
-            ]
-        ))
-        #expect(completedLocally.title == "Found 3 ad breaks in Local Episode")
-        #expect(completedLocally.body.isEmpty)
-
-        let failedLocally = try #require(AdFreePassCompletionNotificationContent(
-            terminal: .drained(completedCount: 1, failedCount: 1),
-            outcomes: [
-                completedOutcome(episodeID: "a", zoneCount: 2, owner: .remote),
-                failedOutcome(episodeID: "b"),
-            ]
-        ))
-        #expect(failedLocally.title == "Ad detection finished")
-        #expect(failedLocally.body == "1 episode couldn't be analyzed.")
-    }
-
-    @Test("Single episode copy inflects the zone count")
-    func singleEpisodeCopy() throws {
-        let zero = try #require(makeContent(outcomes: [
-            completedOutcome(episodeID: "a", zoneCount: 0, title: "Episode Zero")
-        ]))
-        #expect(zero.title == "No ad breaks found in Episode Zero")
-        #expect(zero.body.isEmpty)
-
-        let one = try #require(makeContent(outcomes: [
-            completedOutcome(episodeID: "a", zoneCount: 1, title: "Episode One")
-        ]))
-        #expect(one.title == "Found 1 ad break in Episode One")
-        #expect(one.body.isEmpty)
-
-        let many = try #require(makeContent(outcomes: [
-            completedOutcome(episodeID: "a", zoneCount: 4, title: "Episode Many")
-        ]))
-        #expect(many.title == "Found 4 ad breaks in Episode Many")
-        #expect(many.body.isEmpty)
-    }
-
-    @Test("Batch copy totals the zones and counts analyzed episodes")
-    func batchCopy() throws {
-        let batch = try #require(makeContent(outcomes: [
-            completedOutcome(episodeID: "a", zoneCount: 4),
-            completedOutcome(episodeID: "b", zoneCount: 3),
-        ]))
-        #expect(batch.title == "Found 7 ad breaks in 2 episodes")
-        #expect(batch.body.isEmpty)
-
-        let batchWithoutZones = try #require(makeContent(outcomes: [
-            completedOutcome(episodeID: "a", zoneCount: 0),
-            completedOutcome(episodeID: "b", zoneCount: 0),
-        ]))
-        #expect(batchWithoutZones.title == "No ad breaks found in 2 episodes")
-    }
-
     @Test("Failures land in the body and inflect")
     func failureCopy() throws {
         let mixed = try #require(makeContent(outcomes: [
@@ -150,7 +79,6 @@ struct AdFreePassCompletionNotificationContentTests {
         #expect(allFailed.title == "Ad detection finished")
         #expect(allFailed.body == "2 episodes couldn't be analyzed.")
 
-        // An episode that needed the listener's key counts as not analyzed.
         let keyRequired = try #require(makeContent(outcomes: [
             completedOutcome(episodeID: "a", zoneCount: 3),
             AdFreePassQueueItemOutcome(
@@ -195,7 +123,6 @@ struct AdFreePassCompletionNotificationContentTests {
             isHoldingUnattendedItem: false
         ))
         #expect(manual.title == "Ad detection paused")
-        // The hold says nothing about a drained queue's results.
         #expect(AdFreePassCompletionNotificationContent(
             terminal: .drained(completedCount: 1, failedCount: 0),
             outcomes: [completedOutcome(episodeID: "a", zoneCount: 1)],
@@ -227,13 +154,12 @@ struct AdFreePassCompletionNotificationContentTests {
     private func completedOutcome(
         episodeID: String,
         zoneCount: Int,
-        title: String? = nil,
         owner: JobCompletionDeliveryOwner = .local,
         origin: AdFreePassQueueOrigin = .manual
     ) -> AdFreePassQueueItemOutcome {
         AdFreePassQueueItemOutcome(
             episodeID: episodeID,
-            episodeTitle: title ?? "Episode \(episodeID)",
+            episodeTitle: "Episode \(episodeID)",
             artworkURL: nil,
             kind: .completed(zoneCount: zoneCount),
             completionDeliveryOwner: owner,

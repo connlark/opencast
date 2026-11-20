@@ -1,13 +1,10 @@
-/// Hard-priority fusion of the word-matching and word-vector rankings. Rank
-/// fusion and weighted score blends let the weaker lane outvote a decisive
-/// word match; here a matching line always outranks a merely similar one.
+/// A matching line always outranks a merely similar one: rank fusion or a score blend would let
+/// the word-vector lane outvote a decisive word match.
 nonisolated enum EpisodeCandidateRanking {
     static let defaultFill = 30
     static let defaultLexicalLimit = 150
 
-    /// The lexical block (already BM25-ordered) capped at `limit`, then the
-    /// first `fill` semantic positions not already taken and not in
-    /// `excluding`. The fill never displaces a lexical line.
+    /// `lexical` must already be BM25-ordered.
     static func lexicalFirst(
         lexical: [EpisodeMetadataMatch],
         semantic: [EpisodeMetadataMatch],
@@ -39,8 +36,7 @@ nonisolated enum EpisodeCandidateRanking {
             rankedPositions: ranked,
             positions: ranked.sorted(),
             lexicalCount: block.count,
-            fillCount: filled.count,
-            isInformative: !lexical.isEmpty
+            fillCount: filled.count
         )
     }
 }

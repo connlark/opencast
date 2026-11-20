@@ -1,11 +1,7 @@
 import Foundation
 
-/// Maps Transcribe Remotely phases onto the 0–1000 continued-processing
-/// band, monotonic-clamped like `EpisodeTranscriptGenerationProgressMapper`.
-/// Uploaded parts and the server's chunk fraction move progress inside their
-/// bands; the ETA only informs the card's copy. A long phase creeps so the
-/// system never reads the card as stalled, capped at the next band's floor.
-/// The poll loop can report an earlier phase again, and the clamp holds it.
+/// A long phase creeps, capped at the next band's floor, so the system never reads the card as
+/// stalled. The poll loop can report an earlier phase again; the clamp holds progress.
 struct EpisodeRemoteTranscriptionProgressMapper: Equatable {
     static let totalUnitCount: Int64 = 1_000
 

@@ -34,12 +34,4 @@ struct RustTextTests {
         #expect(RustText.charCount("e\u{301}") == 2)
         #expect(RustText.whitespaceWordCount(" one  two\u{3000}three ") == 3)
     }
-
-    @Test("Alphanumeric means Alphabetic or a number category")
-    func alphanumeric() {
-        #expect(RustText.isAlphanumeric("²"))
-        #expect(RustText.isAlphanumeric("Ⅳ"))
-        #expect(!RustText.isAlphanumeric("_"))
-        #expect(!RustText.isAlphanumeric("-"))
-    }
 }

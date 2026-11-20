@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// One row of the Shows or Priority picker: a 40-point leading image, the
-/// title, and a trailing checkmark, add or remove control. The whole row is
-/// one button, and its accessibility label is the title alone.
 struct PlaylistShowsPickerRow<Leading: View>: View {
     let title: String
     let accessory: PlaylistShowsPickerRowAccessory

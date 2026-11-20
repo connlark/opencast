@@ -1,18 +1,12 @@
 import OpenCastAnalysis
 
-/// Wraps a run's transport so a resumed run answers the requests its
-/// earlier attempt already had answered from the kept replies, and sends
-/// only the rest. Every reply the provider gives is kept for a later resume
-/// of the same run. The pipeline is a pure function of the request bytes
-/// and the replies, so a reply reused for byte-identical request bytes
-/// yields what the earlier attempt computed.
+/// Reusing a kept reply is sound because the pipeline is a pure function of the request bytes and
+/// the replies: a byte-identical request yields what the earlier attempt computed.
 nonisolated struct AnalysisResumingTransport: AnalysisProviderTransport {
     let inner: any AnalysisProviderTransport
     let store: AnalysisRunRecordStore
     let runID: String
-    /// The replies kept when the run started (empty for a new run).
     let kept: [AnalysisRunReplyKey: AnalysisRunStoredReply]
-    /// Told about each request answered from the kept replies.
     let onReused: @Sendable (AnalysisProviderRequest) -> Void
 
     init(

@@ -35,9 +35,6 @@ final class EpisodeTranscriptionWorkCoordinator {
     private var localReservationIDs: Set<UUID> = []
     private var remoteReservation: RemoteReservation?
 
-    /// Whether a local or remote transcription request holds the episode,
-    /// from its first step (download, model or asset preparation) to its
-    /// release.
     func holdsReservation(forEpisodeID episodeID: String) -> Bool {
         localReservationEpisodeID == episodeID || remoteReservation?.episodeID == episodeID
     }

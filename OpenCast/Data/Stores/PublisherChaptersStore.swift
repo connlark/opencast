@@ -1,11 +1,6 @@
 import Foundation
 import OpenCastCore
 
-/// Feed-declared (`podcast:chapters`) chapters documents, fetched on demand
-/// and kept in the episode's cache row. Fail-open like the rest of the
-/// chapters surfaces: a document that cannot be read is never an error, it
-/// is retried after a backoff, and a stored entry keeps answering while it
-/// cannot be refreshed (stale beats blank).
 final class PublisherChaptersStore {
     nonisolated static let documentByteLimit = 2 * 1024 * 1024
     nonisolated static let requestTimeout: TimeInterval = 15
@@ -34,9 +29,8 @@ final class PublisherChaptersStore {
         self.now = now
     }
 
-    /// The episode's chapters from its declared document. Cache-first; one
-    /// shared fetch per episode and URL, which a cancelled caller stops
-    /// waiting for but never stops.
+    /// One shared fetch per episode and URL; a cancelled caller stops waiting for it but never
+    /// stops it.
     func resolve(episodeID: String, documentURL: String) async -> PublisherChaptersResolution {
         let key = FetchKey(episodeID: episodeID, documentURL: documentURL)
         if let fetch = fetchTasks[key] {
@@ -61,12 +55,10 @@ final class PublisherChaptersStore {
         try? await localCache.publisherChapters(episodeID: episodeID)
     }
 
-    /// Cache-only (never fetches): a stored entry for `documentURL` with zero chapters.
     func isDocumentKnownEmpty(episodeID: String, documentURL: String) async -> Bool {
         await storedEntry(episodeID: episodeID, documentURL: documentURL)?.chapters.isEmpty == true
     }
 
-    /// Awaits the episode's in-flight fetches, if any. Test hook.
     func waitForFetch(episodeID: String) async {
         for (key, fetch) in fetchTasks where key.episodeID == episodeID {
             _ = await fetch.value
@@ -102,9 +94,8 @@ final class PublisherChaptersStore {
             }
             failureBackoffEnds[key] = nil
             let entry = PublisherChaptersCacheEntry(sourceURL: key.documentURL, chapters: chapters, fetchedAt: now())
-            // A feed refresh may have moved the declaration while this fetch
-            // ran: the entry still answers the callers that asked for its
-            // URL, but must not replace the newer URL's.
+            // A feed refresh may have moved the declaration while this ran: the entry still
+            // answers its callers but must not replace the newer URL's.
             if (try? await localCache.episodeDetail(episodeID: key.episodeID))?.chaptersURL == key.documentURL {
                 try? await localCache.storePublisherChapters(entry, episodeID: key.episodeID)
             }
@@ -114,8 +105,6 @@ final class PublisherChaptersStore {
         return fetch
     }
 
-    /// nil on any failure: a URL that is not http(s), transport, a non-2xx
-    /// status, an oversized body, or a document that does not decode.
     @concurrent
     private static func fetchChapters(
         documentURL: String,

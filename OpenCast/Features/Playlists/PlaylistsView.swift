@@ -1,11 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// Every playlist, as a grid of covers or a list of rows. It follows the
-/// Library's stored layout, except that Automatic always means the grid
-/// here: covers are how playlists are told apart. A new smart playlist opens
-/// through `onOpenPlaylist` once its name prompt has dismissed; a new manual
-/// one stays on the collection.
 struct PlaylistsView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

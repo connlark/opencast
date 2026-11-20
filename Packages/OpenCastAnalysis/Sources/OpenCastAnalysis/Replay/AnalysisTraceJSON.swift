@@ -1,5 +1,4 @@
-/// JSON forms of results and traces in the shapes the services' replay
-/// oracles print, so the two sides compare field by field.
+/// Shapes must match what the services' replay oracles print, field by field.
 public enum AnalysisTraceJSON {
     public static func usage(_ usage: AnalysisUsage?) -> JSONValue {
         usage?.jsonValue ?? .null
@@ -82,8 +81,6 @@ public enum AnalysisTraceJSON {
         ])
     }
 
-    /// The run result: the response, or the error body with the failing
-    /// window and its issues.
     public static func adResult(_ outcome: AnalysisOutcome) -> JSONValue {
         switch outcome {
         case .adDetection(let response):

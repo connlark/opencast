@@ -3,9 +3,7 @@ import Foundation
 nonisolated struct EpisodeAdAnalysisAPITranscriptMetadata: Codable, Sendable, Equatable {
     var languageCode: String
     var audioDuration: TimeInterval
-    /// The feed's declared runtime (`<itunes:duration>`), when cached. The
-    /// server sizes its episode ad budget by how much longer the served file
-    /// runs than this; omitted when unknown.
+    /// The feed's `<itunes:duration>`, not the file's.
     var declaredDuration: TimeInterval? = nil
     var modelIdentifier: String?
     var modelVersion: String?

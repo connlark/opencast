@@ -2,8 +2,6 @@ import Foundation
 import OpenCastAnalysis
 import OpenCastAnalysisProviders
 
-/// Every string the AI Services screens, the key notice and the key screen
-/// show, so the copy can be reviewed in one place.
 nonisolated enum AIServicesCopy {
     static let screenTitle = "AI Services"
 
@@ -90,8 +88,6 @@ nonisolated enum AIServicesCopy {
     static let usageHeader = "Usage"
     static let providersFooter = "Ad detection and Chapters & Summary run on your device and call the provider you choose with your own key. Recap and Ask use Apple's Private Cloud Compute and need no key."
 
-    /// The footer inside the handover window: the plain footer plus what
-    /// happens to a free-tier Google key until `date`.
     static func providersFooterInHandoverWindow(date: String) -> String {
         "\(providersFooter) Until \(date), when Google says a Google key is on its free tier, opencast runs ad detection on its trial service instead when that service is available."
     }
@@ -99,7 +95,6 @@ nonisolated enum AIServicesCopy {
     static let geminiPrivacyFootnote = "Use a key from a Google project with billing set up, or an OpenAI account with credit. A key on Google's free tier is too limited for these features, and Google may use what a free-tier key sends to improve its products."
     static let noKey = "No key"
     static let keySaved = "Key saved"
-    /// The provider row when the last Keychain read failed.
     static let statusUnavailable = "Key status unavailable"
 
     static func status(_ presence: AnalysisKeyPresence) -> String {
@@ -116,7 +111,6 @@ nonisolated enum AIServicesCopy {
 
     // MARK: Free tier
 
-    /// The running card while a run uses the trial service for a free-tier key.
     static let freeTierCardFootnote = "Your Google key is on Google's free tier. Using opencast's trial service."
 
     /// The day Google answered, on the listener's own calendar.
@@ -124,12 +118,10 @@ nonisolated enum AIServicesCopy {
         date.formatted(date: .long, time: .omitted)
     }
 
-    /// The Settings mark inside the handover window.
     static func freeTierMarkInHandoverWindow(day: String, date: String) -> String {
         "On \(day), Google answered that your Google key is on its free tier, which is too limited for ad detection. Until \(date), opencast runs ad detection on its trial service instead when that service is available. To use your key, set up billing for its project in Google AI Studio."
     }
 
-    /// The Settings mark outside the handover window.
     static func freeTierMark(day: String) -> String {
         "On \(day), Google answered that your Google key is on its free tier, which is too limited for ad detection. To use your key, set up billing for its project in Google AI Studio."
     }
@@ -149,7 +141,6 @@ nonisolated enum AIServicesCopy {
 
     // MARK: Key sheet
 
-    /// Above the Google key field.
     static let googleKeyRequirement = "Needs a Google project with billing set up. Keys on Google's free tier are too limited for these features."
     static let test = "Test"
     static let save = "Save"
@@ -162,9 +153,7 @@ nonisolated enum AIServicesCopy {
     static let syncFooter = "A synced key is available on your devices that use iCloud Keychain. Turning sync off keeps it on this device only and removes the synced copy from your other devices."
     static let saveFailed = "The key couldn't be saved. Try again."
     static let removeFailed = "The key couldn't be removed. Try again."
-    /// Turning sync off kept the key here but could not delete the synced copy.
     static let syncOffIncomplete = "The key is saved on this device, but the synced copy couldn't be removed from your other devices."
-    /// This device uses its local key and a synced copy is stored too.
     static let syncedCopyAlsoElsewhere = "A synced copy is also on your other devices"
     static let removeSyncedCopy = "Remove synced copy"
     static let removeSyncedCopyTitle = "Remove the synced copy?"
@@ -179,8 +168,6 @@ nonisolated enum AIServicesCopy {
         "Remove the \(shortName(provider)) key?"
     }
 
-    /// What Remove deletes: the synced copy too unless it is known to be
-    /// absent ("any synced copy" when unknown).
     static func removeMessage(syncedCopy: AnalysisSyncedCopyStatus) -> String {
         switch syncedCopy {
         case .present:
@@ -192,7 +179,6 @@ nonisolated enum AIServicesCopy {
         }
     }
 
-    /// Test on a key Google accepted and then named free tier.
     static let testResultFreeTier = "Key works, but it is on Google's free tier, which is too limited for these features. Set up billing for its project in Google AI Studio."
 
     static func testResult(_ result: AnalysisKeyTestResult, provider: AnalysisProvider) -> String {

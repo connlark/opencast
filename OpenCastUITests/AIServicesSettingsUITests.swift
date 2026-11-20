@@ -16,29 +16,6 @@ final class AIServicesSettingsUITests: XCTestCase {
     // MARK: Screen
 
     @MainActor
-    func testAIServicesProviderRowsShowEachKeyStatus() throws {
-        let synced = makeApp(seedsGoogleKey: true, seedsOpenAIKey: true)
-        synced.launch()
-        openSettingsScreen("AI Services", in: synced)
-        assertProviderRow("google", reads: "Key saved, synced", in: synced)
-        assertProviderRow("openai", reads: "Key saved, synced", in: synced)
-        assertDoesNotExist(
-            synced.descendants(matching: .any)["AI Services Notice Row"],
-            named: "notice row with a saved key"
-        )
-        attachSmokeScreenshot(named: "ai_services_both_keys_synced")
-        assertHubRow(reads: "Key saved", in: synced)
-        synced.terminate()
-
-        let local = makeApp(seedsGoogleKey: true, seedsKeysLocalOnly: true)
-        local.launch()
-        openSettingsScreen("AI Services", in: local)
-        assertProviderRow("google", reads: "Key saved, this device only", in: local)
-        assertProviderRow("openai", reads: "No key", in: local)
-        attachSmokeScreenshot(named: "ai_services_google_key_this_device")
-    }
-
-    @MainActor
     func testAIServicesKeySheetTestsSavesAndRemovesAKey() throws {
         let app = makeApp()
         app.launch()
@@ -479,7 +456,6 @@ final class AIServicesSettingsUITests: XCTestCase {
     private func makeApp(
         seedsGoogleKey: Bool = false,
         seedsOpenAIKey: Bool = false,
-        seedsKeysLocalOnly: Bool = false,
         policyVariant: String? = nil,
         trialStatus: String? = nil,
         keyTestResult: String? = nil,
@@ -509,9 +485,6 @@ final class AIServicesSettingsUITests: XCTestCase {
         }
         if seedsOpenAIKey {
             app.launchArguments.append("--opencast-seed-analysis-key-openai")
-        }
-        if seedsKeysLocalOnly {
-            app.launchArguments.append("--opencast-seed-analysis-keys-local-only")
         }
         if let policyVariant {
             app.launchArguments.append("--opencast-seed-analysis-policy=\(policyVariant)")

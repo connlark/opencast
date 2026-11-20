@@ -1,9 +1,7 @@
 import Foundation
 
-/// Complete highlight state derived from one absolute media position. Pure and
-/// idempotent: the same inputs produce the same frame at any playback rate and
-/// in any callback order, so coalesced, duplicated, or late media-clock
-/// samples self-heal instead of permanently losing a word.
+/// Pure and idempotent over one absolute media position, so coalesced, duplicated or late
+/// media-clock samples self-heal instead of permanently losing a word.
 nonisolated enum TranscriptKaraokeReducer {
     struct Frame: Equatable {
         var segmentID: Int?

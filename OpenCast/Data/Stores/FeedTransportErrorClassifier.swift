@@ -1,12 +1,8 @@
 import Foundation
 
 nonisolated enum FeedTransportErrorClassifier {
-    /// URLSession returns these codes without putting the request on the
-    /// wire: no satisfied network path, or a device or carrier policy refused
-    /// it. The host-ambiguous codes (`.timedOut`, `.cannotFindHost`,
-    /// `.cannotConnectToHost`, `.networkConnectionLost`, …) stay ordinary
-    /// failures because a dead feed host returns them on a healthy network,
-    /// and that feed must keep its refresh diagnostics.
+    /// Only codes URLSession returns without touching the wire. `.timedOut`, `.cannotFindHost` and the
+    /// like stay ordinary failures: a dead feed host returns them on a healthy network.
     static func isUnreachable(_ error: any Error) -> Bool {
         guard let urlError = error as? URLError else {
             return false

@@ -6,10 +6,6 @@ import os
 import SwiftData
 import SwiftUI
 
-/// Owns the car's template stack: the tab bar and its three lists, the Now
-/// Playing screen's custom controls, the observation loops that keep both
-/// fresh, row selection, and the artwork patch pipeline. Created on connect,
-/// torn down on disconnect.
 final class CarPlayInterfaceCoordinator {
     private static let logger = Logger(subsystem: "com.connor.opencast", category: "CarPlay")
 
@@ -148,9 +144,8 @@ final class CarPlayInterfaceCoordinator {
         }
     }
 
-    /// The Now Playing screen is configured at connect because the system can
-    /// present the shared template on the app's behalf at any time — including
-    /// before the driver ever taps a row.
+    /// Configured at connect: the system can present the shared Now Playing template at any
+    /// time, even before the driver taps a row.
     private func startNowPlayingConfiguration() {
         let configurator = CarPlayNowPlayingConfigurator(actions: makeNowPlayingActions())
         nowPlayingConfigurator = configurator
@@ -158,9 +153,7 @@ final class CarPlayInterfaceCoordinator {
         startObservingButtonState()
     }
 
-    /// Buttons change on their own cadence — a rate tap or a toggle — so they
-    /// get a loop of their own rather than riding the browse lists'. It reads
-    /// no per-second state.
+    /// A loop of its own, apart from the browse lists'. It must read no per-second state.
     private func startObservingButtonState() {
         let appModel = appModel
         buttonStateTask = Task { [weak self] in
@@ -221,10 +214,8 @@ final class CarPlayInterfaceCoordinator {
         )
     }
 
-    /// The car can be the first surface the app opens on, so hydration runs here
-    /// too. The store mutations it makes are exactly what the observation loop
-    /// tracks; the final flag flip needs its own render because it is not
-    /// observable state.
+    /// The car can be the first surface the app opens on, so hydration runs here too. The final
+    /// flag flip is not observable state, so it needs its own render.
     private func startHydration() {
         hydrationTask = Task { [weak self] in
             guard let appModel = self?.appModel, let modelContext = self?.modelContext else {
@@ -389,9 +380,8 @@ final class CarPlayInterfaceCoordinator {
         )
     }
 
-    /// The playlists list routes its own taps: an episodes list pushed from
-    /// the "More Playlists" page is the fourth template, so it spends no
-    /// slot on Show More (the five-template ceiling counts Now Playing).
+    /// An episodes list pushed from the "More Playlists" page is the fourth template and gets
+    /// no Show More row: the five-template ceiling counts Now Playing.
     private func pushPlaylists() {
         let appModel = appModel
         let snapshot = CarPlayBrowseModelBuilder.playlists(
@@ -426,9 +416,6 @@ final class CarPlayInterfaceCoordinator {
         }
     }
 
-    /// The one image a playlist row carries: a manual playlist's first cover
-    /// show, or a smart playlist's most dominant matched show. The smart
-    /// evaluation is the memo the row's episode count already read.
     private static func playlistArtworkURL(for summary: PlaylistSummary, appModel: OpenCastAppModel) -> String? {
         let podcastArtworkURL: (String) -> URL? = { podcastID in
             appModel.library.podcastCache(for: podcastID)?.artworkURL.flatMap(URL.init(string:))
@@ -476,8 +463,6 @@ final class CarPlayInterfaceCoordinator {
         )
     }
 
-    /// The system Up Next affordance historically opened Inbox, which remains
-    /// the useful fallback until the listener has explicitly queued something.
     private func pushInbox() {
         push(
             CarPlayBrowseModelBuilder.inbox(
@@ -568,9 +553,8 @@ final class CarPlayInterfaceCoordinator {
         artworkPatcher.patch(rendered.artworkTargets, sizing: renderer.artworkSizing, scope: .pushed)
     }
 
-    /// A list pushed from Now Playing sits directly on top of it, so playing a
-    /// row returns to the screen the driver came from instead of stacking a
-    /// second copy past the template ceiling.
+    /// A list pushed from Now Playing sits right on top of it, so playing a row pops back to it
+    /// rather than pushing a second Now Playing past the template ceiling.
     private func showNowPlaying(returningToIt: Bool) {
         guard returningToIt else {
             pushNowPlaying()
@@ -594,13 +578,9 @@ final class CarPlayInterfaceCoordinator {
         }
     }
 
-    /// CarPlay throws when a template operation fails with no completion handler,
-    /// and the depth ceiling is the failure worth knowing about.
-    ///
-    /// Everything published here has to be free of listening history, so the
-    /// operation is a compile-time constant and the framework's own error
-    /// identity stands in for its message — a list title names a show the
-    /// listener subscribes to, and a localized description can quote it.
+    /// CarPlay throws when a template operation fails with no completion handler. Logs carry
+    /// no listening history: an error's message can quote a show title, so only its domain
+    /// and code are logged.
     private static func logTemplateFailure(
         _ operation: StaticString,
         didSucceed: Bool,

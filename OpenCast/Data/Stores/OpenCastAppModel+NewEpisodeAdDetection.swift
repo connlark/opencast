@@ -1,11 +1,7 @@
 import Foundation
 import SwiftData
 
-/// Detect Ads in New Episodes: what the trigger reads to qualify an episode,
-/// and the enqueue it asks for.
 extension OpenCastAppModel {
-    /// The enqueue context and the skip zone coordinator are private to the
-    /// app model's main file, which passes them in.
     func makeNewEpisodeAdDetection(
         enqueueContext: AdFreePassEnqueueContext,
         skipZones: PlaybackSkipZoneCoordinator
@@ -35,8 +31,6 @@ extension OpenCastAppModel {
                 self?.hasRestoredPlaybackSurface ?? false
             },
             enqueue: { [weak self, adFreePass] request, modelContext in
-                // No background session is armed: the card needs the
-                // listener's own tap.
                 adFreePass.enqueue(
                     episode: request.episode,
                     origin: request.origin,
@@ -53,8 +47,6 @@ extension OpenCastAppModel {
         )
     }
 
-    /// At launch once the ad detection queue is restored, and on each
-    /// activation.
     func sweepNewEpisodeAdDetection(modelContext: ModelContext) {
         newEpisodeAdDetection.sweep(modelContext: modelContext)
     }

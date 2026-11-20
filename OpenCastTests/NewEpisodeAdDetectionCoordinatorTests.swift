@@ -290,7 +290,6 @@ private final class NewEpisodeTriggerFixture {
         return fixture
     }
 
-    /// A nil `state` leaves the episode without a download record.
     @discardableResult
     func addEpisode(
         _ episodeID: String,

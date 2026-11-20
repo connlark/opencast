@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct HelpTopicView: View {
-    /// Between the topic's blocks, and above the tab accessory at the end.
     nonisolated static let blockSpacing = 20.0
 
     @Environment(OpenCastAppModel.self) private var appModel

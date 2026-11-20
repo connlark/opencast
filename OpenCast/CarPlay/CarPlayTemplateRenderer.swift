@@ -1,8 +1,6 @@
 import CarPlay
 import Foundation
 
-/// Turns browse value models into CarPlay templates. Stateless: it paints from
-/// the warm artwork cache and reports which rows still need a real image.
 struct CarPlayTemplateRenderer {
     let artworkSizing: CarPlayArtworkSizing
 
@@ -127,8 +125,7 @@ struct CarPlayTemplateRenderer {
         onSelect: @escaping (CarPlayListRow) -> Void
     ) -> (item: CPListItem, artworkTarget: CarPlayArtworkTarget?) {
         let artwork = artwork(for: playlistRow.artworkURL, cacheKind: .show)
-        // A symbol row has no URL to patch; an unknown stored symbol falls back
-        // to the playlist glyph so the slot is never empty.
+        // An unknown stored symbol yields nil, so it falls back to the playlist glyph.
         let image = playlistRow.artworkURL == nil
             ? UIImage(systemName: playlistRow.symbolName ?? "music.note.list") ?? UIImage(systemName: "music.note.list")
             : artwork.image
@@ -174,9 +171,8 @@ struct CarPlayTemplateRenderer {
         }
     }
 
-    /// First paint comes from whatever is already in memory — a differently
-    /// sized cache entry is better than a blank row. Anything not already at the
-    /// car's exact size is reported for the staggered patch pass.
+    /// First paint takes any in-memory size, which beats a blank row. Anything not at the car's
+    /// exact size is reported for the patch pass.
     private func artwork(
         for artworkURL: String?,
         cacheKind: ArtworkCacheKind

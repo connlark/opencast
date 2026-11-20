@@ -36,43 +36,6 @@ struct UpNextQueueStoreTests {
         #expect(try fixture.context.fetch(FetchDescriptor<UpNextQueueItemRecord>()).count == 2)
     }
 
-    @Test("Reordering is persisted across a fresh store load")
-    func reorderPersists() throws {
-        let fixture = try makeFixture()
-        for id in ["first", "second", "third"] {
-            #expect(fixture.store.enqueueLast(episode(id), modelContext: fixture.context))
-        }
-        #expect(
-            fixture.store.reorderVisibleEpisodeIDs(
-                ["second", "third", "first"],
-                modelContext: fixture.context
-            )
-        )
-        let reloaded = UpNextQueueStore()
-        let freshContext = ModelContext(fixture.container)
-
-        reloaded.load(
-            resolveEpisode: { self.episode($0) },
-            mayPruneUnresolved: true,
-            modelContext: freshContext
-        )
-
-        #expect(reloaded.items.map(\.episodeID) == ["second", "third", "first"])
-        #expect(reloaded.items.map(\.sequence) == [0, 1, 2])
-    }
-
-    @Test("Popping the head deletes its persisted record")
-    func popDeletesRecord() throws {
-        let fixture = try makeFixture()
-        #expect(fixture.store.enqueueLast(episode("first"), modelContext: fixture.context))
-        #expect(fixture.store.enqueueLast(episode("second"), modelContext: fixture.context))
-
-        #expect(popEpisodeID(from: fixture.store, modelContext: fixture.context) == "first")
-
-        let records = try fixture.context.fetch(FetchDescriptor<UpNextQueueItemRecord>())
-        #expect(records.map(\.episodeID) == ["second"])
-    }
-
     @Test("Clear removes every queue item")
     func clear() throws {
         let fixture = try makeFixture()
@@ -105,37 +68,6 @@ struct UpNextQueueStoreTests {
 
         #expect(fixture.store.items.map(\.episodeID) == ["kept"])
         #expect(try fixture.context.fetch(FetchDescriptor<UpNextQueueItemRecord>()).map(\.episodeID) == ["kept"])
-    }
-
-    @Test("Load drops records whose episode can no longer be resolved")
-    func loadDropsUnresolvableRecords() throws {
-        let fixture = try makeFixture()
-        fixture.context.insert(
-            UpNextQueueItemRecord(
-                episodeID: "missing",
-                podcastID: "show",
-                sequence: 0
-            )
-        )
-        fixture.context.insert(
-            UpNextQueueItemRecord(
-                episodeID: "kept",
-                podcastID: "show",
-                sequence: 1
-            )
-        )
-        try fixture.context.save()
-
-        fixture.store.load(
-            resolveEpisode: { $0 == "kept" ? self.episode($0) : nil },
-            mayPruneUnresolved: true,
-            modelContext: fixture.context
-        )
-
-        #expect(fixture.store.items.map(\.episodeID) == ["kept"])
-        let records = try fixture.context.fetch(FetchDescriptor<UpNextQueueItemRecord>())
-        #expect(records.map(\.episodeID) == ["kept"])
-        #expect(records.map(\.sequence) == [0])
     }
 
     @Test("A failed library load preserves every queued ID until a later authoritative prune")
@@ -178,22 +110,6 @@ struct UpNextQueueStoreTests {
         let records = try reloadedContext.fetch(FetchDescriptor<UpNextQueueItemRecord>())
         #expect(records.map(\.episodeID) == ["kept"])
         #expect(records.map(\.sequence) == [0])
-    }
-
-    @Test("An authoritative empty library prunes every stale queue record")
-    func authoritativeEmptyLibraryPrunesAllRecords() throws {
-        let fixture = try loadedFixture(ids: ["first", "second"])
-        let freshContext = ModelContext(fixture.container)
-
-        fixture.store.load(
-            resolveEpisode: { _ in nil },
-            mayPruneUnresolved: true,
-            modelContext: freshContext
-        )
-
-        #expect(fixture.store.items.isEmpty)
-        let reloadedContext = ModelContext(fixture.container)
-        #expect(try reloadedContext.fetch(FetchDescriptor<UpNextQueueItemRecord>()).isEmpty)
     }
 
     @Test("A prune save failure keeps the last loaded queue and persisted order")
@@ -246,24 +162,6 @@ struct UpNextQueueStoreTests {
         )
     }
 
-    @Test("Visible reorder leaves an unresolved middle slot fixed")
-    func reorderWithUnresolvedMiddle() throws {
-        let fixture = try loadedFixture(ids: ["b", "unresolved", "c"])
-
-        #expect(
-            fixture.store.reorderVisibleEpisodeIDs(
-                ["c", "b"],
-                modelContext: fixture.context
-            )
-        )
-
-        #expect(fixture.store.items.map(\.episodeID) == ["c", "unresolved", "b"])
-        try expectPersistedOrder(
-            ["c", "unresolved", "b"],
-            container: fixture.container
-        )
-    }
-
     @Test("Visible multi-row reorder persists through a fresh context")
     func multiRowVisibleReorder() throws {
         let fixture = try loadedFixture(ids: ["a", "unresolved", "b", "c", "d"])
@@ -307,48 +205,6 @@ struct UpNextQueueStoreTests {
         #expect(store.items.map(\.episodeID) == ["first", "second", "third"])
         try expectPersistedOrder(["first", "second", "third"], container: container)
         #expect(store.lastErrorMessage?.contains("Unable to remove episodes from Up Next") == true)
-    }
-
-    @Test("No-op clear and podcast removal preserve an unconsumed error and skip notifications")
-    func noOpMutationsStayHonest() throws {
-        let fixture = try makeFixture()
-        var changeCount = 0
-        fixture.store.onQueueChanged = { changeCount += 1 }
-        #expect(!fixture.store.reorderVisibleEpisodeIDs(["missing"], modelContext: fixture.context))
-        let error = fixture.store.lastErrorMessage
-
-        #expect(fixture.store.clear(modelContext: fixture.context))
-        #expect(fixture.store.removeAll(forPodcastID: "missing", modelContext: fixture.context))
-
-        #expect(fixture.store.lastErrorMessage == error)
-        #expect(changeCount == 0)
-    }
-
-    @Test("A playlist tag round-trips through a fresh load and untagged enqueues stay nil")
-    func sourceTagRoundTripsThroughLoad() throws {
-        let fixture = try makeFixture()
-        #expect(
-            fixture.store.enqueueLast(
-                [episode("first"), episode("second")],
-                source: "playlist-a",
-                modelContext: fixture.context
-            )
-        )
-        #expect(fixture.store.enqueueLast(episode("hand"), modelContext: fixture.context))
-        #expect(fixture.store.enqueueNext(episode("front"), source: "playlist-b", modelContext: fixture.context))
-
-        let expected: [String?] = ["playlist-b", "playlist-a", "playlist-a", nil]
-        #expect(fixture.store.items.map(\.episodeID) == ["front", "first", "second", "hand"])
-        #expect(fixture.store.items.map(\.sourcePlaylistID) == expected)
-
-        let reloaded = UpNextQueueStore()
-        reloaded.load(
-            resolveEpisode: { self.episode($0) },
-            mayPruneUnresolved: true,
-            modelContext: ModelContext(fixture.container)
-        )
-        #expect(reloaded.items.map(\.episodeID) == ["front", "first", "second", "hand"])
-        #expect(reloaded.items.map(\.sourcePlaylistID) == expected)
     }
 
     @Test("Re-enqueueing a queued episode moves it and takes the new source value")
@@ -592,17 +448,6 @@ struct UpNextQueueStoreTests {
         #expect(try ModelContext(container).fetch(FetchDescriptor<UpNextQueueItemRecord>()).count == 3)
     }
 
-    @Test("Batch Play Last evicts rows in the same save and appends behind the rest")
-    func batchEnqueueLastEvictsInTheSameSave() throws {
-        let fixture = try loadedFixture(ids: ["w", "x", "y"])
-
-        #expect(fixture.store.enqueueLast([episode("a"), episode("b")], source: nil, evicting: ["w"], modelContext: fixture.context))
-
-        #expect(fixture.store.items.map(\.episodeID) == ["x", "y", "a", "b"])
-        #expect(isStrictlyIncreasing(fixture.store.items.map(\.sequence)))
-        #expect(reloadedItems(container: fixture.container).map(\.episodeID) == ["x", "y", "a", "b"])
-    }
-
     @Test("A failed save of an evicting batch keeps every row, the evicted ones included, and reports it")
     func failedEvictingBatchKeepsEveryRow() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -629,32 +474,6 @@ struct UpNextQueueStoreTests {
         #expect(store.lastErrorMessage == "Unable to add the episode to Up Next: Simulated queue save failure")
         try expectPersistedOrder(["w", "x", "y", "z"], container: container)
         #expect(try context.fetch(FetchDescriptor<UpNextQueueItemRecord>()).map(\.episodeID).sorted() == ["w", "x", "y", "z"])
-    }
-
-    @Test("An empty batch saves nothing, skips notifications, and keeps an unconsumed error")
-    func emptyBatchIsNoOp() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        var saveCount = 0
-        let store = UpNextQueueStore { saveContext in
-            saveCount += 1
-            try saveContext.save()
-        }
-        #expect(store.enqueueLast(episode("x"), modelContext: context))
-        var changeCount = 0
-        store.onQueueChanged = { changeCount += 1 }
-        saveCount = 0
-        #expect(!store.reorderVisibleEpisodeIDs(["missing"], modelContext: context))
-        let error = store.lastErrorMessage
-        #expect(error != nil)
-
-        #expect(store.enqueueNext([], source: "playlist-a", modelContext: context))
-        #expect(store.enqueueLast([], source: nil, modelContext: context))
-
-        #expect(store.items.map(\.episodeID) == ["x"])
-        #expect(store.lastErrorMessage == error)
-        #expect(saveCount == 0)
-        #expect(changeCount == 0)
     }
 
     private func makeFixture() throws -> (

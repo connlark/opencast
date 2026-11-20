@@ -1,8 +1,4 @@
-/// Exact identity of an episode audio source as observed by one party.
-///
-/// The server never reserves credits or calls a model until the device and
-/// server identities agree on `sha256` and `byteCount`. Header values are
-/// diagnostic only and never substitute for the hash.
+/// Header values are diagnostic only and never substitute for `sha256` and `byteCount`.
 public struct OpenCastRemoteTranscriptionSourceIdentity: Codable, Sendable, Equatable {
     public var sha256: String
     public var byteCount: Int64

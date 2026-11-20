@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Settings › AI Services: the listener's provider keys, which provider each
-/// analysis uses, and the token usage counted on this device.
 struct SettingsAIServicesView: View {
     @Environment(OpenCastAppModel.self) private var appModel
 

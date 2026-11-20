@@ -31,8 +31,8 @@ func activateSystemPlaybackAudioSession() async throws -> Bool {
     #endif
 }
 
-/// Deactivation is a synchronous XPC round trip to the media server (~15 ms
-/// on an M3 iPad), so it runs off the main actor like activation does.
+/// Deactivation is a synchronous XPC round trip to the media server (about 15 ms on an
+/// M3 iPad), so it runs off the main actor.
 @concurrent
 func deactivateSystemPlaybackAudioSession() async throws {
     #if os(iOS) || os(tvOS) || os(visionOS)

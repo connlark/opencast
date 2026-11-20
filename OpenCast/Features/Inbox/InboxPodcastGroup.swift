@@ -1,11 +1,8 @@
 import Foundation
 
-/// One show in the Group by Podcast Inbox: the subscription and which of
-/// its episodes pass the current filter, newest first. Groups keep the
-/// Inbox's order, so a show appears where its newest matching episode would.
 struct InboxPodcastGroup: Identifiable {
     let subscription: SubscriptionRecord
-    /// The show's Inbox rows, in Inbox order; the row count is the badge.
+    /// In Inbox order.
     let episodes: [EpisodeListItemSnapshot]
 
     var id: String {
@@ -16,8 +13,7 @@ struct InboxPodcastGroup: Identifiable {
         episodes.count
     }
 
-    /// `episodes` are the filtered Inbox rows. An episode whose show is no
-    /// longer subscribed has no cell to stand in and is skipped.
+    /// `episodes` are the filtered Inbox rows, in Inbox order.
     static func make(
         episodes: [EpisodeListItemSnapshot],
         subscriptions: [SubscriptionRecord]

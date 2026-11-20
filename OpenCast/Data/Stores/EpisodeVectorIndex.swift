@@ -1,9 +1,6 @@
 import Accelerate
 import Foundation
 
-/// Exact cosine search over one show's line vectors: a row-major
-/// `positions.count × dimension` matrix of unit rows, so a query is a single
-/// matrix-vector product. A row with no vector stays zero and scores 0.
 nonisolated struct EpisodeVectorIndex: Sendable {
     let dimension: Int
     let positions: [Int]
@@ -23,8 +20,6 @@ nonisolated struct EpisodeVectorIndex: Sendable {
         self.matrix = matrix
     }
 
-    /// One similarity per row, in row order. A query of the wrong size or
-    /// with a non-finite component scores every row 0.
     func similarities(_ query: [Float]) -> [Float] {
         var result = [Float](repeating: 0, count: positions.count)
         guard !positions.isEmpty, dimension > 0, query.count == dimension, query.allSatisfy(\.isFinite) else {
@@ -48,7 +43,6 @@ nonisolated struct EpisodeVectorIndex: Sendable {
         return result
     }
 
-    /// Every row, most similar first, ties by position (newest first).
     func rank(_ query: [Float]) -> [EpisodeMetadataMatch] {
         zip(positions, similarities(query))
             .map { EpisodeMetadataMatch(position: $0, score: Double($1)) }
@@ -57,9 +51,8 @@ nonisolated struct EpisodeVectorIndex: Sendable {
             }
     }
 
-    /// Rows already within rounding of unit length are stored bit for bit, so
-    /// the embedder's own normalisation decides every tie; anything else is
-    /// scaled to unit length, and an empty or non-finite row stays zero.
+    /// A row already within rounding of unit length is stored bit for bit, so the embedder's own
+    /// normalisation decides every tie.
     private static func unitRow(_ vector: [Float]) -> [Float]? {
         let squaredLength = vector.reduce(0) { $0 + $1 * $1 }
         guard squaredLength.isFinite, squaredLength > 0 else {

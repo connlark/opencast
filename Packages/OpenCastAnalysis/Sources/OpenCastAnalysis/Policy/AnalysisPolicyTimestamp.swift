@@ -1,10 +1,7 @@
 import Foundation
 
-/// The one timestamp form a policy bundle may carry: canonical UTC
-/// `YYYY-MM-DDTHH:MM:SSZ` with a real calendar date, hours 00-23 and minutes
-/// and seconds 00-59. The generator enforces the same rule, and both sides are
-/// tested against the gateway's shared timestamp cases, so a bundle that
-/// passes publication always decodes here and nothing else does.
+/// Accepts exactly what the bundle generator accepts: canonical UTC `YYYY-MM-DDTHH:MM:SSZ` with a
+/// real calendar date.
 public enum AnalysisPolicyTimestamp {
     public static func date(from value: String) -> Date? {
         unixSeconds(from: value).map { Date(timeIntervalSince1970: TimeInterval($0)) }

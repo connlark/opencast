@@ -5,9 +5,6 @@ import OpenCastCore
 import SwiftData
 import UIKit
 
-/// Explicit launch-only Release probe using the normal subscription, cache,
-/// identity, search and library publication path. Captures stay outside app
-/// resources and the benchmark's report is device-local.
 enum FeedBenchmarkRunner {
     static let requestArgument = "--opencast-run-feed-benchmark"
 

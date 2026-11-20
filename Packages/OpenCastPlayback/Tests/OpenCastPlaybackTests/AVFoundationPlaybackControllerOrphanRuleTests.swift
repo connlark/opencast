@@ -3,9 +3,6 @@ import OpenCastCore
 import Testing
 @testable import OpenCastPlayback
 
-/// Rule 8 of lane A2: the orphan rule in completeAudioSessionActivation's
-/// stale-generation branch must not release a session the preview owns or
-/// is acquiring. This test stages the interleaving that does exactly that.
 @MainActor
 @Suite
 struct AVFoundationPlaybackControllerOrphanRuleTests {
@@ -30,24 +27,19 @@ struct AVFoundationPlaybackControllerOrphanRuleTests {
         try controller.load(episode(duration: 240))
         controller.play()
         try await waitUntil { await activation.recordedCallCount() == 1 }
-        // 2. Its system activation returns (released before the unload, so
-        //    it returns instead of throwing as cancelled) ...
+        // 2. It returns, released before the unload so it does not throw as cancelled.
         await activation.releaseCalls(through: 1)
-        // 3. ... but before its completion runs on the main actor, the
-        //    episode is unloaded and a preview starts. Nothing holds the
-        //    session, so the preview starts its own acquisition.
+        // 3. Before its completion runs, the episode unloads and a preview starts its own acquisition.
         controller.unload()
         controller.previewAutoSkipCue(previewURL)
         try await waitUntil { await activation.recordedCallCount() == 2 }
         await yieldToPendingWork()
 
-        // 4. The orphaned completion found no episode task and an inactive
-        //    session, so it scheduled a release while the preview acquires.
+        // 4. The orphaned completion releases nothing while the preview acquires,
         let releasesWhileAcquiring = await deactivation.recordedCallCount()
         #expect(releasesWhileAcquiring == 0)
 
-        // 5. The preview's activation completes current: it owns the session
-        //    and plays, with the orphan's release still pending behind it.
+        // 5. nor while the preview owns the session and plays.
         await activation.releaseCalls(through: 2)
         try await waitUntil { factory.latestCue != nil }
         await yieldToPendingWork()

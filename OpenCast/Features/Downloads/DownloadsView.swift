@@ -16,7 +16,6 @@ struct DownloadsView: View {
     @State private var selectedEpisodeIDs: Set<String> = []
     @State private var isConfirmingDeleteSelected = false
     @State private var isConfirmingEditRemovePlayed = false
-    /// Group by Show sections collapsed this session.
     @State private var collapsedShowIDs: Set<String> = []
 
     let onOpenEpisode: (String) -> Void
@@ -31,8 +30,7 @@ struct DownloadsView: View {
             ? allDownloads.filteringUnplayed(using: appModel.library)
             : allDownloads
         let downloadedEpisodes = model.downloaded.map(\.episode)
-        // The model already uniques items per episode ID; uniquing again keeps
-        // bad persisted data from ever trapping the whole screen.
+        // Uniquing again so bad persisted data can never trap the whole screen.
         let downloadedItemsByID = Dictionary(
             model.downloaded.map { ($0.id, $0) },
             uniquingKeysWith: { first, _ in first }
@@ -45,7 +43,6 @@ struct DownloadsView: View {
         let searchResults = searchSession.displayedResults(for: searchTaskKey)
         let library = appModel.library
         let grouping = appModel.downloadSettings.listGrouping
-        // A search lists matches across shows, as the Inbox does.
         let showGroups = grouping == .byShow && !hasSearchQuery
             ? DownloadsShowGroup.make(
                 items: model.downloaded,
@@ -54,8 +51,6 @@ struct DownloadsView: View {
             : nil
 
         List(selection: $selectedEpisodeIDs) {
-            // Download Options' Group by Show saves a setting; a failed save
-            // reports here beside, never instead of, a download error.
             let downloadErrorMessage = appModel.downloads.lastErrorMessage
             let settingsErrorMessage = appModel.downloadSettings.lastErrorMessage
             if downloadErrorMessage != nil || settingsErrorMessage != nil {
@@ -238,9 +233,8 @@ struct DownloadsView: View {
         }
         .task(id: searchTaskKey) {
             let library = appModel.library
-            // Downloads survive an unsubscribe as orphans, but the derived
-            // index is scoped to active podcasts and their cache rows; feed
-            // orphans to the session so they stay findable in this list.
+            // The search index covers active podcasts only, so orphaned downloads are searched
+            // unindexed.
             let orphanedEpisodes = downloadedEpisodes.filter {
                 !library.isActivelySubscribed(to: $0.podcastID)
             }
@@ -294,8 +288,6 @@ struct DownloadsView: View {
         }
     }
 
-    /// A thin adapter: `Section(isExpanded:)` takes a binding, and the
-    /// session's collapsed set is the one source of truth.
     private func expansionBinding(for podcastID: String) -> Binding<Bool> {
         Binding {
             !collapsedShowIDs.contains(podcastID)

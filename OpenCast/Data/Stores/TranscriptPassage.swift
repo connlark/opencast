@@ -1,15 +1,12 @@
 import Foundation
 import OpenCastTranscription
 
-/// A run of consecutive transcript segments the passage index scores and the
-/// Ask tools return as one unit. Citations still name individual segments,
-/// so the tools print every segment line; the passage only decides what
-/// travels together.
+/// Citations name individual segments, so a passage only decides which segment lines travel
+/// together.
 nonisolated struct TranscriptPassage: Identifiable, Equatable, Sendable {
     /// Position in the index, in transcript order.
     let id: Int
     let segments: [OpenCastTranscriptSegment]
-    /// Folded, stemmed tokens with their counts, for BM25 scoring.
     let termFrequencies: [String: Int]
     let tokenCount: Int
 

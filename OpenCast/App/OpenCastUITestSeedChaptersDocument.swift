@@ -2,10 +2,8 @@ import Foundation
 import OpenCastTranscription
 import SwiftData
 
-/// UI tests: a completed Chapters & Summary result as an earlier build wrote
-/// it (the service's model and policy), so a test can check that documents
-/// from before on-device analysis still render. Seeded with
-/// `OPENCAST_SEED_CHAPTERS_DOCUMENT=1` beside the completed transcript.
+/// Keeps the shape builds before on-device analysis wrote (the service's model
+/// and policy), so documents from those builds stay covered.
 enum OpenCastUITestSeedChaptersDocument {
     static let environmentKey = "OPENCAST_SEED_CHAPTERS_DOCUMENT"
     static let chapterTitles = ["Seeded Welcome", "Seeded Sponsor Read"]

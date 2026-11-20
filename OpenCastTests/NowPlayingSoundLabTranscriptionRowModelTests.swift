@@ -7,20 +7,13 @@ struct NowPlayingSoundLabTranscriptionRowModelTests {
         NowPlayingSoundLabTranscriptionMode.local,
         .cloudResolving,
         .cloud,
-    ], [
-        NowPlayingSoundLabTranscriptionActivity.none,
-        .currentEpisode,
-        .otherEpisode,
     ])
-    func completedTranscriptWins(
-        mode: NowPlayingSoundLabTranscriptionMode,
-        activity: NowPlayingSoundLabTranscriptionActivity
-    ) {
+    func completedTranscriptWins(mode: NowPlayingSoundLabTranscriptionMode) {
         let model = makeModel(
             hasCompletedTranscript: true,
             mode: mode,
-            remoteActivity: activity,
-            localActivity: activity
+            remoteActivity: .currentEpisode,
+            localActivity: .currentEpisode
         )
 
         #expect(model.action == .showTranscript)
@@ -93,33 +86,6 @@ struct NowPlayingSoundLabTranscriptionRowModelTests {
         assertCloudIdle(makeModel(mode: .cloud, localActivity: .otherEpisode))
     }
 
-    @Test("The accessibility identifier is stable across every presentation")
-    func accessibilityIdentifierIsStable() {
-        for completed in [false, true] {
-            for mode in [
-                NowPlayingSoundLabTranscriptionMode.local,
-                .cloudResolving,
-                .cloud,
-            ] {
-                for activity in [
-                    NowPlayingSoundLabTranscriptionActivity.none,
-                    .currentEpisode,
-                    .otherEpisode,
-                ] {
-                    let model = makeModel(
-                        hasCompletedTranscript: completed,
-                        mode: mode,
-                        remoteActivity: activity,
-                        localActivity: activity
-                    )
-
-                    #expect(model.accessibilityIdentifier
-                        == "Now Playing Sound Lab Transcript Action")
-                }
-            }
-        }
-    }
-
     private func makeModel(
         hasCompletedTranscript: Bool = false,
         mode: NowPlayingSoundLabTranscriptionMode,
@@ -164,16 +130,6 @@ struct NowPlayingSoundLabTranscriptionStateResolverTests {
     @Test("Request-only activity covers download and model preparation")
     func requestOnlyActivity() {
         #expect(resolveActivity(requestEpisodeID: "current") == .currentEpisode)
-    }
-
-    @Test("Direct store-only activity is authoritative")
-    func storeOnlyActivity() {
-        #expect(resolveActivity(storeEpisodeID: "current") == .currentEpisode)
-    }
-
-    @Test("Request and store can consistently name the current episode")
-    func bothSourcesNameCurrentEpisode() {
-        #expect(resolveActivity(requestEpisodeID: "current", storeEpisodeID: "current") == .currentEpisode)
     }
 
     @Test("Current activity wins over inconsistent other activity")

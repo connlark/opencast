@@ -1,7 +1,6 @@
 import Foundation
 
-/// One wake-up from the transcript-scoped media clock. Consumers derive their
-/// complete state from `position`; samples are never events to count.
+/// Consumers derive their state from `position`; samples are not events to count.
 public struct PlaybackMediaClockSample: Equatable, Sendable {
     public let position: TimeInterval
     public let rate: Float

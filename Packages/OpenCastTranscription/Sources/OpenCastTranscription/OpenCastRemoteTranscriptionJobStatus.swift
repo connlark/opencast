@@ -1,4 +1,3 @@
-/// Snapshot of one job as returned by create/source/poll/ack/cancel routes.
 public struct OpenCastRemoteTranscriptionJobStatus: Codable, Sendable, Equatable {
     public var jobID: String
     public var state: OpenCastRemoteTranscriptionJobState

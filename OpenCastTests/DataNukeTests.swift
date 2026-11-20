@@ -227,8 +227,6 @@ struct DataNukeTests {
         #expect(appModel.playbackSettings.customSkipSound == nil)
     }
 
-    /// The listener's own sound, chosen, as an import leaves it: the file and
-    /// its three preferences.
     private func seedChosenCustomSkipSound(files: CustomSkipSoundFiles, context: ModelContext) throws -> String {
         let fileName = "custom-\(UUID().uuidString).wav"
         try FileManager.default.createDirectory(at: files.directory, withIntermediateDirectories: true)
@@ -408,11 +406,8 @@ struct DataNukeTests {
         appModel.transcriptions.load(modelContext: context)
         appModel.transcriptAnalyses.load(modelContext: context)
 
-        // The first explicit run parks inside the producer; the second
-        // queues behind it, leaving a suspended drain holding a pending
-        // episode when the nuke starts. Wait for the producer call itself:
-        // the run reports isRunning before it reaches the producer, and a
-        // nuke that lands in that gap cancels a run that never started.
+        // Wait for the producer call, not just isRunning: a nuke landing
+        // between the two cancels a run that never started.
         appModel.generateChaptersAndSummary(episodeID: episodeID, modelContext: context)
         try #require(await waitUntil {
             transcriptAnalyses.isRunning(for: episodeID) && producer.isHolding
@@ -469,8 +464,6 @@ struct DataNukeTests {
 
         try await appModel.nukeAllData(modelContext: context)
 
-        // The next generate after a nuke must disclose again: the
-        // preference row is gone and the post-nuke reload reflects it.
         #expect(!transcriptAnalyses.hasAcknowledgedGenerateDisclosure)
         #expect(try context.fetch(FetchDescriptor<LocalPreferenceRecord>()).isEmpty)
     }
@@ -572,7 +565,6 @@ struct DataNukeTests {
             )
         }
 
-        // Usage from earlier runs, which the wipe deletes.
         appModel.analysisUsage.load(modelContext: context)
         #expect(appModel.analysisUsage.record(
             provider: .google,
@@ -583,8 +575,6 @@ struct DataNukeTests {
             runID: "nuke-earlier-run",
             modelContext: context
         ))
-        // A billed Chapters & Summary run whose card expired, its record
-        // running and awaiting a resume.
         let episodeID = "nuke-interrupted-chapters"
         let interrupted = AnalysisRunRecord(
             feature: .chaptersSummary,
@@ -610,8 +600,7 @@ struct DataNukeTests {
         try context.save()
         appModel.transcriptAnalyses.load(modelContext: context)
         #expect(appModel.transcriptAnalyses.resumableEpisodeIDs == [episodeID])
-        // An ad-detection run that ended in this process with its usage
-        // save failed: the next load would count it.
+        // This run's usage save failed, so the next load would count it.
         let unsaved = AnalysisRunRecord(
             feature: .adDetection,
             episodeID: "nuke-unsaved-ads",
@@ -744,8 +733,6 @@ struct DataNukeTests {
                 )
             ]
         )
-        // The flag is unset and the snapshot still pending: the state a launch
-        // whose copy failed (or never ran) is in when Delete Data runs.
         let appModel = try makeAvailableAppModel(
             legacyLocalPlaylists: legacySnapshot,
             playlistMigrationDefaults: defaults
@@ -847,10 +834,6 @@ struct DataNukeTests {
         #expect(appModel.library.refreshLogs.isEmpty)
     }
 
-    /// The stale refresh here is parked INSIDE its cache write (the gate
-    /// below), not at the fetch: that is the one suspension after which the
-    /// unwinding flow sweeps the feed cache, and the sweep must not take a
-    /// subscription the user re-added after the reset (2026-09-04 review).
     @Test("Stale refresh unwinding after nuke keeps a resubscribed feed's cache")
     func staleRefreshUnwindingAfterNukeKeepsResubscribedFeedCache() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -892,11 +875,12 @@ struct DataNukeTests {
                 episodeID: "race-stale-episode"
             )
         )
+        // Park inside the cache write, not the fetch: only after this
+        // suspension does the unwinding flow sweep the feed cache.
         #expect(await localCache.waitForGatedUpsert())
 
         try await appModel.nukeAllData(modelContext: context)
 
-        // The user subscribes to the same feed again after the reset.
         await feedService.serveImmediately(
             makeSnapshot(
                 feedURL: feedURL,
@@ -908,8 +892,6 @@ struct DataNukeTests {
         let resubscribed = try await baseCache.loadLibrary(activePodcastIDs: [feedURL])
         #expect(resubscribed.episodes.map(\.episodeID) == ["race-resubscribed-episode"])
 
-        // The stale refresh resumes, fails its generation check, and must
-        // not sweep the cache the new subscription now owns.
         await localCache.releaseGatedUpsert()
         await refreshTask.value
 
@@ -1359,7 +1341,6 @@ private actor HangingFeedService: FeedService {
         continuation = nil
     }
 
-    /// Every later fetch (a resubscribe after the reset) returns this at once.
     func serveImmediately(_ snapshot: FeedSnapshot) {
         immediateSnapshot = snapshot
     }
@@ -1376,9 +1357,6 @@ private actor HangingFeedService: FeedService {
     }
 }
 
-/// Parks the first cache upsert until released — the only way to leave a
-/// write flow suspended between its cache write and the generation check
-/// that follows it. Everything else forwards to the wrapped store.
 private actor GatedLocalLibraryCacheStore: LocalLibraryCacheStore {
     private let base: any LocalLibraryCacheStore
     private var gateArmed = true

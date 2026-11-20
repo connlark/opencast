@@ -117,10 +117,8 @@ struct LibraryView: View {
         default:
             if subscriptions.isEmpty {
                 List {
-                    // Playlists outlive their shows and the Playlists tab is
-                    // hidden on iPhone, so the rows stay while they lead
-                    // somewhere: they are absent only when all are empty, and
-                    // Notes keeps its row here only while it holds a note.
+                    // Playlists outlive their shows and have no tab on iPhone, so the rows stay
+                    // while any of them leads somewhere.
                     if hasCollections {
                         collectionsSection(notesCount: notesCount == 0 ? nil : notesCount)
                     }

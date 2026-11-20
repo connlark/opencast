@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// A show's resolved Keep Downloaded limit as a small capsule ("Keep 3",
-/// "No limit") beside its storage figures.
 struct DownloadKeepLimitChip: View {
     let keepLimit: DownloadKeepLimit
 

@@ -1,17 +1,6 @@
 import Foundation
 import SwiftData
 
-/// Download New Episodes. Each enabled show keeps a watermark: episodes
-/// released after it are candidates, and a pass downloads the newest of
-/// them, at most the show's Keep Downloaded limit (or
-/// `unlimitedBatchCap` with No Limit), then moves the watermark to the
-/// newest release, so skipped older episodes are never downloaded later.
-/// Any existing download record blocks an episode: a failed or deleted
-/// automatic download is not retried. Passes run only in the foreground,
-/// after refreshes and on activation; nothing schedules them in the
-/// background. Each download started for a show with Detect Ads in New
-/// Episodes leaves a marker, which `NewEpisodeAdDetectionCoordinator`
-/// takes once the download completes.
 final class PodcastAutoDownloadCoordinator {
     static let unlimitedBatchCap = 3
 
@@ -23,10 +12,8 @@ final class PodcastAutoDownloadCoordinator {
     private var passTask: Task<Void, Never>?
     private var passGeneration = 0
     private var rerunRequested = false
-    // Live per-scene activity, keyed by each root scene's lifecycle. A
-    // caller deciding across awaits whether its scene is active can act on a
-    // stale answer; this gate can't. With several iPad windows, passes run
-    // while any of them is active.
+    // Live per-scene activity: a caller deciding across awaits whether its scene is active can act
+    // on a stale answer. Passes run while any scene is active.
     private var sceneActivity: [UUID: Bool] = [:]
     private var hasRegisteredScene = false
 
@@ -44,11 +31,6 @@ final class PodcastAutoDownloadCoordinator {
         self.now = now
     }
 
-    /// Turns the show on with its watermark just below its newest release,
-    /// so that release (and any sharing its timestamp) downloads in the pass
-    /// this schedules, under the same Wi-Fi rule as later ones. A show with
-    /// no released episode yet starts from the distant past and the batch
-    /// cap bounds its first pass.
     @discardableResult
     func enableAutoDownload(forPodcastID podcastID: String, modelContext: ModelContext) -> Bool {
         guard !settings.autoDownloadsNewEpisodes(forPodcastID: podcastID) else {
@@ -67,8 +49,6 @@ final class PodcastAutoDownloadCoordinator {
         return true
     }
 
-    /// Coalesces: a request while a pass runs queues one more pass after it.
-    /// Ignored while the scene is not active.
     func schedulePass(modelContext: ModelContext) {
         guard isForeground else {
             return
@@ -89,22 +69,15 @@ final class PodcastAutoDownloadCoordinator {
         }
     }
 
-    /// Schedules a pass and waits for it and any pass it coalesced with.
     func runPass(modelContext: ModelContext) async {
         schedulePass(modelContext: modelContext)
         await passTask?.value
     }
 
-    /// Open while any root scene is active, and before any scene reports
-    /// (callers without one, such as tests).
     var isForeground: Bool {
         hasRegisteredScene ? sceneActivity.values.contains(true) : true
     }
 
-    /// Follows each root scene. When the last active scene leaves the
-    /// foreground, the pass in flight is cancelled and new requests are
-    /// ignored until a scene is active again. Coming back schedules nothing
-    /// by itself; activation maintenance runs a pass.
     func setScene(_ sceneID: UUID, isActive: Bool) {
         let wasForeground = isForeground
         hasRegisteredScene = true
@@ -124,9 +97,8 @@ final class PodcastAutoDownloadCoordinator {
         }
     }
 
-    /// For the data nuke and the scene leaving the foreground. A pass
-    /// cancelled at its network check leaves every watermark where it was,
-    /// so the next pass picks the same episodes up.
+    /// A pass cancelled at its network check leaves every watermark in place, so the next pass
+    /// picks the same episodes up.
     func cancelPendingWork() {
         passGeneration += 1
         passTask?.cancel()

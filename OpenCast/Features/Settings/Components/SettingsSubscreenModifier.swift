@@ -14,8 +14,6 @@ struct SettingsSubscreenModifier: ViewModifier {
 }
 
 extension View {
-    /// `rowSpacing` is a scroll view subscreen's own spacing between its
-    /// sections; List and Form subscreens leave it nil.
     func settingsSubscreen(title: String, rowSpacing: Double? = nil) -> some View {
         modifier(SettingsSubscreenModifier(title: title, rowSpacing: rowSpacing))
     }

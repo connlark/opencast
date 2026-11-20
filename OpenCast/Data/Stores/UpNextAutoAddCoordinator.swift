@@ -1,27 +1,17 @@
 import Foundation
 import SwiftData
 
-/// Auto Add to Up Next, Pocket Casts' model. Each show that is on keeps a
-/// device-local release watermark: a pass queues the show's episodes
-/// released after it that are unplayed, not queued, not playing and have
-/// audio, oldest first, at the show's position and within the global limit,
-/// then moves the watermark to the newest release whether or not each one
-/// was queued, so a skipped episode is never retried. Turning a show on
-/// queues nothing, and nothing older than the watermark is ever backfilled.
-/// A pass is one synchronous main-actor stretch and runs only in the
-/// foreground.
+/// A pass is one synchronous main-actor stretch and runs only in the foreground.
 final class UpNextAutoAddCoordinator {
     private let library: LibraryStore
     private let upNextQueue: UpNextQueueStore
     private let settings: UpNextAutoAddSettingsStore
     private let isCurrentEpisode: (String) -> Bool
     private let now: () -> Date
-    // Live per-scene activity, keyed by each root scene's lifecycle. With
-    // several iPad windows, passes run while any of them is active.
+    // Keyed by root scene: with several iPad windows, passes run while any one is active.
     private var sceneActivity: [UUID: Bool] = [:]
     private var hasRegisteredScene = false
 
-    /// `isCurrentEpisode` answers by episode ID.
     init(
         library: LibraryStore,
         upNextQueue: UpNextQueueStore,
@@ -36,14 +26,10 @@ final class UpNextAutoAddCoordinator {
         self.now = now
     }
 
-    /// Open while any root scene is active, and before any scene reports
-    /// (callers without one, such as tests).
     var isForeground: Bool {
         hasRegisteredScene ? sceneActivity.values.contains(true) : true
     }
 
-    /// Follows each root scene. Coming back to the foreground runs nothing
-    /// by itself; activation maintenance runs a pass.
     func setScene(_ sceneID: UUID, isActive: Bool) {
         hasRegisteredScene = true
         sceneActivity[sceneID] = isActive
@@ -53,8 +39,7 @@ final class UpNextAutoAddCoordinator {
         sceneActivity[sceneID] = nil
     }
 
-    /// A position turns the show on or moves it; nil turns it off. A false
-    /// leaves its message in the failing store's `lastErrorMessage`.
+    /// On false, the failing store's `lastErrorMessage` holds the message.
     @discardableResult
     func setPosition(
         _ position: UpNextAutoAddPosition?,
@@ -67,19 +52,9 @@ final class UpNextAutoAddCoordinator {
         return failure == nil
     }
 
-    /// Runs `saveSyncedValue`, the synced save that carries `position`,
-    /// with the device-local watermark kept in step. Turning a show on
-    /// writes its fresh watermark first (the newest release, or now when it
-    /// has none, over any row left from an earlier time it was on), so the
-    /// show turns on from this device only with a fresh baseline: a failed
-    /// write stops before the save and leaves the show off, and a failed
-    /// save after it removes the fresh row best-effort. After a save that
-    /// keeps the show on, a missing row is written, so saving again repeats
-    /// a failed write; after one that leaves it off, the row is removed.
-    /// Returns nil once all of it is saved, else the message of the step
-    /// that failed: the settings store's for a watermark write or removal,
-    /// the library's for the synced save (`saveSyncedValue` is a
-    /// `LibraryStore` save).
+    /// Turning a show on writes its fresh watermark before the synced save, so the show is never
+    /// on without a baseline; a failed save removes that row again. Returns nil, or the message
+    /// of the step that failed.
     @discardableResult
     func savePosition(
         _ position: UpNextAutoAddPosition?,
@@ -110,18 +85,14 @@ final class UpNextAutoAddCoordinator {
             : failureMessage(settings.lastErrorMessage)
     }
 
-    /// Every failing save leaves its store's message; the fallback only
-    /// keeps a failure from reading as success.
+    /// The fallback only keeps a failure from reading as success.
     private func failureMessage(_ message: String?) -> String {
         message ?? "Unable to save playback settings."
     }
 
-    /// Ignored while no scene is active. Ends by deleting the watermark
-    /// rows of shows that are no longer on (turned off or unsubscribed on
-    /// another device), so turning one on again heals at its newest release
-    /// instead of queuing what came out while it was off. Returns the first
-    /// failed queue save's message, taken from the queue store before a
-    /// later success can clear it.
+    /// Deletes the watermarks of shows no longer on, so turning one on again starts at its
+    /// newest release. Returns the first failed queue save's message, taken before a later
+    /// success can clear it.
     @discardableResult
     func runPass(modelContext: ModelContext) -> String? {
         guard isForeground else {
@@ -171,9 +142,7 @@ final class UpNextAutoAddCoordinator {
         )
     }
 
-    /// Oldest first. Queue membership is left to the walk. An archived
-    /// release was triaged out of the Inbox, so it is skipped like a played
-    /// one.
+    /// Queue membership is left to the walk in `enqueue`, which can evict rows.
     private func candidates(in released: [EpisodeListItemSnapshot]) -> [EpisodeListItemSnapshot] {
         let archivedEpisodeIDs = library.archivedEpisodeIDs
         return released.reversed().filter { episode in
@@ -184,15 +153,9 @@ final class UpNextAutoAddCoordinator {
         }
     }
 
-    /// Pocket Casts' walk, oldest candidate first, against a copy of the
-    /// live queue (earlier shows in this pass may have changed it), so each
-    /// show's evictions and additions go in one save and a failure keeps
-    /// every row. A candidate still in that copy when the walk reaches it
-    /// is left out; one an earlier candidate evicted is not. Under the limit
-    /// a candidate joins the batch. At the limit, a Top show under Only Add
-    /// to Top removes the last queued row (or, once the queue is all batch,
-    /// the batch's oldest) to make room; otherwise the candidate is left out
-    /// for good.
+    /// Walks a copy of the live queue, so each show's evictions and additions go in one save and
+    /// a failure keeps every row. A candidate still in the copy is left out; one an earlier
+    /// candidate evicted is not.
     private func enqueue(
         _ candidates: [EpisodeListItemSnapshot],
         at position: UpNextAutoAddPosition,

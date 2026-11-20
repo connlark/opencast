@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// The Inbox view has episodes, but the filter, Hide Up Next and the
-/// archive leave none to show. The archive view's own empty state is
-/// `InboxArchiveEmptyStateView`.
 struct InboxFilteredEmptyStateView: View {
     let filter: PodcastEpisodeFilter
     let hiddenEpisodes: PodcastHiddenEpisodes
@@ -34,20 +31,12 @@ struct InboxFilteredEmptyStateView: View {
                 }
             }
         }
-        // The Inbox shows this as a List row, where default-style buttons
-        // make the whole row one tap target that fires every one of them.
-        // Borderless buttons take only their own taps, so each label carries
-        // its own 44 pt target.
+        // In a List row default-style buttons make the whole row one target that fires them all;
+        // borderless ones take only their own taps.
         .buttonStyle(.borderless)
         .accessibilityIdentifier("Inbox Filtered Empty")
     }
 
-    /// What either view of the Inbox hides when its list is empty. The
-    /// Inbox view hides its archived episodes, named only while at least
-    /// one is archived so the copy never names an empty archive, and Up Next
-    /// while Hide Up Next is on. The archive view names Up Next only while
-    /// archived episodes exist for it to hide: an empty archive is not
-    /// Hide Up Next's doing.
     static func hiddenEpisodes(
         inboxEpisodes: [EpisodeListItemSnapshot],
         hidesQueuedEpisodes: Bool,
@@ -60,21 +49,14 @@ struct InboxFilteredEmptyStateView: View {
             : PodcastHiddenEpisodes(archived: hasArchivedEpisodes, queued: hidesQueuedEpisodes)
     }
 
-    /// Show All Episodes resets the filter and Hide Up Next, so it is
-    /// offered only while one of them can be what hides the rows.
     static func offersShowAllEpisodes(filter: PodcastEpisodeFilter, hiddenEpisodes: PodcastHiddenEpisodes) -> Bool {
         filter != .all || hiddenEpisodes.queued
     }
 
-    /// Show Archived opens the archive view, offered while archived Inbox
-    /// episodes are among what is hidden.
     static func offersShowArchived(hiddenEpisodes: PodcastHiddenEpisodes) -> Bool {
         hiddenEpisodes.archived
     }
 
-    /// Under All Episodes only what is hidden can empty the Inbox, so the
-    /// copy names it. Another filter keeps its own copy while nothing is
-    /// hidden, and otherwise says none are left to show and what is hidden.
     static func description(filter: PodcastEpisodeFilter, hiddenEpisodes: PodcastHiddenEpisodes) -> String {
         guard filter == .all else {
             return hiddenEpisodes.filteredEmptyDescription(hiddenUnder: filter) ?? filter.inboxEmptyStateDescription

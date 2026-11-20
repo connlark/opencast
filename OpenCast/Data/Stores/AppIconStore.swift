@@ -1,7 +1,6 @@
 import Observation
 import UIKit
 
-/// The slice of `UIApplication` the store drives, so tests can substitute it.
 protocol AlternateIconApplying {
     var supportsAlternateIcons: Bool { get }
     var alternateIconName: String? { get }
@@ -10,8 +9,7 @@ protocol AlternateIconApplying {
 
 extension UIApplication: AlternateIconApplying {}
 
-/// UIKit persists the chosen icon per device, so nothing is written to
-/// SwiftData or synced and Delete Data leaves the icon alone.
+/// UIKit persists the chosen icon per device: nothing goes to SwiftData, and Delete Data leaves it.
 @Observable
 final class AppIconStore {
     private(set) var selection = AppIconOption.primary
@@ -24,11 +22,9 @@ final class AppIconStore {
         injectedApplication = application
     }
 
-    /// Resolved per call: the app model is built in the SwiftUI `App`
-    /// initializer, before `UIApplicationMain` creates the application, so
-    /// capturing `UIApplication.shared` in `init` stores a nil-backed
-    /// reference whose messages silently return false/nil and whose async
-    /// icon change never resumes.
+    /// Resolved per call: the app model is built before `UIApplicationMain` creates the app, so
+    /// `UIApplication.shared` captured in `init` is nil-backed, silently returns false or nil, and
+    /// its async icon change never resumes.
     private var application: any AlternateIconApplying {
         injectedApplication ?? UIApplication.shared
     }

@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// Shared chrome for tappable Sound Lab rows: leading tinted icon, title
-/// (dropped when collapsed to icon-only), and a trailing state glyph. The
-/// full title always remains the accessibility label.
 struct NowPlayingSoundLabActionRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var acceptedFeedback = 0
@@ -17,8 +14,6 @@ struct NowPlayingSoundLabActionRow: View {
     let rowHeight: CGFloat?
     let accessibilityValueText: String
     let accessibilityID: String
-    /// Whether the styled capsule, and with it the tap target, is `rowHeight`
-    /// tall; otherwise the style's chrome stands outside the row.
     var capsuleFitsRow = false
     let action: () -> Void
 
@@ -43,7 +38,6 @@ struct NowPlayingSoundLabActionRow: View {
         .onChange(of: phase, initial: true, renderPhaseChanged)
     }
 
-    /// Everything inside the capsule; the row sets its height.
     func labelContent(reduceMotion: Bool) -> some View {
         HStack(spacing: NowPlayingSoundLabLayout.controlSpacing) {
             NowPlayingSoundLabControlIcon(

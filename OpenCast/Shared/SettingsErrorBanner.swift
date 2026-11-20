@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// A device-local settings store's last error, pinned under the navigation
-/// bar (`safeAreaInset(edge: .top)`) of the screen those settings shape.
 struct SettingsErrorBanner: View {
     let message: String?
 

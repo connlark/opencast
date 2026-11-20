@@ -7,8 +7,6 @@ import Testing
 @MainActor
 @Suite("Playback progress persistence")
 struct PlaybackProgressPersistenceTests {
-    /// A CarPlay-only launch never builds the phone scene, so persistence has to
-    /// come from a process-scoped owner or a whole drive's listening is lost.
     @Test("Progress persists from a scene-independent owner")
     func persistsProgressWithoutAScene() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -78,8 +76,6 @@ struct PlaybackProgressPersistenceTests {
         #expect(preferencesAfterSecondFlush.count == preferences.count)
     }
 
-    /// The periodic synced flush only covers hard-crash loss; deliberate
-    /// exits flush through boundaries, so the cadence stays coarse.
     @Test("Periodic synced flush runs on a minute cadence")
     func periodicFlushRunsOnMinuteCadence() {
         #expect(OpenCastAppModel.playbackProgressPersistenceInterval == .seconds(60))

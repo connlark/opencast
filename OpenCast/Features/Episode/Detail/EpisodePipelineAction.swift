@@ -1,7 +1,5 @@
 import Foundation
 
-/// The single primary action a pipeline card offers. The view routes each
-/// case to the matching store/model call.
 enum EpisodePipelineAction: Equatable {
     case cancelPass
     case cancelDownload
@@ -15,7 +13,6 @@ enum EpisodePipelineAction: Equatable {
     case retryTranscription
     case retryAnalysis
     case removeFromQueue
-    /// Cloud detection couldn't run; run the free on-device pass instead.
     case detectOnDevice
 
     var title: String {

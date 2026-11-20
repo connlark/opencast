@@ -3,29 +3,12 @@ import OpenCastAnalysis
 import OpenCastAnalysisProviders
 import Synchronization
 
-/// An external executable consulted around every live provider exchange,
-/// so a spend ledger outside this tool can bound and record it:
-///
-///     HOOK reserve --model M --input-tokens N --max-output O --context JSON
-///     HOOK settle --reservation ID --provider P --response FILE --summary-dir DIR --model M --context JSON
-///     HOOK release --reservation ID --error TEXT
-///     HOOK ambiguous --reservation ID --error TEXT
-///
-/// `reserve` prints `{"reservation": ID}`; a nonzero exit refuses the
-/// exchange, which is then never sent. Every run is bounded: the hook runs
-/// in its own process group with standard input closed; its standard output
-/// is drained as it arrives (at most ``maximumOutputBytes`` kept) and the run
-/// ends when the hook has exited and its output is closed. Past the time
-/// limit, or when the caller is cancelled, the whole group gets SIGTERM and
-/// then SIGKILL after ``terminationGraceSeconds``; the hook is reaped before
-/// `run` returns, and anything left in its group after it finishes is
-/// killed.
+/// `reserve` must print `{"reservation": ID}`, and a nonzero exit refuses the exchange. `settle`,
+/// `release` or `ambiguous` then closes the reservation.
 struct SpendHook: Sendable {
     let executable: URL
 
-    /// How long a terminated hook's group may take to exit before it is killed.
     static let terminationGraceSeconds = 1.0
-    /// The most standard output kept; a longer reply is not read as JSON.
     static let maximumOutputBytes = 64 * 1024
 
     enum Ending: Sendable, Equatable {
@@ -38,10 +21,8 @@ struct SpendHook: Sendable {
     struct Reply: Sendable {
         var ending: Ending
         var output: JSONValue?
-        /// The signal that ended the hook, when one did.
         var signal: Int32?
 
-        /// The exit status, or -1 when the hook did not finish by itself.
         var status: Int32 {
             if case .exited(let status) = ending { status } else { -1 }
         }
@@ -86,8 +67,6 @@ struct SpendHook: Sendable {
     }
 }
 
-/// One hook process, spawned as the leader of its own process group with
-/// stdout on a pipe drained by a dispatch source.
 private final class HookProcess: Sendable {
     private struct State {
         var status: Int32?
@@ -121,10 +100,8 @@ private final class HookProcess: Sendable {
         posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
         posix_spawn_file_actions_adddup2(&actions, writeFD, STDOUT_FILENO)
         posix_spawn_file_actions_addinherit_np(&actions, STDERR_FILENO)
-        // Its own group (so the whole tree can be signalled), no descriptor
-        // of ours but the three set up here, every signal at its default
-        // action and none blocked: a host that ignores or blocks SIGTERM
-        // would otherwise pass that on, and the stop would wait for SIGKILL.
+        // Default signal actions and an empty mask: a host that ignores or blocks SIGTERM would
+        // pass that on, and every stop would wait for SIGKILL.
         var defaults = sigset_t()
         sigfillset(&defaults)
         posix_spawnattr_setsigdefault(&attributes, &defaults)
@@ -185,11 +162,9 @@ private final class HookProcess: Sendable {
 
     var wasStopped: Bool { state.withLock { $0.stopped } }
 
-    /// The signal that ended the hook, once it has ended by one.
     var signal: Int32? { state.withLock { $0.signal } }
 
-    /// SIGTERM to the group now, SIGKILL after the grace period, and the
-    /// output given up then if something outside the group still holds it.
+    /// The last step gives up the output, in case a process outside the group holds the pipe.
     func stop() {
         let first = state.withLock { state -> Bool in
             defer { state.stopped = true }
@@ -207,12 +182,10 @@ private final class HookProcess: Sendable {
         }
     }
 
-    /// Anything still running in the hook's group once it has finished.
     func killLeftovers() {
         kill(-pid, SIGKILL)
     }
 
-    /// The captured output as JSON; `nil` when it is not JSON or overflowed.
     func output() -> JSONValue? {
         let (data, overflowed) = state.withLock { ($0.output, $0.overflowed) }
         guard !overflowed else { return nil }

@@ -2,9 +2,6 @@ import Foundation
 @testable import OpenCastAnalysis
 import Testing
 
-/// The service policies the pipeline runs under, and the pipeline numbers
-/// the bundle does not carry, must equal the analysis services' source:
-/// prompts byte for byte, the schemas, and every constant.
 @Suite("Service policy")
 struct ReferencePolicyTests {
     let ad = AdDetectionAnalysisPolicy.service

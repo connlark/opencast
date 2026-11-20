@@ -1,7 +1,5 @@
 import Foundation
 
-/// Slugs the app links to from Settings footers. A test asserts each one
-/// exists in the bundled document.
 nonisolated enum HelpTopicID {
     static let whyWeCharge = "why-we-charge"
     static let credits = "credits"

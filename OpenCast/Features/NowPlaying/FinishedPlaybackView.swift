@@ -75,10 +75,8 @@ struct FinishedPlaybackView: View {
         .accessibilityLabel("Finished")
         .accessibilityIdentifier("Finished Playback")
         .task(id: presentation.episode.episodeID) {
-            // Land VoiceOver on the status heading (the alert pattern) so the
-            // state change is spoken before the actions. A ScreenChanged
-            // notification with a string argument would reset focus to the
-            // first on-screen element and race this move.
+            // A ScreenChanged notification with a string would reset focus to the
+            // first element and race this move to the status heading.
             await Task.yield()
             isFinishedStatusAccessibilityFocused = true
         }

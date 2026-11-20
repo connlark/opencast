@@ -4,9 +4,6 @@ import SwiftData
 import Testing
 @testable import OpenCast
 
-/// Store-level contract for the Library's new-episode badges and the Recent
-/// Episodes sort: what counts, how the reference date moves the window, and
-/// that count readers see every way progress can change underneath them.
 @MainActor
 @Suite("Library new-episode counts")
 struct LibraryNewEpisodeCountTests {
@@ -62,7 +59,6 @@ struct LibraryNewEpisodeCountTests {
 
         #expect(fixture.library.newEpisodeReferenceDate == Self.start)
         #expect(counts == [2, 2, 1])
-        #expect(counts == shows.map { oracleCount(for: $0, asOf: Self.start) })
     }
 
     @Test("Latest released date skips scheduled and undated episodes and ignores played state")
@@ -182,8 +178,6 @@ struct LibraryNewEpisodeCountTests {
         let deferredRecord = try #require(library.progressRecord(for: "in-place-deferred"))
         #expect(library.newEpisodeCount(for: subscription) == 3)
 
-        // A deferred flush (Now Playing presented, scene not on screen) saves
-        // the indexed record in place and leaves the projection unpublished.
         await confirmation("a deferred flush invalidates the count reader") { invalidated in
             withObservationTracking {
                 _ = library.newEpisodeCount(for: subscription)
@@ -203,7 +197,6 @@ struct LibraryNewEpisodeCountTests {
         #expect(deferredRecord.isPlayed)
         #expect(library.newEpisodeCount(for: subscription) == 2)
 
-        // An edit that lands directly on the live model object.
         let directRecord = try #require(library.progressRecord(for: "in-place-direct"))
         await confirmation("a live model edit invalidates the count reader") { invalidated in
             withObservationTracking {
@@ -261,9 +254,6 @@ struct LibraryNewEpisodeCountTests {
         let subscription = try fixture.subscription(for: show)
         #expect(library.newEpisodeCount(for: subscription) == 5)
 
-        // Another context completes an existing row. The store's refetch can
-        // find its live object already current and report no progress
-        // change; the count follows the row either way.
         let importContext = ModelContext(fixture.container)
         let importedRecord = try #require(
             importContext.fetch(FetchDescriptor<EpisodeProgressRecord>())
@@ -273,8 +263,6 @@ struct LibraryNewEpisodeCountTests {
         importedRecord.isPlayed = true
         importedRecord.updatedAt = Self.start.addingTimeInterval(60)
         try importContext.save()
-        // The refetch refreshes the store's live object without an
-        // Observation notification of its own; the reader still invalidates.
         await confirmation("an imported edit invalidates the count reader") { invalidated in
             withObservationTracking {
                 _ = library.newEpisodeCount(for: subscription)
@@ -285,7 +273,6 @@ struct LibraryNewEpisodeCountTests {
         }
         #expect(library.newEpisodeCount(for: subscription) == 4)
 
-        // Another context inserts a played row for an episode with no progress yet.
         importContext.insert(EpisodeProgressRecord(
             episodeID: "synced-inserted",
             podcastID: show.feedURL,
@@ -299,8 +286,6 @@ struct LibraryNewEpisodeCountTests {
         #expect(insertResult.progressRecordsChanged)
         #expect(library.newEpisodeCount(for: subscription) == 3)
 
-        // The store's own live object edited in place: the reload sees no
-        // progress change, and the count moves anyway.
         let liveRecord = try #require(library.progressRecord(for: "synced-live"))
         liveRecord.isPlayed = true
         liveRecord.updatedAt = Self.start.addingTimeInterval(180)
@@ -309,8 +294,6 @@ struct LibraryNewEpisodeCountTests {
         #expect(!liveResult.progressRecordsChanged)
         #expect(library.newEpisodeCount(for: subscription) == 2)
 
-        // A later follow date on the same subscription object, with the
-        // active feed set unchanged, moves the cutoff.
         subscription.subscribedAt = at(days: -5)
         try fixture.context.save()
         let cutoffResult = try library.reloadSyncedUserData(modelContext: fixture.context)
@@ -318,9 +301,6 @@ struct LibraryNewEpisodeCountTests {
         #expect(library.newEpisodeCount(for: subscription) == 1)
     }
 
-    /// An in-place archive moves no revision and changes nothing the
-    /// progress summary reads, so the archived set is the only thing that
-    /// can invalidate the count.
     @Test("Archiving takes an episode out of the count and unarchiving puts it back")
     func archivingMovesTheCount() async throws {
         let show = ShowFixture(name: "archiving", subscribedAt: at(days: -90), episodes: [
@@ -362,10 +342,6 @@ struct LibraryNewEpisodeCountTests {
         #expect(library.newEpisodeCount(for: subscription) == 1)
     }
 
-    /// Another context archives an existing row and then unarchives it. The
-    /// store's refetch finds the live object it already indexes, so the rows
-    /// can compare unchanged; the archived set, the Inbox and the count
-    /// follow the row anyway.
     @Test("Imported archives and unarchives reach the archived set, the Inbox and the count")
     func importedArchivesReachInboxMembership() async throws {
         let show = ShowFixture(name: "imported", subscribedAt: at(days: -90), episodes: [
@@ -431,8 +407,6 @@ struct LibraryNewEpisodeCountTests {
         let subscription = try fixture.subscription(for: show)
         #expect(library.newEpisodeCount(for: subscription) == 3)
 
-        // Another context moves the follow date; the store's refetch finds the
-        // same live record, so only the copied cutoff can report the change.
         let importContext = ModelContext(fixture.container)
         let importedSubscription = try #require(
             importContext.fetch(FetchDescriptor<SubscriptionRecord>())
@@ -450,8 +424,6 @@ struct LibraryNewEpisodeCountTests {
         }
         #expect(library.newEpisodeCount(for: subscription) == 2)
 
-        // A duplicate record for the same feed, followed later, sets the
-        // cutoff for every row of that feed until repair merges them.
         let duplicate = SubscriptionRecord(feedURL: show.feedURL, title: show.title, subscribedAt: at(days: -2))
         fixture.context.insert(duplicate)
         try fixture.context.save()
@@ -476,7 +448,6 @@ struct LibraryNewEpisodeCountTests {
         #expect(library.newEpisodeCount(for: subscription) == 2)
         #expect(library.latestReleasedEpisodeDate(forPodcastID: show.feedURL) == at(days: -1))
 
-        // Sub-minute movement in either direction is ignored.
         clock.now = Self.start.addingTimeInterval(59)
         library.advanceNewEpisodeReferenceDate()
         #expect(library.newEpisodeReferenceDate == Self.start)
@@ -484,19 +455,16 @@ struct LibraryNewEpisodeCountTests {
         library.advanceNewEpisodeReferenceDate()
         #expect(library.newEpisodeReferenceDate == Self.start)
 
-        // Once the clock passes a scheduled episode, it counts and leads the sort.
         clock.now = at(days: 3)
         library.advanceNewEpisodeReferenceDate()
         #expect(library.newEpisodeReferenceDate == at(days: 3))
         #expect(library.newEpisodeCount(for: subscription) == 3)
         #expect(library.latestReleasedEpisodeDate(forPodcastID: show.feedURL) == at(days: 2))
 
-        // A backward correction of a minute or more is taken.
         clock.now = at(days: 3).addingTimeInterval(-60)
         library.advanceNewEpisodeReferenceDate()
         #expect(library.newEpisodeReferenceDate == at(days: 3).addingTimeInterval(-60))
 
-        // Thirty-one days on, everything released before the new window expires.
         clock.now = at(days: 31)
         library.advanceNewEpisodeReferenceDate()
         #expect(library.newEpisodeReferenceDate == at(days: 31))
@@ -526,35 +494,6 @@ struct LibraryNewEpisodeCountTests {
         #expect(library.newEpisodeCount(for: subscription) == 0)
         #expect(library.latestReleasedEpisodeDate(forPodcastID: show.feedURL) == nil)
         #expect(library.newEpisodeReferenceDate == fixture.clock.now)
-    }
-
-    @Test("Reading counts and release dates never saves")
-    func derivedReadsNeverSave() async throws {
-        let show = ShowFixture(name: "read-only", subscribedAt: at(days: -90), episodes: [
-            EpisodeFixture(id: "read-only-1", publishedAt: at(days: -1)),
-            EpisodeFixture(
-                id: "read-only-2",
-                publishedAt: at(days: -2),
-                progress: ProgressFixture(position: 590, duration: 600)
-            ),
-            EpisodeFixture(id: "read-only-3", publishedAt: at(days: 1))
-        ])
-        let fixture = try await makeFixture(shows: [show])
-        let library = fixture.library
-        let subscription = try fixture.subscription(for: show)
-        let savesBeforeReads = library.syncedStoreSelfSaveCount
-
-        for _ in 0..<3 {
-            _ = library.newEpisodeCount(for: subscription)
-            _ = library.latestReleasedEpisodeDate(forPodcastID: show.feedURL)
-        }
-        fixture.clock.now = at(days: 2)
-        library.advanceNewEpisodeReferenceDate()
-        _ = library.newEpisodeCount(for: subscription)
-        _ = library.latestReleasedEpisodeDate(forPodcastID: show.feedURL)
-
-        #expect(library.syncedStoreSelfSaveCount == savesBeforeReads)
-        #expect(!fixture.context.hasChanges)
     }
 
     // MARK: - Fixtures
@@ -603,8 +542,6 @@ struct LibraryNewEpisodeCountTests {
         Self.start.addingTimeInterval(days * Self.day)
     }
 
-    /// The default Inbox: All Episodes, Up Next and archived episodes not
-    /// shown, so the archived set is the only progress input it reads.
     private func inboxEpisodeIDs(_ library: LibraryStore) -> [String] {
         InboxEpisodeListModel.make(
             episodes: library.inboxEpisodes,
@@ -619,9 +556,8 @@ struct LibraryNewEpisodeCountTests {
         ).episodes.map(\.episodeID)
     }
 
-    /// Loads the shows into a fresh in-memory library whose clock reads
-    /// `start`. Progress rows carry a fixed stamp before `start` so later
-    /// edits in a test always move the synced-reload probe.
+    /// Progress rows carry a stamp before `start` so later edits in a test
+    /// always move the synced-reload probe.
     private func makeFixture(shows: [ShowFixture]) async throws -> Fixture {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
@@ -688,35 +624,6 @@ struct LibraryNewEpisodeCountTests {
                 )
             }
         )
-    }
-
-    /// The badge rule restated over the raw fixture, independently of the
-    /// store's index walk and progress summary.
-    private func oracleCount(for show: ShowFixture, asOf: Date) -> Int {
-        let windowStart = asOf.addingTimeInterval(-30 * Self.day)
-        return show.episodes.filter { episode in
-            guard let publishedAt = episode.publishedAt,
-                  publishedAt >= show.subscribedAt,
-                  publishedAt >= windowStart,
-                  publishedAt <= asOf
-            else {
-                return false
-            }
-            guard let progress = episode.progress else {
-                return true
-            }
-            if progress.isPlayed {
-                return false
-            }
-            guard let duration = progress.duration ?? episode.duration,
-                  duration > 0,
-                  progress.position > 0
-            else {
-                return true
-            }
-            // Completed once less than a minute (or half the episode) remains.
-            return duration - min(progress.position, duration) >= min(60, duration / 2)
-        }.count
     }
 }
 

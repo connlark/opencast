@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Applied to each tab's content, inside the tab view, where the system
-/// reports the bar's placement: publishes it to the tab's screens.
+/// Must sit inside each tab's content: only there does the system report the
+/// bar's placement.
 struct ActiveTabBarPlacementReader: ViewModifier {
     @Environment(\.tabBarPlacement) private var tabBarPlacement
     @Environment(\.toolbarVerticalEdge) private var toolbarVerticalEdge

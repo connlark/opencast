@@ -3,10 +3,6 @@ import Observation
 import OpenCastCore
 import SwiftData
 
-/// Shared subscribe flow for directory results, used by Add Podcast,
-/// onboarding, and Discover: enrich Apple-only results through the
-/// Worker's Apple-ID lookup, resolve candidate feeds against their live
-/// RSS, then subscribe directly or surface a feed choice.
 @Observable
 final class DirectorySubscriptionFlowStore {
     struct PendingChoice: Identifiable {
@@ -59,8 +55,7 @@ final class DirectorySubscriptionFlowStore {
 
         errorMessage = nil
         subscribingResultID = result.id
-        // Deliberately unscoped: the subscription finishes even if the
-        // presenting sheet disappears, matching the raw-RSS path.
+        // Unscoped so the subscription finishes if the presenting sheet disappears.
         subscriptionTask = Task {
             await resolveAndSubscribe(
                 result: result,
@@ -71,7 +66,6 @@ final class DirectorySubscriptionFlowStore {
         }
     }
 
-    /// The user picked a candidate from the feed-choice presentation.
     func subscribe(
         candidate: ResolvedFeedCandidate,
         for pending: PendingChoice,
@@ -100,13 +94,8 @@ final class DirectorySubscriptionFlowStore {
         pendingChoice = nil
     }
 
-    /// The presenting view is gone for good (dismissed Add sheet,
-    /// completed onboarding), so a feed choice can no longer be shown.
-    /// The subscription the user started still finishes: an unanswered
-    /// or later-resolved choice subscribes to its recommended primary
-    /// candidate instead of being silently dropped. Long-lived
-    /// presenters (Search) never detach — their choice sheet can still
-    /// present late.
+    /// Call only once the presenter is gone for good: from then on every feed choice,
+    /// pending or still resolving, subscribes to its recommended primary candidate.
     func presenterDidDisappear(library: LibraryStore, modelContext: ModelContext) {
         isPresenterDetached = true
         guard let pending = pendingChoice else {
@@ -182,9 +171,6 @@ final class DirectorySubscriptionFlowStore {
         }
     }
 
-    /// Resolution applies to every candidate the merged result carries;
-    /// Apple-only results with an Apple ID get one fill-in lookup, and
-    /// a failed lookup quietly keeps the Apple candidates.
     private func enrichedCandidates(for result: DirectoryPodcastResult) async -> [DirectoryFeedCandidate] {
         var candidates = result.feedCandidates
         if candidates.isEmpty, let feedURL = result.feedURL {

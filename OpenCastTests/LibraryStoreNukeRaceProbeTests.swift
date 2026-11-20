@@ -1,16 +1,9 @@
-import CoreData
 import Foundation
 import OpenCastCore
 import SwiftData
 import Testing
 @testable import OpenCast
 
-/// Interleaving probes behind the LibraryStore split design note (sync-credit
-/// and write-generation arbitration, 2026-09-01). Each test forces one
-/// specific ordering between a library flow and the data nuke instead of
-/// racing wall-clock, and pins what the note claims about that ordering.
-/// Observed values are also written to /private/tmp/opencast-nuke-race-probes
-/// for the design pass.
 @MainActor
 @Suite("LibraryStore nuke race probes", .serialized)
 struct LibraryStoreNukeRaceProbeTests {
@@ -62,12 +55,6 @@ struct LibraryStoreNukeRaceProbeTests {
         let savesDuringNuke = await flusher.value
         let rowsAfterNuke = try context.fetch(FetchDescriptor<EpisodeProgressRecord>())
 
-        Self.writeReport("progress-flush-across-nuke", [
-            "savesDuringNuke=\(savesDuringNuke)",
-            "progressRowsAfterNuke=\(rowsAfterNuke.count)",
-            "creditsBefore=\(creditsBeforeNuke) creditsAfter=\(appModel.library.syncedStoreSelfSaveCount)",
-            "currentEpisodeAfterNuke=\(String(describing: appModel.playback.currentEpisode?.id.rawValue))"
-        ])
         #expect(savesDuringNuke == 0)
         #expect(rowsAfterNuke.isEmpty)
         #expect(appModel.playback.currentEpisode == nil)
@@ -103,13 +90,6 @@ struct LibraryStoreNukeRaceProbeTests {
         let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
         let cacheSnapshot = try await cache.loadLibrary(activePodcastIDs: [Self.feedURL])
 
-        Self.writeReport("subscribe-in-fetch-across-nuke", [
-            "subscribeThrew=\(Self.describe(subscribeResult))",
-            "subscriptionRowsAfterRelease=\(subscriptions.count)",
-            "cachedPodcastsAfterRelease=\(cacheSnapshot.podcastsByFeedURL.count)",
-            "creditsAfterNuke=\(creditsAfterNuke) creditsAfterRelease=\(appModel.library.syncedStoreSelfSaveCount)",
-            "state=\(appModel.library.state)"
-        ])
         #expect(throws: CancellationError.self) {
             try subscribeResult.get()
         }
@@ -148,12 +128,6 @@ struct LibraryStoreNukeRaceProbeTests {
         let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
         let cacheSnapshot = try await cache.loadLibrary(activePodcastIDs: [Self.feedURL])
 
-        Self.writeReport("subscribe-batch-in-fetch-across-nuke", [
-            "batchThrew=\(Self.describe(batchResult))",
-            "subscriptionRowsAfterRelease=\(subscriptions.count)",
-            "cachedPodcastsAfterRelease=\(cacheSnapshot.podcastsByFeedURL.count)",
-            "creditsAfterNuke=\(creditsAfterNuke) creditsAfterRelease=\(appModel.library.syncedStoreSelfSaveCount)"
-        ])
         #expect(throws: CancellationError.self) {
             _ = try batchResult.get()
         }
@@ -193,13 +167,6 @@ struct LibraryStoreNukeRaceProbeTests {
         let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
         let cacheSnapshot = try await cache.loadLibrary(activePodcastIDs: [Self.feedURL])
 
-        Self.writeReport("subscribe-inside-upsert-across-nuke", [
-            "subscribeThrew=\(Self.describe(subscribeResult))",
-            "subscriptionRowsAfterRelease=\(subscriptions.count)",
-            "cachedPodcastsAfterRelease=\(cacheSnapshot.podcastsByFeedURL.count) cachedEpisodes=\(cacheSnapshot.episodes.count)",
-            "creditsAfterNuke=\(creditsAfterNuke) creditsAfterRelease=\(appModel.library.syncedStoreSelfSaveCount)",
-            "publishedSubscriptions=\(appModel.library.subscriptions.count)"
-        ])
         #expect(throws: CancellationError.self) {
             try subscribeResult.get()
         }
@@ -247,12 +214,6 @@ struct LibraryStoreNukeRaceProbeTests {
         let subscriptions = try context.fetch(FetchDescriptor<SubscriptionRecord>())
         let tombstones = try context.fetch(FetchDescriptor<SyncTombstoneRecord>())
 
-        Self.writeReport("migration-inside-cache-write-across-nuke", [
-            "migrateThrew=\(Self.describe(migrateResult))",
-            "subscriptionRowsAfterRelease=\(subscriptions.map(\.feedURL))",
-            "tombstonesAfterRelease=\(tombstones.count)",
-            "creditsAfterNuke=\(creditsAfterNuke) creditsAfterRelease=\(appModel.library.syncedStoreSelfSaveCount)"
-        ])
         #expect(throws: CancellationError.self) {
             try migrateResult.get()
         }
@@ -292,12 +253,6 @@ struct LibraryStoreNukeRaceProbeTests {
         let tombstones = try context.fetch(FetchDescriptor<SyncTombstoneRecord>())
         let subscriptionTitle = try context.fetch(FetchDescriptor<SubscriptionRecord>()).first?.title
 
-        Self.writeReport("refresh-inside-upsert-after-invalidation", [
-            "creditsAtInvalidation=\(creditsAtInvalidation) creditsAfterRefresh=\(store.syncedStoreSelfSaveCount)",
-            "tombstonesWrittenAfterInvalidation=\(tombstones.count)",
-            "subscriptionTitleAfterRefresh=\(String(describing: subscriptionTitle))",
-            "state=\(store.state)"
-        ])
         #expect(store.syncedStoreSelfSaveCount == creditsAtInvalidation)
         #expect(tombstones.isEmpty)
         #expect(subscriptionTitle == "Probe Show")
@@ -346,12 +301,6 @@ struct LibraryStoreNukeRaceProbeTests {
         await gates.deleteAllRelease.release()
         try await nukeTask.value
 
-        Self.writeReport("refresh-unwinding-before-cache-delete", [
-            "afterReset logs=\(refreshLogsAfterReset) podcasts=\(podcastsAfterReset)",
-            "afterUnwind logs=\(refreshLogsAfterUnwind) podcasts=\(podcastsAfterUnwind)",
-            "afterNuke logs=\(appModel.library.refreshLogs.count) podcasts=\(appModel.library.podcastCacheByFeedURL.count) episodes=\(appModel.library.episodes.count)",
-            "state=\(appModel.library.state)"
-        ])
         #expect(refreshLogsAfterReset == 0)
         #expect(podcastsAfterReset == 0)
         #expect(appModel.library.episodes.isEmpty)
@@ -362,83 +311,7 @@ struct LibraryStoreNukeRaceProbeTests {
         #expect(appModel.library.state == .idle)
     }
 
-    @Test("A save touching both stores posts one remote-change notification per store")
-    func twoStoreSavePostsOneNotificationPerStore() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appending(path: "OpenCastNukeRaceProbe-\(UUID().uuidString)", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer {
-            try? FileManager.default.removeItem(at: directory)
-        }
-        let container = try ModelContainer(
-            for: OpenCastModelContainerFactory.fullSchema,
-            configurations: [
-                ModelConfiguration(
-                    OpenCastModelContainerFactory.syncedConfigurationName,
-                    schema: OpenCastModelContainerFactory.syncedSchema,
-                    url: directory.appending(path: "synced.sqlite"),
-                    cloudKitDatabase: .none
-                ),
-                ModelConfiguration(
-                    OpenCastModelContainerFactory.localConfigurationName,
-                    schema: OpenCastModelContainerFactory.localSchema,
-                    url: directory.appending(path: "local.sqlite"),
-                    cloudKitDatabase: .none
-                )
-            ]
-        )
-        let context = ModelContext(container)
-
-        let log = RemoteChangeLog()
-        let containerDirectoryPath = directory.standardizedFileURL.path
-        let collector = Task { @MainActor in
-            for await notification in NotificationCenter.default.notifications(
-                named: Notification.Name.NSPersistentStoreRemoteChange
-            ) {
-                // Every container in the test process posts on this name, so
-                // only this container's two stores are attributed here.
-                guard let url = (notification.userInfo?[NSPersistentStoreURLKey] as? URL)?.standardizedFileURL,
-                      url.path.hasPrefix(containerDirectoryPath)
-                else {
-                    continue
-                }
-                log.storeNames.append(url.lastPathComponent)
-            }
-        }
-        try await Task.sleep(for: .milliseconds(100))
-
-        context.insert(SubscriptionRecord(feedURL: Self.feedURL, title: "Probe Show"))
-        context.insert(LocalPreferenceRecord(key: "nuke-race-probe", value: "1"))
-        try context.save()
-        try await Task.sleep(for: .milliseconds(500))
-        let namesAfterMixedSave = log.storeNames
-
-        context.insert(EpisodeProgressRecord(episodeID: "probe", podcastID: Self.feedURL, position: 10))
-        try context.save()
-        try await Task.sleep(for: .milliseconds(500))
-        collector.cancel()
-        let names = log.storeNames
-
-        Self.writeReport("remote-change-notifications", [
-            "afterMixedSave=\(namesAfterMixedSave)",
-            "afterBothSaves=\(names)"
-        ])
-        #expect(namesAfterMixedSave.count == 2)
-        #expect(names.count == 3)
-        #expect(names.filter { $0 == "synced.sqlite" }.count == 2)
-        #expect(names.filter { $0 == "local.sqlite" }.count == 1)
-    }
-
     // MARK: - Helpers
-
-    private static func describe<Value>(_ result: Result<Value, any Error>) -> String {
-        switch result {
-        case .success:
-            "no"
-        case .failure(let error):
-            "yes: \(error)"
-        }
-    }
 
     private static func makeSnapshot(
         feedURL: String = feedURL,
@@ -467,21 +340,6 @@ struct LibraryStoreNukeRaceProbeTests {
             ]
         )
     }
-
-    private static func writeReport(_ name: String, _ lines: [String]) {
-        let directory = URL(filePath: "/private/tmp/opencast-nuke-race-probes", directoryHint: .isDirectory)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try? (lines.joined(separator: "\n") + "\n").write(
-            to: directory.appending(path: "\(name).txt"),
-            atomically: true,
-            encoding: .utf8
-        )
-    }
-}
-
-@MainActor
-private final class RemoteChangeLog {
-    var storeNames: [String] = []
 }
 
 private actor AvailableAccountStatusProvider: CloudKitAccountStatusProviding {

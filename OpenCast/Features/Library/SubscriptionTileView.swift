@@ -1,9 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// A show's grid tile: artwork under its refresh status and count badge, then
-/// the title. The caller supplies the link around it, so the Library and the
-/// Group by Podcast Inbox share the tile but not what it opens or offers.
 struct SubscriptionTileView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize

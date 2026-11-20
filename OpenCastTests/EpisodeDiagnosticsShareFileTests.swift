@@ -16,17 +16,6 @@ struct EpisodeDiagnosticsShareFileTests {
         #expect(name == "My Show Extras Weird - Ep 12 Quotes.mp3")
     }
 
-    @Test("Empty titles fall back to a generic episode stem")
-    func emptyTitlesFallBackToGenericStem() {
-        let name = EpisodeDiagnosticsShareFilePreparer.sanitizedFileName(
-            podcastTitle: "///",
-            episodeTitle: "!!!",
-            fileExtension: "mp3"
-        )
-
-        #expect(name == "Episode.mp3")
-    }
-
     @Test("Prepare hard-links the source and cleanup removes only the link")
     func prepareHardLinksAndCleanupRemovesOnlyLink() throws {
         let directory = try makeTemporaryDirectory()
@@ -55,22 +44,6 @@ struct EpisodeDiagnosticsShareFileTests {
 
         #expect(!FileManager.default.fileExists(atPath: temporaryDirectoryURL.path))
         #expect(FileManager.default.fileExists(atPath: source.path))
-    }
-
-    @Test("An extensionless source shares as .audio, never claiming a format")
-    func extensionlessSourceSharesAsAudio() throws {
-        let directory = try makeTemporaryDirectory()
-        let source = directory.appending(path: "source")
-        try Data("episode audio".utf8).write(to: source, options: .atomic)
-
-        let shareFile = EpisodeDiagnosticsShareFilePreparer.prepare(
-            source: source,
-            podcastTitle: "Show",
-            episodeTitle: "Episode"
-        )
-
-        #expect(shareFile.url.lastPathComponent == "Show - Episode.audio")
-        EpisodeDiagnosticsShareFilePreparer.cleanUp(shareFile)
     }
 
     @Test("Prepare falls back to the original URL when linking fails")

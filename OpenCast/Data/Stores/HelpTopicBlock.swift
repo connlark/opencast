@@ -1,7 +1,5 @@
 import Foundation
 
-/// Index-identified wrapper so `ForEach` can render a topic's blocks in
-/// document order, mirroring `EpisodeShowNotesBlock`.
 nonisolated struct HelpTopicBlock: Identifiable, Equatable, Sendable {
     let id: Int
     let block: HelpBlock

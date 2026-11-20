@@ -14,35 +14,12 @@ nonisolated struct TranscriptTimeline: Equatable {
         segments.isEmpty
     }
 
-    /// Index of the last segment whose start is at or before `time`;
-    /// nil before the first segment starts.
     func segmentIndex(at time: TimeInterval) -> Int? {
         Self.lastIndex(in: starts, atOrBefore: time)
     }
 
-    /// Media time at which the next segment takes over; `.infinity` for the
-    /// last segment, which stays active with no successor.
     func handoff(afterSegmentAt index: Int) -> TimeInterval {
         index + 1 < segments.count ? segments[index + 1].start : .infinity
-    }
-
-    /// Index of the last word in the segment whose start is at or before
-    /// `time`; nil for line-level segments or before the first word starts.
-    func wordIndex(in segmentIndex: Int, at time: TimeInterval) -> Int? {
-        guard segments.indices.contains(segmentIndex),
-              let words = segments[segmentIndex].words
-        else {
-            return nil
-        }
-
-        var result: Int?
-        for (index, word) in words.enumerated() {
-            guard word.start <= time else {
-                break
-            }
-            result = index
-        }
-        return result
     }
 
     private static func lastIndex(in starts: [TimeInterval], atOrBefore time: TimeInterval) -> Int? {

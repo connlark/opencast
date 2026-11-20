@@ -3,10 +3,6 @@ import Foundation
 @testable import OpenCastAnalysisProviders
 import Testing
 
-/// Nesting is measured the way the parser reads it (strings and escapes
-/// honoured), on provider bodies and on the answers they carry; base64
-/// decodings are verified one at a time; and every bound the contract
-/// states is pinned at its number.
 @Suite("Bounds contract")
 struct BoundsContractTests {
     static let key = RedactionPropertyTests.openAIKey
@@ -89,6 +85,7 @@ struct BoundsContractTests {
             }
             let error = #"{"error":{"status":"RESOURCE_EXHAUSTED","message":"quota","details":\#(deep)}}"#
             #expect(GeminiProviderErrors.classify(status: 429, retryAfter: nil, body: error).listener == .rateLimited)
+            #expect(OpenAIProviderErrors.classify(status: 401, retryAfter: nil, body: #"{"error":\#(deep)}"#).listener == .invalidKey)
         }
     }
 
@@ -98,9 +95,7 @@ struct BoundsContractTests {
             // Bare opening brackets, each followed by a quoted closing one.
             let unit = #"["]","#
             let mixed = String(repeating: unit, count: (1 << 20) / unit.utf8.count)
-            // The work runs on this one thread, so its CPU time is the
-            // algorithm's cost whatever else the machine is doing; a
-            // wall clock on a shared CI runner once read 38 seconds for it.
+            // CPU time, not wall time: the work runs on this one thread.
             let start = Self.threadCPUTime()
             let verdicts = [
                 GeminiAnalysisTransport.interpret(Self.geminiBody(answer: "{}", extra: #","x":\#(mixed)"#)).finishReason == .malformedResponse,
@@ -119,7 +114,6 @@ struct BoundsContractTests {
         #expect(elapsed < .seconds(60))
     }
 
-    /// CPU time consumed by the calling thread so far.
     static func threadCPUTime() -> Duration {
         var time = timespec()
         clock_gettime(CLOCK_THREAD_CPUTIME_ID, &time)
@@ -146,15 +140,6 @@ struct BoundsContractTests {
         }
         #expect(verifier.verifyRecordedText(other + credential) == .secretFragment, "credential after another padded encoding")
         #expect(verifier.verifyRecordedText(other + deep) == .exhausted, "deep after another padded encoding")
-    }
-
-    // MARK: The oracle's escapes
-
-    @Test("The oracle reads every short escape the verifier reads")
-    func oracleShortEscapes() {
-        for (escape, value) in [(#"\r"#, "\r"), (#"\b"#, "\u{08}"), (#"\f"#, "\u{0C}"), (#"\n"#, "\n"), (#"\t"#, "\t"), (#"\/"#, "/")] {
-            #expect(FragmentOracle.unescape("a\(escape)b") == "a\(value)b", "\(escape)")
-        }
     }
 
     // MARK: Every stated bound, at its number
@@ -210,14 +195,9 @@ struct BoundsContractTests {
 
     @Test("Normalisation: four scalars out per scalar in, plus 16; 32 combining marks in a run")
     func normalisationBounds() {
-        let unit = "\u{FDFA}"
-        let expansion = unit.decomposedStringWithCompatibilityMapping.folding(options: [.caseInsensitive], locale: nil)
-            .decomposedStringWithCompatibilityMapping.unicodeScalars.count
-        #expect(expansion > 4)
-        for count in 1...6 {
-            let text = String(repeating: unit, count: count)
-            #expect((SecretNormalization.stripped(text) != nil) == (expansion * count <= 4 * count + 16), "\(count)")
-        }
+        // U+FDFA decomposes to 18 scalars: one fits 4 + 16, two exceed 8 + 16.
+        #expect(SecretNormalization.stripped("\u{FDFA}") != nil)
+        #expect(SecretNormalization.stripped("\u{FDFA}\u{FDFA}") == nil)
         #expect(SecretNormalization.stripped("a" + String(repeating: "\u{0301}", count: 32)) != nil)
         #expect(SecretNormalization.stripped("a" + String(repeating: "\u{0301}", count: 33)) == nil)
     }

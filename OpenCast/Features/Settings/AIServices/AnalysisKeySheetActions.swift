@@ -3,9 +3,8 @@ import OpenCastAnalysis
 import OpenCastAnalysisProviders
 import SwiftData
 
-/// What the key sheet does to a saved key, and what that does to the tier
-/// state: any change to the Google key here makes what Google said about the
-/// last one stale, and a Test's answer lands only on the key it was given for.
+/// Any change to the Google key makes Google's tier answer for the last one stale, and a Test's
+/// answer lands only on the key it was given for.
 struct AnalysisKeySheetActions {
     let provider: AnalysisProvider
     let keys: AnalysisProviderKeyStore

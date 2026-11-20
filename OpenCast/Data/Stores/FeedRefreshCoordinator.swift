@@ -3,23 +3,13 @@ import Observation
 import OpenCastCore
 import SwiftData
 
-/// The library's refresh flows: the single-feed, bulk, stale and
-/// missing-cache entry points, the shared flow shell (generation capture,
-/// refreshing/idle transitions, trailing publication, cancellation is not an
-/// error), fetch-result application, validator persistence, refresh-log
-/// writes, and the per-feed busy markers. Its own writes go to SQLite
-/// through the local cache, never through a ModelContext, so it holds no
-/// self-save ledger; every await that precedes a write is fenced by the
-/// shared write generation. Feed content lands through
-/// `FeedWriteCoordinator`; the observable state machine and publication
-/// stay with the host store.
+/// Writes go to SQLite through the local cache, never a ModelContext, so there is no self-save
+/// ledger; every await that precedes a write is fenced by the shared write generation.
 @Observable
 final class FeedRefreshCoordinator {
-    /// Bumped only by a completed Refresh All; drives the refresh haptic.
+    /// Bumped only by a completed Refresh All.
     private(set) var refreshCompletedToken = 0
-    /// Bumped whenever any refresh flow republishes fetched feed content, so
-    /// work that follows new episodes (automatic downloads) runs after
-    /// single-feed, stale, missing-cache and reconnect refreshes too.
+    /// Bumped whenever any refresh flow republishes fetched feed content.
     private(set) var contentRefreshToken = 0
     /// In-memory only: a relaunch retries every unreachable feed at once.
     private(set) var lastRefreshWasOffline = false
@@ -28,11 +18,8 @@ final class FeedRefreshCoordinator {
         Set(refreshingFeedURLCounts.keys)
     }
 
-    // Busy-marker bookkeeping is reference-counted through the begin/end
-    // helpers so overlapping flows (a single-feed refresh during a bulk
-    // refresh) provably balance on success, error, and cancellation. Rows
-    // observe their feed's activity object, so per-feed marker changes never
-    // invalidate every subscription row.
+    // Reference-counted, through the begin/end helpers only, so overlapping flows (a single-feed
+    // refresh during a bulk one) balance on success, error and cancellation.
     @ObservationIgnored private var refreshingFeedURLCounts: [String: Int] = [:]
     @ObservationIgnored private var refreshActivityByFeedURL: [String: FeedRefreshActivity] = [:]
     @ObservationIgnored private var manualRefreshTasks: [String: Task<Void, Never>] = [:]
@@ -87,10 +74,8 @@ final class FeedRefreshCoordinator {
         resumeDeferredConnectivityRecoveryIfIdle()
     }
 
-    /// A reconnect that lands mid-pass must not be lost to the busy guard in
-    /// `refreshAllIfStale`, and results still landing from the offline pass
-    /// must not re-set the flag after it was cleared, so a busy library
-    /// defers the recovery until its last flow ends.
+    /// A busy library defers the recovery until its last flow ends: a reconnect mid-pass would be lost
+    /// to the busy guard, and results still landing from the offline pass would set the flag again.
     func recoverConnectivity(
         refreshesStaleFeeds: Bool,
         modelContext: ModelContext,
@@ -151,9 +136,8 @@ final class FeedRefreshCoordinator {
         }
     }
 
-    /// Pins a user-requested retry to the library rather than the transient
-    /// list row that displayed it. The dictionary closes the small window
-    /// before the task publishes its busy marker, so repeated taps dedupe too.
+    /// The task outlives the list row that asked for it. The dictionary covers the window before its
+    /// busy marker publishes, so repeated taps dedupe.
     func requestManualRefresh(feedURL: String, modelContext: ModelContext) {
         guard manualRefreshTasks[feedURL] == nil, !isRefreshing(feedURL: feedURL) else {
             return
@@ -172,9 +156,8 @@ final class FeedRefreshCoordinator {
 
     func refreshAll(modelContext: ModelContext) async {
         let didComplete = await performRefreshFlow(setsRefreshingState: true, modelContext: modelContext) { generation in
-            // The refresh set only needs the active feed URLs; the trailing
-            // reload applies results, so a leading full-library reload would
-            // pay the whole SQLite materialization for a subscription fetch.
+            // No leading reload: the trailing one applies results, and a full-library reload here would
+            // pay the whole SQLite materialization just to list feed URLs.
             let feedURLStrings = try host.activeSubscriptionFeedURLStrings(modelContext: modelContext)
             try await refreshAll(
                 feedURLStrings: feedURLStrings,
@@ -244,23 +227,15 @@ final class FeedRefreshCoordinator {
         return didRefresh
     }
 
-    /// What a refresh flow's `work` closure asks the trailing publication to
-    /// do. A single-feed refresh that fetched no new content (not-modified,
-    /// or a failure that only wrote a log) republishes just the refresh-log
-    /// projection instead of rematerializing the whole library.
+    /// `logsOnly` republishes just the refresh-log projection when a refresh fetched no new content.
     private enum RefreshFlowReload {
         case skip
         case full
         case logsOnly
     }
 
-    /// The shared refresh-flow shell: generation capture, refreshing/idle
-    /// state transitions, the trailing store reload, and the
-    /// cancellation-is-not-an-error contract. Bulk flows set the observable
-    /// refreshing state; the single-feed flow relies on per-feed markers and
-    /// leaves a concurrently running bulk flow's state untouched. `.skip`
-    /// from `work` skips the trailing reload (nothing was fetched). Returns
-    /// true only when the flow ran to full success.
+    /// Cancellation is not an error. A single-feed flow leaves `setsRefreshingState` false so a
+    /// concurrent bulk flow's state stays untouched. Returns true only on full success.
     @discardableResult
     private func performRefreshFlow(
         setsRefreshingState: Bool,
@@ -297,10 +272,8 @@ final class FeedRefreshCoordinator {
             }
             return true
         } catch is CancellationError {
-            // Real task cancellation still publishes whatever partial results
-            // landed. A flow the data nuke unwound must not: its reload would
-            // take a fresh reload generation and republish the cache the
-            // nuke is clearing into the reset store.
+            // Real cancellation still publishes partial results; a flow the data nuke unwound must not,
+            // or its reload would republish the cache the nuke is clearing into the reset store.
             if writeGeneration.isCurrent(generation) {
                 try? await host.reloadFromStore(modelContext: modelContext)
             }
@@ -314,8 +287,7 @@ final class FeedRefreshCoordinator {
         }
     }
 
-    /// Returns true when new feed content was upserted; log-only outcomes
-    /// (not-modified, recorded failures) return false.
+    /// True when new feed content was upserted.
     private func refresh(
         subscription: SubscriptionRecord,
         generation: Int,
@@ -421,9 +393,8 @@ final class FeedRefreshCoordinator {
                 ) else {
                     return false
                 }
-                // A salvaged body cannot validate a future recovery fetch.
-                // `upsertCache` clears any older validators atomically; do
-                // not write the interrupted response's validators back.
+                // A salvaged body cannot validate a future recovery fetch, so its validators are not
+                // written; `upsertCache` clears older ones atomically.
                 if snapshot.completeness.isComplete {
                     await persistValidators(outcome.validators, forPodcastID: snapshot.podcast.id.rawValue)
                 }
@@ -469,8 +440,7 @@ final class FeedRefreshCoordinator {
         }
     }
 
-    /// Validator persistence is a refresh optimization: a failed write only
-    /// costs the next fetch a full download, so it never fails the refresh.
+    /// A failed write only costs the next fetch a full download, so it never fails the refresh.
     func persistValidators(_ validators: FeedValidators?, forPodcastID podcastID: String) async {
         guard let validators, !validators.isEmpty else {
             return
@@ -478,10 +448,7 @@ final class FeedRefreshCoordinator {
         try? await localCache.updateFeedValidators(validators, forPodcastID: podcastID)
     }
 
-    /// Refresh logs are written once, on completion. Cancelled and unreachable
-    /// refreshes write nothing: cancellation matches the previous
-    /// insert-then-delete-on-cancel behavior, and an unreachable feed stays
-    /// stale so the next pass retries it.
+    /// An unreachable refresh writes no log, so the feed stays stale and the next pass retries it.
     private func recordRefreshLog(
         feedURL: String,
         startedAt: Date,

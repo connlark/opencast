@@ -82,8 +82,7 @@ nonisolated enum PodcastEpisodeFilter: String, CaseIterable, Codable, Identifiab
         }
     }
 
-    /// The one membership rule shared by every episode list. The inputs are
-    /// lazy so `.all` reads nothing and `.downloaded` never looks up progress.
+    /// Lazy inputs, so `.all` reads nothing and `.downloaded` never looks up progress.
     @MainActor
     func includes(
         progress: @autoclosure () -> EpisodeProgressSummary,

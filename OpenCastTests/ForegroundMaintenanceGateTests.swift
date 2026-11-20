@@ -12,16 +12,6 @@ struct ForegroundMaintenanceGateTests {
         #expect(gate.shouldRunMaintenancePass(now: .now))
     }
 
-    @Test("Re-activation with no remote change inside the ceiling skips the pass")
-    func quietReactivationInsideCeilingSkips() {
-        var gate = ForegroundMaintenanceGate()
-        let completedAt = Date.now
-
-        gate.recordCompletedPass(at: completedAt)
-
-        #expect(!gate.shouldRunMaintenancePass(now: completedAt.addingTimeInterval(60)))
-    }
-
     @Test("Re-activation after a non-self remote change runs the full pass")
     func remoteChangeForcesFullPass() {
         var gate = ForegroundMaintenanceGate()

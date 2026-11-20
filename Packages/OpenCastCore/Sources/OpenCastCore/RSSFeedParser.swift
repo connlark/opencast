@@ -11,9 +11,8 @@ public struct RSSFeedParser: Sendable {
             return try snapshot(from: original.delegate)
         }
 
-        // A budget abort is not an entity problem: recovery cannot reduce the
-        // work, and regex-reprocessing an oversized document would evade the
-        // budgets it just enforced.
+        // A budget abort skips recovery: recovery cannot reduce the work, and reprocessing
+        // an oversized document would evade the budgets just enforced.
         var salvageCandidate = original.delegate
         if original.delegate.isRecoveryEligible,
            let recoveredData = RSSFeedRecovery.recoveredData(from: data) {
@@ -79,9 +78,7 @@ public struct RSSFeedParser: Sendable {
     }
 }
 
-/// DoS rails, not product limits: sized comfortably above anything a
-/// legitimate feed produces, including the text amplification the
-/// didEndElement bubble-up adds while it remains uncontained.
+/// DoS rails, not product limits: sized well above anything a legitimate feed produces.
 private enum ParserWorkBudget {
     static let maxElementDepth = FeedResourcePolicy.maximumDepth
     static let maxItems = FeedResourcePolicy.maximumItems
@@ -108,18 +105,11 @@ final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
     private let fallbackCDATAEncoding: String.Encoding?
     private(set) var rootElementName: String?
     private(set) var didExceedWorkBudget = false
-    /// False only for parser aborts whose structure cannot be changed by the
-    /// entity/encoding recovery pass. Resource-budget aborts are also
-    /// ineligible, but remain separately observable for error classification.
+    /// False for aborts that entity and encoding recovery cannot change, budget aborts included.
     private(set) var isRecoveryEligible = true
-    /// Per-prefix stacks of "is this the Podcast Index namespace?", seeded
-    /// with the canonical prefix. `podcast:chapters` presence gates paid
-    /// chapter generation, so a feed binding the namespace to a non-canonical
-    /// prefix must not defeat it. Namespace processing is off (prefixes
-    /// arrive verbatim), so xmlns declarations are tracked by element scope:
-    /// each element's declarations shadow outer ones and are unwound when it
-    /// closes, so a prefix rebound to a foreign namespace stops matching for
-    /// exactly that subtree — and vice versa.
+    /// Per prefix, a stack of whether it binds the Podcast Index namespace. Namespace processing
+    /// is off, so prefixes arrive verbatim and each element's xmlns declarations shadow outer
+    /// ones until it closes.
     private var podcastPrefixBindings: [String: [Bool]] = ["podcast": [true]]
     /// Aligned with `elementStack`: the prefixes each open element declared.
     private var declaredNamespacePrefixStack: [[String]] = []
@@ -129,8 +119,6 @@ final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         "https://github.com/podcastindex-org/podcast-namespace/blob/main/docs/1.0.md"
     ]
 
-    /// - Parameter fallbackCDATAEncoding: the document's prolog-declared
-    ///   encoding; CDATA blocks arrive as raw bytes in that encoding.
     init(feedURL: URL, fallbackCDATAEncoding: String.Encoding?, itemSink: ((ItemAccumulator) throws -> Void)? = nil) {
         self.itemSink = itemSink
         self.feedURL = feedURL
@@ -197,9 +185,8 @@ final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
             pendingItems.append((item: item, title: title, naturalID: naturalID))
         }
 
-        // A collision group's natural-tier ID goes to a content-determined
-        // winner, not to whichever collider the publisher listed first: a
-        // newest-first feed prepending a new item with a reused GUID must not
+        // The natural-tier ID goes to a content-determined winner, not the first collider
+        // listed, so a newest-first feed that prepends an item with a reused GUID cannot
         // re-key the existing episode and orphan its synced progress.
         var naturalTierWinnerIndexes: [EpisodeID: Int] = [:]
         for (naturalID, indexes) in indexesByNaturalID where indexes.count > 1 {
@@ -263,10 +250,6 @@ final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         )
     }
 
-    /// Natural-tier collision-winner ordering: oldest publishedAt first
-    /// (stable under newest-first prepends — the existing episode keeps its
-    /// ID), then lexicographically smallest audio URL, then document order
-    /// (min-by keeps the earlier index on full ties).
     private static func naturalTierPrecedes(
         _ lhs: (item: ItemAccumulator, title: String, naturalID: EpisodeID),
         _ rhs: (item: ItemAccumulator, title: String, naturalID: EpisodeID)
@@ -291,12 +274,9 @@ final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         }
     }
 
-    /// Publishers occasionally reuse one GUID (or enclosure) across distinct
-    /// episodes; without a fallback every collider collapses into one row.
-    /// The content-determined winner keeps the natural-tier ID so existing
-    /// libraries don't re-key; the other colliders fall back a tier at a
-    /// time. Items whose identity material is identical at every tier are
-    /// true duplicates and collapse to nil.
+    /// Publishers sometimes reuse a GUID or enclosure across distinct episodes. The winner keeps
+    /// the natural-tier ID, the other colliders fall back a tier at a time, and an item identical
+    /// at every tier is a duplicate and returns nil.
     private func fallbackEpisodeID(
         for item: ItemAccumulator,
         title: String,
@@ -363,8 +343,6 @@ final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         case "enclosure":
             captureEnclosure(attributes: attributeDict)
         case _ where isPodcastChaptersElement(name):
-            // Attribute-bearing element (url/type); presence gates generated
-            // chapters — creator metadata wins.
             if currentItem != nil,
                let url = attributeDict.caseInsensitiveValue(for: "url").flatMap(URL.init(string:)) {
                 currentItem?.chaptersURL = url
@@ -399,9 +377,7 @@ final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         abortIfOverBudget(parser)
     }
 
-    /// CDATA arrives as raw bytes in the document's original encoding; a
-    /// non-UTF-8 block on a feed that parses fine otherwise used to be
-    /// silently dropped. Prolog-declared encoding first, then lossy UTF-8.
+    /// XMLParser hands CDATA over as raw bytes in the document's original encoding.
     private func decodedCDATA(_ block: Data) -> String {
         if let value = String(data: block, encoding: .utf8) {
             return value
@@ -443,10 +419,8 @@ final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
             elementStack.removeLast()
             popNamespaceBindings()
         }
-        // Bubble closed-element text up into text-bearing parents only: it
-        // exists so unescaped inline elements (<b>, <em>) keep accumulating
-        // into the field that contains them, and containers accumulating the
-        // whole document's character data is pure amplification.
+        // Closed-element text bubbles up so unescaped inline elements (`<b>`, `<em>`) stay in
+        // their field, but never into containers, where it would only amplify the document.
         if !Self.containerElements.contains(name),
            let parentName = elementStack.last,
            !Self.containerElements.contains(parentName) {
@@ -518,10 +492,8 @@ final class FeedXMLParserDelegate: NSObject, XMLParserDelegate {
         }
     }
 
-    /// A channel-level `<image>`/`<textinput>` closes before any `<item>`
-    /// opens, so inside an item this only matches a (nonstandard) container
-    /// nested in the item itself — spec-valid `<image><title>`/`<description>`
-    /// must not steal channel or episode fields either way.
+    /// Spec-valid `<image><title>` and `<textinput><description>` must not set channel or
+    /// episode fields.
     private var isInsideMetadataContainer: Bool {
         elementStack.contains("image") || elementStack.contains("textinput")
     }

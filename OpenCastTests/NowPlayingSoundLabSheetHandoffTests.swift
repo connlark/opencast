@@ -2,9 +2,6 @@ import SwiftUI
 import Testing
 @testable import OpenCast
 
-/// Below the panel's inline floor the Sound Lab is a case of the player's
-/// utility sheet. A sheet action that opens another flow dismisses the sheet
-/// first and hands the action to the player from the sheet's `onDismiss`.
 @MainActor
 @Suite("Sound Lab sheet: the handoff contract")
 struct NowPlayingSoundLabSheetHandoffTests {
@@ -21,8 +18,6 @@ struct NowPlayingSoundLabSheetHandoffTests {
         #expect(handoff.action(isNowPlayingPresented: true, presentedSheet: nil, currentEpisodeID: "episode-1") == action)
     }
 
-    /// The transcript action's completion guard requires no utility sheet;
-    /// the handoff runs only when none is up, so the fallback never blocks it.
     @Test(
         "It never runs under a sheet: the Sound Lab's own, or one opened meanwhile",
         arguments: [PlayerUtilitySheet.soundLab, .transcript, .upNext, .speed]

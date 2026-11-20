@@ -2,11 +2,6 @@ import Foundation
 import OpenCastTranscription
 import OSLog
 
-/// Purchase + balance state for remote transcription.
-/// Money invariants live here: the catalog cross-check fails closed, a
-/// transaction is finished ONLY after the server acknowledges the credit
-/// (credited / already credited / refunded), and reconciliation retries a
-/// failed credit in-session as well as at launch or explicit user refresh.
 @Observable
 final class RemoteTranscriptionPurchaseStore {
     private static let appTransactionLogger = Logger(
@@ -15,13 +10,8 @@ final class RemoteTranscriptionPurchaseStore {
     )
 
     enum Availability: Equatable {
-        /// Gate not resolved yet (first `prepare()` still running).
         case unknown
-        /// No trustworthy backend lane could be resolved yet. Settings keeps
-        /// this visible so an explicit AppTransaction refresh can recover.
         case unavailable(reason: String)
-        /// Surfaces show balance/status but purchasing is off (dev lane,
-        /// kill switch, or a fail-closed catalog mismatch).
         case storeDisabled(reason: String)
         case available
     }
@@ -29,8 +19,6 @@ final class RemoteTranscriptionPurchaseStore {
     enum PurchasePhase: Equatable {
         case idle
         case purchasing(productID: String)
-        /// Deferred approval (Ask to Buy); credit lands via the updates
-        /// listener when approved.
         case pendingApproval
         case completed(creditedSeconds: Int64)
         case failed(message: String)
@@ -38,9 +26,6 @@ final class RemoteTranscriptionPurchaseStore {
 
     private(set) var availability: Availability = .unknown
 
-    /// Synchronous gate for remote-transcription surfaces: the
-    /// DEBUG dev flag opens them immediately (fixtures/UI tests never wait on
-    /// resolution); otherwise the async StoreKit-environment gate decides.
     var isSurfaceVisible: Bool {
         if RemoteTranscriptionDevFlag.isEnabled { return true }
         switch availability {
@@ -55,8 +40,7 @@ final class RemoteTranscriptionPurchaseStore {
     private(set) var isRefreshing = false
     private(set) var refundCandidates: [RemoteTranscriptionRefundCandidate] = []
 
-    /// Fires after a redeem or a balance refresh applies more headroom, so
-    /// balance-deferred work can re-probe against the balance now in place.
+    /// Fires after the larger balance is in place.
     @ObservationIgnored var onBalanceIncreased: (() -> Void)?
 
     @ObservationIgnored private var appAccountToken: UUID?
@@ -73,8 +57,6 @@ final class RemoteTranscriptionPurchaseStore {
     private let api: any RemoteTranscriptionAPI
     private let storeKit: any RemoteTranscriptionStoreKitClient
     private let redemptionRetryDelays: [Duration]
-    /// Tests and DEBUG fixtures pin a lane without StoreKit work. Release app
-    /// wiring resolves from the shared AppTransaction snapshot.
     private let configurationResolver: (Bool) async -> RemoteTranscriptionBackendConfiguration
 
     init(
@@ -112,9 +94,6 @@ final class RemoteTranscriptionPurchaseStore {
         redemptionRetryTask?.cancel()
     }
 
-    /// Idempotent: resolves the gate, bootstraps, cross-checks the catalog,
-    /// loads products, starts the updates listener, and reconciles
-    /// unfinished transactions once.
     func prepare() async {
         #if DEBUG
         if usesUIFixture { return }
@@ -122,8 +101,8 @@ final class RemoteTranscriptionPurchaseStore {
         await runPreparation(refreshAppTransaction: false)
     }
 
-    /// Explicit Settings action. AppTransaction.refresh() may authenticate,
-    /// so this path must never be invoked by launch preparation.
+    /// `AppTransaction.refresh()` may present App Store authentication, so only an explicit
+    /// user action may call this.
     func retryPreparation() async {
         #if DEBUG
         if usesUIFixture { return }
@@ -142,13 +121,8 @@ final class RemoteTranscriptionPurchaseStore {
     }
 
     private func runPreparation(refreshAppTransaction: Bool) async {
-        // No caller's cancellation may cancel the shared preparation: the
-        // app root awaits the same task, and a transient surface (settings
-        // sheet, chapters card) disappearing mid-flight would otherwise
-        // strand availability at .unknown for the whole session. The work is
-        // bounded (bootstrap + products load under network timeouts), so a
-        // cancelled caller simply keeps waiting and the result is cached for
-        // everyone. retryPreparation and deinit still cancel explicitly.
+        // A caller's cancellation must not cancel the shared task: a sheet that disappears
+        // mid-flight would strand `availability` at `.unknown` for the whole session.
         if let prepareTask {
             _ = await prepareTask.value
             return
@@ -166,8 +140,7 @@ final class RemoteTranscriptionPurchaseStore {
         if usesUIFixture { return }
         #endif
         guard case .available = availability else { return }
-        // Any in-flight purchase blocks a second one: two concurrent StoreKit
-        // flows would clobber each other's purchasePhase.
+        // Two concurrent StoreKit flows would clobber each other's purchasePhase.
         guard !isPurchaseInFlight else { return }
         guard let appAccountToken else {
             purchasePhase = .failed(message: String(localized: "Purchases aren’t ready yet. Try again in a moment."))
@@ -185,10 +158,8 @@ final class RemoteTranscriptionPurchaseStore {
                 if let response = await redeemAndFinish(transaction) {
                     purchasePhase = .completed(creditedSeconds: response.creditedSeconds)
                 } else if redeemedTransactionIDs.contains(transaction.id) {
-                    // The updates listener can win the race for the same
-                    // StoreKit transaction while `purchase()` is suspended.
-                    // Its acknowledged credit is success, not a redeem
-                    // failure that should strand the surface.
+                    // The updates listener can redeem this transaction while `purchase()` is
+                    // suspended; its credit is success, not a redeem failure.
                     let creditedSeconds = RemoteTranscriptionEmbeddedCatalog
                         .grantSecondsByProductID[transaction.productID]
                         ?? product.grantSeconds
@@ -220,8 +191,7 @@ final class RemoteTranscriptionPurchaseStore {
         }
     }
 
-    /// Explicit user gesture: `AppStore.sync()` plus a full-history
-    /// reconciliation sweep.
+    /// Only on an explicit user gesture: it runs `AppStore.sync()`.
     func refreshPurchases() async {
         #if DEBUG
         if usesUIFixture { return }
@@ -245,20 +215,15 @@ final class RemoteTranscriptionPurchaseStore {
         dismissPurchasePhase()
     }
 
-    /// Returns whether a fresh balance was applied; a failed or cancelled
-    /// refresh keeps the last balance, which callers must not read as new.
-    /// A headroom increase over the previously known balance (a purchase on
-    /// another device sharing the account, or a grant) wakes balance-deferred
-    /// work once the new balance is in place. The session's first balance is
-    /// not evidence of a top-up.
+    /// Returns false when the refresh failed or was cancelled; the kept balance is then not new.
+    /// The session's first balance is not a top-up, so it wakes nothing.
     @discardableResult
     func refreshBalance() async -> Bool {
         #if DEBUG
         if usesUIFixture { return false }
         #endif
-        // A transport that answers after the refresh's task was cancelled (a
-        // data nuke mid-sweep) must apply nothing and wake nothing: the
-        // caller has already discarded the work this answer would feed.
+        // An answer that arrives after cancellation (a data nuke mid-sweep) must apply and wake
+        // nothing.
         guard let response = try? await api.bootstrap(), !Task.isCancelled else { return false }
         let previousBalance = balance
         apply(bootstrap: response)
@@ -281,9 +246,8 @@ final class RemoteTranscriptionPurchaseStore {
         refundCandidates.removeAll { $0.id == transactionID }
     }
 
-    /// Clears a terminal purchase row (`completed`/`failed`). In-flight
-    /// phases stay put: `purchasing` guards against a double-buy and
-    /// `pendingApproval` is resolved by the transaction-updates listener.
+    /// Only a terminal phase clears: `purchasing` guards against a double-buy, and the updates
+    /// listener resolves `pendingApproval`.
     func dismissPurchasePhase() {
         switch purchasePhase {
         case .completed, .failed:
@@ -294,8 +258,6 @@ final class RemoteTranscriptionPurchaseStore {
     }
 
     #if DEBUG
-    /// Deterministic App Review capture state. It is launch-argument-only,
-    /// never contacts StoreKit/the backend, and cannot compile into Release.
     func applyReviewScreenshotFixture() {
         let presentationByProductID: [String: (displayName: String, displayPrice: String)] = [
             "com.connor.opencast.transcription.hours20.v1": (
@@ -345,17 +307,12 @@ final class RemoteTranscriptionPurchaseStore {
     }
     #endif
 
-    /// Consumption preview for the pre-create sheet, mirroring the server's
-    /// reserve arithmetic. Transcription charges audio-seconds 1:1.
+    /// Mirrors the server's reserve arithmetic; transcription charges audio seconds 1:1.
     func estimate(durationSeconds: Double) -> RemoteTranscriptionConsumptionEstimate {
         estimate(chargeSeconds: Int64(durationSeconds.rounded(.up)))
     }
 
-    /// Chapters & Summary preview (the H6 unit bridge): analysis charges the
-    /// flat blended rate per audio-hour, then settles against the same
-    /// shared balance (H7). Nil when the duration cannot price a run.
-    /// Display-only — the worker recomputes the charge from its own
-    /// authoritative duration at reserve.
+    /// Display only; the worker recomputes the charge from its own duration at reserve.
     func analysisEstimate(durationSeconds: Double) -> RemoteTranscriptionConsumptionEstimate? {
         guard let chargeSeconds = TranscriptAnalysisBillingRate.estimatedChargeSeconds(
             durationSeconds: durationSeconds
@@ -365,9 +322,7 @@ final class RemoteTranscriptionPurchaseStore {
         return estimate(chargeSeconds: chargeSeconds)
     }
 
-    /// The analysis charge basis shared by the detail card and the deferred
-    /// retry sweeps: the server prices the declared duration or the last
-    /// segment end, whichever is larger.
+    /// The server prices the declared duration or the last segment end, whichever is larger.
     func analysisEstimate(transcript document: EpisodeTranscriptDocument) -> RemoteTranscriptionConsumptionEstimate? {
         analysisEstimate(durationSeconds: max(document.audioDuration, document.segments.last?.end ?? 0))
     }
@@ -392,8 +347,7 @@ final class RemoteTranscriptionPurchaseStore {
 
     // MARK: - Preparation
 
-    /// Retryable environment and service failures must not disable purchases
-    /// for the rest of the session. Successful resolution remains coalesced.
+    /// Returns whether the outcome is cached for the session; a retryable failure is not.
     private func resolve(refreshAppTransaction: Bool) async -> Bool {
         let configuration = await configurationResolver(refreshAppTransaction)
         guard !Task.isCancelled else { return false }
@@ -416,7 +370,6 @@ final class RemoteTranscriptionPurchaseStore {
         apply(bootstrap: bootstrap)
 
         guard configuration.requiresAppTransaction else {
-            // Development lane: balance surfaces only, no store.
             availability = .storeDisabled(reason: String(localized: "Purchases aren’t available in this configuration."))
             return true
         }
@@ -507,8 +460,6 @@ final class RemoteTranscriptionPurchaseStore {
         let timeoutTask = Task {
             do {
                 try await Task.sleep(for: timeout)
-            } catch is CancellationError {
-                return
             } catch {
                 return
             }
@@ -668,17 +619,15 @@ final class RemoteTranscriptionPurchaseStore {
         )
     }
 
-    /// Exactly-once client half of crediting: redeem against the server and
-    /// finish ONLY on an acknowledged outcome. Failures leave the
-    /// transaction unfinished so a later launch or refresh retries.
+    /// Finishes the transaction only on an acknowledged outcome; an unfinished one is retried at
+    /// the next launch or refresh.
     @discardableResult
     private func redeemAndFinish(
         _ transaction: RemoteTranscriptionStoreTransaction
     ) async -> OpenCastRemoteTranscriptionRedeemResponse? {
         guard !redeemedTransactionIDs.contains(transaction.id) else {
-            // A reconcile sweep may have redeemed the approved transaction
-            // before the updates listener saw it; the pending row must not
-            // outlive the credit.
+            // A reconcile sweep can redeem an approved transaction before the updates listener
+            // sees it; the pending row must not outlive the credit.
             clearPendingApprovalPhase()
             return nil
         }
@@ -690,11 +639,8 @@ final class RemoteTranscriptionPurchaseStore {
             let previousBalance = balance
             balance = response.balance
             pendingRedemptionRetries.removeValue(forKey: transaction.id)
-            // A lost first response can make the retry say `alreadyCredited`
-            // even though this process still observes the added headroom for
-            // the first time. Wake deferred work for either a fresh credit or
-            // an authoritative increase; a refund can only move headroom the
-            // other direction.
+            // A lost first response makes the retry answer `alreadyCredited` while this process
+            // sees the added headroom for the first time, so an increase also wakes deferred work.
             let observedHeadroomIncrease = previousBalance.map {
                 purchaseHeadroom(response.balance) > purchaseHeadroom($0)
             } ?? false
@@ -708,10 +654,8 @@ final class RemoteTranscriptionPurchaseStore {
         }
     }
 
-    /// pendingApproval clears on any acknowledged redeem, not only the
-    /// updates listener's own attempt — a failed first attempt (offline at
-    /// approval time) or a reconcile-sweep win would otherwise strand the
-    /// "awaiting approval" row for the rest of the session.
+    /// Any acknowledged redeem clears `pendingApproval`: the listener's own attempt can fail
+    /// offline or lose to a reconcile sweep.
     private func clearPendingApprovalPhase() {
         if purchasePhase == .pendingApproval {
             purchasePhase = .idle

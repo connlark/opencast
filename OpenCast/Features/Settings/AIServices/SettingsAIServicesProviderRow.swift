@@ -1,8 +1,7 @@
 import OpenCastAnalysis
 import SwiftUI
 
-/// One provider's key status; a tap opens that provider's key sheet. The row
-/// owns its sheet, so the sheet is keyed by the provider it was opened for.
+/// The row owns its sheet, so the sheet is keyed by the provider it was opened for.
 struct SettingsAIServicesProviderRow: View {
     @Environment(OpenCastAppModel.self) private var appModel
 

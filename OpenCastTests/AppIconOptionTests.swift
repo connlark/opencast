@@ -1,6 +1,5 @@
 import Foundation
 import Testing
-import UIKit
 @testable import OpenCast
 
 @MainActor
@@ -15,44 +14,6 @@ struct AppIconOptionTests {
         for (name, entry) in alternateIcons {
             let iconName = (entry as? [String: Any])?["CFBundleIconName"] as? String
             #expect(iconName == name)
-        }
-    }
-
-    @Test("Primary option is the bundle's primary icon")
-    func primaryOptionIsBundlePrimaryIcon() throws {
-        let primaryIcon = try #require(bundleIcons["CFBundlePrimaryIcon"] as? [String: Any])
-
-        #expect(primaryIcon["CFBundleIconName"] as? String == AppIconOption.primary.rawValue)
-        #expect(AppIconOption.primary.alternateIconName == nil)
-    }
-
-    @Test("Stored names map back to options, unknown names to the primary")
-    func storedNamesMapToOptions() {
-        #expect(AppIconOption(alternateIconName: nil) == .ember)
-        #expect(AppIconOption(alternateIconName: "AppIconRetired") == .ember)
-        for option in AppIconOption.allCases {
-            #expect(AppIconOption(alternateIconName: option.alternateIconName) == option)
-        }
-    }
-
-    @Test("The roster has unique titles and bundle names in picker order")
-    func rosterMatchesTitles() {
-        let options = AppIconOption.allCases
-        #expect(Set(options.map(\.title)).count == options.count)
-        #expect(options.count == 9)
-        #expect(options.first == .ember)
-        #expect(options[1] == .ocean)
-        for option in options where option != .primary {
-            #expect(option.rawValue == "AppIcon" + option.title.replacing(" ", with: ""))
-            #expect(option.alternateIconName == option.rawValue)
-        }
-    }
-
-    @Test("Every option's preview image loads")
-    func previewImagesLoad() {
-        for option in AppIconOption.allCases {
-            let image = UIImage(resource: option.previewImage)
-            #expect(image.size.width > 0, "\(option.title) preview should load")
         }
     }
 

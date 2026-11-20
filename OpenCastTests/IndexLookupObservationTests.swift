@@ -4,10 +4,6 @@ import SwiftData
 import Testing
 @testable import OpenCast
 
-/// The O(1)-index lookups pair an @ObservationIgnored dictionary with a
-/// tracked read so a body whose lookup missed still invalidates when the
-/// record or episode appears (audit §7 / §17 shape; DownloadStore has its
-/// own regression test).
 @MainActor
 @Suite("Index lookup observation guards")
 struct IndexLookupObservationTests {

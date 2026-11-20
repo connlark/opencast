@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// A smart rule chip whose menu is one inline picker: Sort, Length, Age and
-/// Limit. The label shows the current value; a stored value that matches no
-/// option opens the menu with nothing checked.
 struct PlaylistRulePickerChip<Value: Hashable>: View {
     let clause: String
     let systemImage: String

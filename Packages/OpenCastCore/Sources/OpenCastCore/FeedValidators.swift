@@ -1,12 +1,9 @@
 import Foundation
 
-/// Conditional-request material for one feed: the server's validators plus a
-/// hash of the last body for hosts that serve no usable validators at all.
-/// Persisted app-side; the fetch only consumes and reproduces them.
 public struct FeedValidators: Equatable, Sendable {
     public var entityTag: String?
     public var lastModified: String?
-    /// SHA-256 hex of the last fully-fetched body.
+    /// SHA-256 hex of the last full body, for hosts that serve no usable validators.
     public var bodyHash: String?
 
     public init(

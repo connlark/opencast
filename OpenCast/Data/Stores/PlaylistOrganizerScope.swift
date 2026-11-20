@@ -1,4 +1,3 @@
-/// What part of the show the model saw.
 nonisolated struct PlaylistOrganizerScope: Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         case all
@@ -10,8 +9,7 @@ nonisolated struct PlaylistOrganizerScope: Equatable, Sendable {
     var sentCount: Int
     var totalCount: Int
 
-    /// The scope as the prompt states it. Plain digits, never locale-formatted,
-    /// so the model reads the same text on every device.
+    /// Plain digits, never locale-formatted, so the model reads the same text on every device.
     var promptText: String {
         let sent = String(sentCount)
         let total = String(totalCount)

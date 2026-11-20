@@ -1,6 +1,3 @@
-/// One stitched segment in a remote transcription result. Word timings nest
-/// per segment, mirroring the persisted document shape; there is no top-level
-/// word list.
 public struct OpenCastRemoteTranscriptSegment: Codable, Sendable, Equatable, Identifiable {
     public var id: Int
     public var start: Double

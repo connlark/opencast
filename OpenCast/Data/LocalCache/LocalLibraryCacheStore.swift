@@ -1,37 +1,26 @@
 import Foundation
 import OpenCastCore
 
-/// Storage boundary for the device-local podcast/episode/refresh-log cache.
-///
-/// Subscriptions and playback progress are CloudKit-backed SwiftData models and
-/// stay outside this boundary.
 nonisolated protocol LocalLibraryCacheStore: Sendable {
-    /// `refreshLogs` in the returned snapshot is the per-feed projection
-    /// (each feed's latest log, plus its latest success when the latest is a
-    /// failure); the full retained history comes from `allRefreshLogs()`.
+    /// The snapshot's `refreshLogs` hold each feed's latest log, plus its latest success when
+    /// the latest failed.
     func loadLibrary(activePodcastIDs: Set<String>) async throws -> LocalLibraryCacheSnapshot
-    /// Full retained refresh-log history, newest first (diagnostics surface).
+    /// Newest first.
     func allRefreshLogs() async throws -> [RefreshLogSnapshot]
     func episodeDetail(episodeID: String) async throws -> EpisodeDetailSnapshot?
-    /// The decoded chapters stored for one episode row, whatever URL they
-    /// came from: the caller compares `sourceURL` with the row's current
-    /// `chapters_url`. Absent, partial, or undecodable entries read as nil.
+    /// Returns the entry whatever URL it came from: the caller compares `sourceURL` with the
+    /// row's current `chapters_url`. Partial or undecodable entries read as nil.
     func publisherChapters(episodeID: String) async throws -> PublisherChaptersCacheEntry?
-    /// Writes beside the row's `chapters_url` without touching `cached_at`
-    /// (a chapters fetch is not a content change); a no-op when the row is
-    /// gone.
+    /// Leaves `cached_at` alone, since a chapters fetch is not a content change. A no-op when
+    /// the row is gone.
     func storePublisherChapters(_ entry: PublisherChaptersCacheEntry, episodeID: String) async throws
     func showNotesHTMLByEpisodeID(activePodcastIDs: Set<String>) async throws -> [String: String]
-    /// One feed's raw episode descriptions, the summary preferred over the
-    /// show notes, each cut to `maximumCharacters`. Rows with neither are
-    /// omitted.
+    /// The summary is preferred over the show notes, each cut to `maximumCharacters`; rows with
+    /// neither are omitted.
     func episodeSummaries(forPodcastID podcastID: String, maximumCharacters: Int) async throws -> [String: String]
-    /// Builds or validates the derived lexical index without blocking the
-    /// initial library load. Search falls back while this is in progress.
     func prepareEpisodeSearchIndex() async throws
-    /// Called after any operation clears and repopulates the derived index.
-    /// A rebuild can restore only canonical `episode_cache` metadata, so the
-    /// transcript owner must re-reconcile its documents when this fires.
+    /// The handler runs after the index is cleared and rebuilt. A rebuild restores only
+    /// `episode_cache` metadata, so the transcript owner must re-reconcile its documents.
     func setEpisodeSearchIndexRebuildHandler(
         _ handler: (@MainActor @Sendable () -> Void)?
     ) async
@@ -54,32 +43,19 @@ nonisolated protocol LocalLibraryCacheStore: Sendable {
     func updateEpisodeArtworkPreview(_ preview: ArtworkPreview, episodeID: String, artworkURL: String?) async throws
     func updatePodcastArtworkPreview(_ preview: ArtworkPreview, feedURL: String, artworkURL: String?) async throws
     func insertRefreshLog(_ log: RefreshLogSnapshot, prunedTo retentionLimit: Int) async throws
-    /// Conditional-request material persisted from the last full fetch;
-    /// nil when the feed has none stored.
     func feedValidators(forPodcastID podcastID: String) async throws -> FeedValidators?
     /// Persists validators without touching `updated_at` — an unchanged feed
     /// must not look content-changed.
     func updateFeedValidators(_ validators: FeedValidators, forPodcastID podcastID: String) async throws
-    /// Throttles a failed attempt for one hour without advancing the partial
-    /// import counter or shortening an existing partial-import deadline.
-    /// Manual refresh bypasses the deadline. Partial imports schedule their
-    /// exponential backoff atomically in `upsertCache` instead. Attempts the
-    /// device could not put on the network are not recorded.
+    /// Throttles the feed for one hour without advancing the partial-import counter or
+    /// shortening an existing partial-import deadline.
     func recordFeedRetryFailure(forPodcastID podcastID: String, attemptedAt: Date) async throws
-    /// Clears failure-only retry state after a successful not-modified fetch.
-    /// Full imports reset it atomically with their catalog transaction.
     func clearFeedRetryFailure(forPodcastID podcastID: String) async throws
-    /// Every cached episode row for one feed, including rows that have
-    /// departed the live feed; identity reconciliation diffs these against a
-    /// fresh snapshot.
+    /// Includes rows that have departed the live feed.
     func cachedEpisodes(forPodcastID podcastID: String) async throws -> [EpisodeListItemSnapshot]
-    /// Deletes specific episode rows — used only for rows whose identity was
-    /// migrated onto a successor; unmatched departed rows are retained.
     func deleteEpisodes(episodeIDs: [String]) async throws
     func deleteCache(forPodcastID podcastID: String) async throws
     func deleteAllLocalCache() async throws
-    /// Server-reported notification poll health, replaced wholesale from each
-    /// successful subscription sync (advisory UI data only).
     func replaceNotificationFeedHealth(_ records: [NotificationFeedHealthRecord]) async throws
     func notificationFeedHealthByFeedURL() async throws -> [String: NotificationFeedHealth]
     func hasCompletedLegacyImport() async throws -> Bool

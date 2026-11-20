@@ -1,11 +1,7 @@
 import SwiftUI
 
-/// A smart rule chip's visible label: the tinted glyph and the current value
-/// in primary text on a glass capsule. The capsule stays text-sized; the
-/// 44 pt frame outside the glass is what takes the tap, because a `.glass`
-/// button style around a 44 pt label draws a taller capsule. At accessibility
-/// sizes a long value wraps instead of truncating, and the glass becomes a
-/// rounded rectangle so the glyph stays inside it.
+/// The 44 pt tap frame sits outside the glass: a `.glass` button style around a 44 pt label
+/// draws a taller capsule.
 struct PlaylistRuleChipLabel: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -36,10 +32,7 @@ struct PlaylistRuleChipLabel: View {
 }
 
 extension View {
-    /// The chip menu's style and accessibility: "<Clause>, <value>" as the
-    /// label, both words for Voice Control, and "Smart Rule <Clause>" as the
-    /// identifier. `accessibilityTitle` is the spoken value when the visible
-    /// one abbreviates ("Under 45 minutes").
+    /// `accessibilityTitle` is the spoken value when the visible one abbreviates.
     func smartRuleChipMenu(clause: String, title: String, accessibilityTitle: String? = nil) -> some View {
         menuStyle(.button)
             .buttonStyle(.plain)

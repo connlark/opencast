@@ -1,7 +1,3 @@
-/// Pure mapping from the ad-free pass presentation to the fixed-footprint
-/// Sound Lab row: an actionable title (Skip, Resume, Retry, Reanalyze —
-/// never progress text or "Working"), with live status carried only by the
-/// trailing glyph and the accessibility value.
 nonisolated struct NowPlayingSoundLabAdFreePassRowModel: Equatable {
     enum Emphasis: Equatable {
         case normal

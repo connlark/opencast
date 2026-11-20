@@ -13,8 +13,6 @@ enum AppIconOption: String, CaseIterable, Identifiable, Sendable {
 
     static let primary: AppIconOption = .ember
 
-    /// Maps UIKit's stored alternate icon name back to an option; `nil` and
-    /// names from a build that no longer ships them resolve to the primary.
     init(alternateIconName: String?) {
         self = alternateIconName.flatMap(AppIconOption.init(rawValue:)) ?? .primary
     }

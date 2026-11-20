@@ -1,18 +1,12 @@
 import Foundation
 
-/// Composite queue progress over the per-episode mapper: units are
-/// `floor(1000 × (finishedItems + perEpisodeUnits/1000) / totalItems)`,
-/// monotonic-clamped at the composite level so appending items mid-run
-/// holds progress flat instead of running backwards. For a queue of one
-/// the composite equals the per-episode mapper exactly.
+/// Clamped monotonic, so items appended mid-run hold progress flat instead of running it backwards.
 struct AdFreePassQueueProgressMapper: Equatable {
     private var episodeMapper: EpisodeAdFreePassProgressMapper
     private var finishedItemCount = 0
     private var totalItemCount = 1
     private(set) var completedUnitCount: Int64 = 0
 
-    /// `subunitsPerUnit` refines the 0...1000 scale, as the per-episode
-    /// mapper does.
     init(subunitsPerUnit: Int64 = 1) {
         episodeMapper = EpisodeAdFreePassProgressMapper(subunitsPerUnit: subunitsPerUnit)
     }
@@ -43,8 +37,6 @@ struct AdFreePassQueueProgressMapper: Equatable {
         return completedUnitCount
     }
 
-    /// One creep tick: `update`, and an analyzing step also moves at least
-    /// one unit of this scale, never past one unit short of its slice end.
     mutating func tick(
         for stage: EpisodeAdFreePassStage,
         queueContext: AdFreePassQueueContext,
@@ -70,9 +62,8 @@ struct AdFreePassQueueProgressMapper: Equatable {
         completedUnitCount = 0
     }
 
-    /// This mapper's position in the episode's units. Creep moves
-    /// `completedUnitCount` alone, so the episode mapper is behind it, and a
-    /// handover based there could not move this mapper at all.
+    /// Derived from `completedUnitCount`: creep moves this mapper alone, so a handover based on
+    /// the episode mapper's own position could not move this one at all.
     private var episodePosition: Int64 {
         let position = completedUnitCount * Int64(totalItemCount) - Int64(finishedItemCount) * totalUnitCount
         return min(max(position, episodeMapper.completedUnitCount), totalUnitCount)

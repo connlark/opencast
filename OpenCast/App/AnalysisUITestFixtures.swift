@@ -5,11 +5,9 @@ import Security
 import SwiftData
 import Synchronization
 
-/// Fixtures behind the AI Services launch seams. The keys are assembled
-/// from parts at run time so no source file holds a contiguous key-shaped
-/// literal for the secret scanners to flag; the UI tests type the same
-/// strings. Never a real key.
 enum AnalysisUITestFixtures {
+    /// Joined from parts so no source file holds a key-shaped literal for the
+    /// secret scanners to flag. Never a real key.
     static func keyText(for provider: AnalysisProvider) -> String {
         switch provider {
         case .google: ["AIza", "FixtureKeyForUITestsOnly", "00000000000"].joined()
@@ -24,9 +22,6 @@ enum AnalysisUITestFixtures {
         return key
     }
 
-    /// `baked` (also for `nil` or an unknown name), `no-openai-chapters`
-    /// (the baked bundle without OpenAI's Chapters & Summary entry) or
-    /// `trial-started` (the trial started when the bundle was generated).
     static func policySnapshot(variant: String?) -> AnalysisPolicySnapshot {
         var bundle = AnalysisPolicyBundle.baked
         switch variant ?? "baked" {
@@ -40,7 +35,6 @@ enum AnalysisUITestFixtures {
         return AnalysisPolicySnapshot(bundle: bundle, source: .baked, fallbackReason: nil, lastRefreshFailure: nil)
     }
 
-    /// `not-started`, `exhausted` or `units-left-<n>`.
     static func trialStatus(_ rawValue: String?) -> AnalysisTrialStatus? {
         let unitsPrefix = "units-left-"
         switch rawValue ?? "" {
@@ -58,22 +52,16 @@ enum AnalysisUITestFixtures {
         }
     }
 
-    /// Comma-separated `keyTestResult` values, in call order; unknown ones
-    /// are skipped, and nothing known is `nil`.
     static func keyTestResults(_ rawValue: String?) -> [AnalysisKeyTestResult]? {
         let results = (rawValue ?? "").split(separator: ",").compactMap { keyTestResult(String($0)) }
         return results.isEmpty ? nil : results
     }
 
-    /// One Keychain call to fail: an operation on one form.
     nonisolated struct KeyStorageFailure: Equatable, Sendable {
         var operation: AnalysisProviderKeyStoreError.Operation
         var synchronizable: Bool
     }
 
-    /// Comma-separated `<operation>-<form>` entries (`read`, `add`, `update`
-    /// or `delete`; `local` or `synced`); unknown ones are skipped, and
-    /// nothing known is `nil`.
     static func keyStorageFailures(_ rawValue: String?) -> [KeyStorageFailure]? {
         let failures = (rawValue ?? "").split(separator: ",").compactMap { entry -> KeyStorageFailure? in
             let parts = entry.split(separator: "-")
@@ -89,8 +77,6 @@ enum AnalysisUITestFixtures {
         return failures.isEmpty ? nil : failures
     }
 
-    /// Each entry fails the first matching call once (`errSecNotAvailable`,
-    /// as a Keychain that is briefly unavailable answers).
     nonisolated static func keyStorageFault(failing failures: [KeyStorageFailure]) -> InMemoryAnalysisProviderKeyStorage.Fault {
         let pending = PendingFailures(failures)
         return { operation, synchronizable in
@@ -116,7 +102,6 @@ enum AnalysisUITestFixtures {
         }
     }
 
-    /// `accepted` or an `AnalysisProviderFailure` raw value.
     static func keyTestResult(_ rawValue: String?) -> AnalysisKeyTestResult? {
         guard let rawValue else {
             return nil

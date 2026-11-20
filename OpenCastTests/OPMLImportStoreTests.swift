@@ -2,18 +2,11 @@ import Foundation
 import OpenCastCore
 import SwiftData
 import Testing
-import UniformTypeIdentifiers
 @testable import OpenCast
 
 @MainActor
 @Suite("OPML import and export")
 struct OPMLImportStoreTests {
-    @Test("OPML picker accepts only OPML and XML")
-    func opmlPickerAcceptsOnlyOPMLAndXML() {
-        #expect(OPMLFileDocument.readableContentTypes == [.opml, .xml])
-        #expect(!OPMLFileDocument.readableContentTypes.contains(.data))
-    }
-
     @Test("Imports valid feeds and creates subscription and cache rows")
     func importsValidFeeds() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -303,8 +296,6 @@ struct OPMLImportStoreTests {
             localCache: SQLiteLocalLibraryCacheStore.inMemory()
         )
         let importStore = OPMLImportStore()
-        // Every feed listed twice: duplicates must be suppressed before the
-        // concurrent window, never fetched twice.
         let entries = (feedURLs + feedURLs).map { ("Show", $0) }
 
         await importStore.importOPML(

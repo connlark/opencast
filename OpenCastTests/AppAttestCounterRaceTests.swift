@@ -29,9 +29,6 @@ struct AppAttestCounterRaceTests {
         }
 
         #expect(transport.maxInFlight == 1)
-        // Every send must complete its issue → arrive → respond triple with
-        // one counter tag before the next issuance happens; any interleave
-        // is exactly the reordering window the gate exists to close.
         let recorded = events.snapshot()
         try #require(recorded.count == sendCount * 3)
         for turn in 0..<sendCount {
@@ -266,8 +263,6 @@ private nonisolated final class AppAttestEventLog: @unchecked Sendable {
     }
 }
 
-/// Issues assertions tagged with a strictly increasing counter, mirroring
-/// `DCAppAttestService`'s issuance-ordered counter.
 private nonisolated final class SequencedAssertionService: AppAttestServiceProtocol, @unchecked Sendable {
     let isSupported = true
     private let lock = NSLock()
@@ -442,9 +437,6 @@ private nonisolated final class ScriptedTransport: AppAttestHTTPTransport, @unch
     }
 }
 
-/// Routes the challenge/register/sync trio for the `syncIfRegistered`
-/// parity tests: the first sync attempt fails as scripted, the re-attested
-/// retry succeeds.
 private nonisolated final class SubscriptionSyncRoutingTransport: AppAttestHTTPTransport, @unchecked Sendable {
     private let lock = NSLock()
     private let firstSyncStatus: Int

@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Entry point into the lyrics-style transcript screen, previewing the first
-/// lines of the transcript. The snippet is loaded by the parent in `.task`.
 struct EpisodeTranscriptEntryCard: View {
     let episodeID: String
     let snippet: String?

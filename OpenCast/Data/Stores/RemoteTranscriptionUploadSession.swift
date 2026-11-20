@@ -2,14 +2,6 @@ import Foundation
 import OpenCastTranscription
 import OSLog
 
-/// Exact-device upload engine: drives one job's multipart upload of
-/// the completed local download through presigned part URLs. Part-level
-/// resume is the correctness mechanism — part state (number, ETag, attempts)
-/// persists across relaunches and a re-run re-PUTs only missing parts on
-/// fresh URLs. A 403 on a part is a credential refresh through the
-/// authenticated `upload/parts` route, never a failure. At most two parts
-/// are in flight; part files are deleted on completion, cancellation, and
-/// terminal failure.
 final class RemoteTranscriptionUploadSession {
     nonisolated private static let logger = Logger(
         subsystem: "com.connor.opencast",
@@ -38,7 +30,6 @@ final class RemoteTranscriptionUploadSession {
 
     static let maxConcurrentParts = 2
     private static let maxAttemptsPerPart = 3
-    /// Presigned URLs this close to expiry are refreshed before use.
     private static let urlExpiryMarginSeconds: Int64 = 30
 
     private let jobID: String
@@ -71,8 +62,7 @@ final class RemoteTranscriptionUploadSession {
         URL.cachesDirectory.appending(path: "RemoteTranscriptionUpload/\(jobID)", directoryHint: .isDirectory)
     }
 
-    /// Uploads every missing part and completes the multipart upload.
-    /// `progress` reports (completed parts, total parts) as parts land.
+    /// `progress` receives (completed parts, total parts).
     func run(progress: ((Int, Int) -> Void)? = nil) async throws {
         let grant = try await api.uploadStart(jobID: jobID, forBackground: false)
         var restored = restoredState()
@@ -131,8 +121,6 @@ final class RemoteTranscriptionUploadSession {
         cleanUp()
     }
 
-    /// Cancels in-flight part tasks and deletes part files and persisted
-    /// state. Server-side abort happens through the job cancel route.
     func cancelAndCleanUp() async {
         await transport.cancelOutstandingTasks()
         cleanUp()
@@ -228,8 +216,7 @@ final class RemoteTranscriptionUploadSession {
         return grant
     }
 
-    /// Slices the part's exact byte range from the completed download into a
-    /// temporary per-part file (background upload tasks require files).
+    /// Background upload tasks upload only from files, so each part is sliced into its own file.
     private func partFile(partNumber: Int) async throws -> URL {
         guard let state else {
             throw UploadFailure.sourceFileUnreadable

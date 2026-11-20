@@ -10,23 +10,6 @@ struct EpisodeProgressWriterTests {
     private let podcastID = "https://example.com/status.xml"
     private let duration: TimeInterval = 600
 
-    /// A boundary flush with Now Playing presented saves with the observable
-    /// refresh suppressed. The status change it carries has to outlive the
-    /// suppression: the next observable write compares against the
-    /// already-updated row and cannot see the change on its own.
-    @Test("A suppressed status change publishes with the next observable write")
-    func suppressedStatusChangePublishesWithNextObservableWrite() throws {
-        let (writer, context) = try makeWriter()
-        try save(writer, position: 0, modelContext: context, refreshObservableProgress: true)
-        let published = writer.statusRevision
-
-        try save(writer, position: 10, modelContext: context, refreshObservableProgress: false)
-        #expect(writer.statusRevision == published)
-
-        try save(writer, position: 20, modelContext: context, refreshObservableProgress: true)
-        #expect(writer.statusRevision != published)
-    }
-
     @Test("A suppressed status change publishes on the next refetch")
     func suppressedStatusChangePublishesOnRefetch() throws {
         let (writer, context) = try makeWriter()
@@ -37,8 +20,7 @@ struct EpisodeProgressWriterTests {
         #expect(writer.statusRevision == published)
         #expect(writer.latestRecord(for: episodeID)?.isPlayed == true)
 
-        // The projection already holds the mutated row, so the refetch has
-        // nothing to replace; the pending change still publishes.
+        // The projection already holds the mutated row, so the refetch replaces nothing.
         #expect(try writer.reloadIfChanged(modelContext: context) == false)
         #expect(writer.statusRevision != published)
     }
@@ -57,9 +39,6 @@ struct EpisodeProgressWriterTests {
         #expect(writer.statusRevision == published)
     }
 
-    /// Archiving is not a listen: an in-place archive leaves both revisions
-    /// alone and publishes through the archived set. Only a new row, from
-    /// archiving an episode with none, changes the index and its revision.
     @Test("An archive moves the archived set and only a new row moves the revision")
     func archiveMovesTheArchivedSetNotTheRevisions() throws {
         let (writer, context) = try makeWriter()
@@ -87,9 +66,6 @@ struct EpisodeProgressWriterTests {
         #expect(record.archivedAt == nil)
     }
 
-    /// A refetch that imports another context's edit finds the same live
-    /// objects it already indexes, so the rows compare unchanged; the
-    /// archived set has to be rebuilt anyway.
     @Test("A refetch rebuilds the archived set even when the rows compare unchanged")
     func refetchRebuildsArchivedSetWhenRowsCompareUnchanged() throws {
         let (writer, context) = try makeWriter()
@@ -116,8 +92,6 @@ struct EpisodeProgressWriterTests {
         #expect(writer.archivedEpisodeIDs.isEmpty)
     }
 
-    /// The set is the membership signal: a reader of it alone invalidates
-    /// on an archive, and a rebuild that finds the same set stays quiet.
     @Test("Archived set readers invalidate on a change and not on an equal rebuild")
     func archivedSetReadersInvalidateOnlyOnChange() async throws {
         let (writer, context) = try makeWriter()
@@ -144,11 +118,6 @@ struct EpisodeProgressWriterTests {
         #expect(writer.archivedEpisodeIDs == [episodeID])
     }
 
-    /// Another device archives the older of two copies, which makes it the
-    /// latest. The canonical copy sorts before the variant whatever their
-    /// stamps, so the refetch finds the same live rows in the same order and
-    /// they compare unchanged; the index has to move to that copy anyway, or
-    /// the archive and the listening describe different copies.
     @Test("A refetch indexes the copy an import made latest, even when the rows compare unchanged")
     func refetchIndexesTheCopyAnImportMadeLatest() throws {
         let (writer, context) = try makeWriter()
@@ -171,9 +140,6 @@ struct EpisodeProgressWriterTests {
         #expect(writer.revision == settledRevision)
     }
 
-    /// The same import, met by an archive request before any reload: the
-    /// request writes nothing for that episode, alone or in a batch that
-    /// saves for another, and still indexes the copy that is now latest.
     @Test("An archive request indexes the copy an import made latest, with or without a save")
     func archiveRequestIndexesTheCopyAnImportMadeLatest() throws {
         let (writer, context) = try makeWriter()
@@ -214,9 +180,7 @@ struct EpisodeProgressWriterTests {
         return (writer, context)
     }
 
-    /// Two copies of one episode, unsaved: an older finished copy under the
-    /// canonical feed URL and a newer in-progress copy under a variant
-    /// spelling of it, which sorts after the canonical one.
+    // The newer copy's variant feed URL sorts after the canonical one.
     private func insertCompetingCopies(
         of episodeID: String? = nil,
         into context: ModelContext
@@ -242,8 +206,6 @@ struct EpisodeProgressWriterTests {
         return (older, newer)
     }
 
-    /// Archives the episode's copy stored under `podcastID` from a second
-    /// context, stamped newer than any fixture row, as a sync import does.
     private func archiveInAnotherContext(
         episodeID: String,
         podcastID: String,

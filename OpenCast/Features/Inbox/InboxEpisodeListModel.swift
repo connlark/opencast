@@ -1,15 +1,10 @@
 import Foundation
 
-/// The Inbox rows under the current filter, Hide Up Next and the view Show
-/// Archived picks: off, the Inbox (every episode not archived); on, the
-/// archive (only the archived ones). Built in `InboxView.body` rather than
-/// cached, so per-record Observation moves an episode between filters the
+/// Built in `InboxView.body`, not cached, so per-record Observation refilters an episode the
 /// moment a progress flush changes its state.
 struct InboxEpisodeListModel {
     let episodes: [EpisodeListItemSnapshot]
-    /// Every Inbox episode, archived or not, so an Inbox whose rows are all
-    /// archived, or an empty archive, reads as filtered empty rather than
-    /// empty.
+    /// Every Inbox episode, archived or not.
     let totalEpisodeCount: Int
     let hasMore: Bool
 
@@ -17,14 +12,8 @@ struct InboxEpisodeListModel {
         episodes.isEmpty && totalEpisodeCount > 0 && !hasMore
     }
 
-    /// Both views read the archived set. The download, queue and
-    /// playing-episode inputs are autoclosures: they are observed state, and
-    /// reading one the filter does not need would subscribe the whole Inbox
-    /// list to it. All Episodes with Hide Up Next off reads the archived set
-    /// and nothing else; the Inbox view with nothing archived returns the
-    /// input untouched.
-    /// When `visibleEpisodeCount` is supplied, the scan stops after one extra
-    /// match and `hasMore` drives the continuation row.
+    /// The download, queue and playing-episode inputs are autoclosures: each is observed state, and
+    /// reading one the filter does not need subscribes the whole Inbox list to it.
     static func make(
         episodes: [EpisodeListItemSnapshot],
         filter: PodcastEpisodeFilter,
@@ -39,8 +28,6 @@ struct InboxEpisodeListModel {
     ) -> InboxEpisodeListModel {
         var hiddenEpisodeIDs = Set<String>()
         if hidesQueuedEpisodes {
-            // Hide Up Next hides what the player already holds: the queue
-            // and the playing episode, queued or not.
             hiddenEpisodeIDs.formUnion(queuedEpisodeIDs())
             if let playingEpisodeID = playingEpisodeID() {
                 hiddenEpisodeIDs.insert(playingEpisodeID)

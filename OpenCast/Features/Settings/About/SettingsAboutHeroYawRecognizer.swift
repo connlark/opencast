@@ -1,10 +1,8 @@
 import SwiftUI
 
-/// The About hero's drag-to-turn. A SwiftUI `DragGesture` over the hero kept
-/// the Form from scrolling even as a simultaneous gesture; this pan declines
-/// to begin when the movement starts vertical, which leaves it to the list.
+/// A SwiftUI `DragGesture` over the hero kept the Form from scrolling, even as a simultaneous
+/// gesture. This pan declines to begin when the movement starts vertical, leaving it to the list.
 struct SettingsAboutHeroYawRecognizer: UIGestureRecognizerRepresentable {
-    /// The live horizontal translation and where a release would carry it.
     let onChange: (_ translation: Double, _ releaseTranslation: Double) -> Void
     let onEnd: () -> Void
 

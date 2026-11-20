@@ -4,8 +4,7 @@ public struct OpenCastLongFormTranscriptionRequest: Sendable, Equatable {
     public var audioFileURL: URL
     public var languageCode: String
     public var resumeStart: TimeInterval?
-    /// Optional decode-window end for benchmarks; production runs leave this
-    /// nil and decode to the end of the audio.
+    /// Decode-window end for benchmarks; nil decodes to the end of the audio.
     public var clipEnd: TimeInterval?
     public var sourceAudioURL: String
     public var sourceFileByteCount: Int64

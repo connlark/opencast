@@ -1,9 +1,3 @@
-/// Response of `account/bootstrap`: the opaque account plus its authoritative
-/// balance. Purchase-backend lanes additionally return the per-account
-/// StoreKit `appAccountToken`, the server catalog with its hash (the app
-/// cross-checks against its embedded value and fails closed on mismatch),
-/// and whether the store surfaces are currently enabled; the development
-/// lane omits all of these.
 public struct OpenCastRemoteTranscriptionBootstrapResponse: Codable, Sendable, Equatable {
     public var schemaVersion: Int
     public var accountID: String

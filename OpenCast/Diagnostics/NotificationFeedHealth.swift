@@ -1,9 +1,6 @@
 import Foundation
 
-/// Advisory poll-health snapshot the notifications server reports per
-/// accepted feed. Never gates sync or subscribe behavior; a stale snapshot
-/// (sync runs at launch and on subscription changes) is acceptable by
-/// construction.
+/// Advisory only: it never gates sync or subscribe, so a stale snapshot is acceptable.
 nonisolated struct NotificationFeedHealth: Decodable, Equatable, Sendable {
     /// The server's exponential poll backoff makes polls stop being routine
     /// around this point; used only for advisory copy.

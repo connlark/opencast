@@ -2,17 +2,13 @@ import Foundation
 import OpenCastAnalysis
 import Synchronization
 
-/// What a provider transport made of a 2xx body.
 struct AnalysisProviderInterpretation: Sendable {
     var reply: AnalysisProviderReply
     var finishReason: AnalysisFinishReason?
     var usage: AnalysisBilledUsage?
 }
 
-/// The send path both direct transports share: pace on the key, run the
-/// exchange inside the request's deadline, classify failures once for the
-/// pipeline and the listener, and record and log what happened without any
-/// body, header or key.
+/// Records and logs each send without any body, header or key.
 struct AnalysisProviderExchange: Sendable {
     let provider: AnalysisProvider
     let client: any AnalysisHTTPClient
@@ -20,10 +16,8 @@ struct AnalysisProviderExchange: Sendable {
     let observer: (any AnalysisProviderSendObserver)?
     let logger: RedactingLogger
     let clock: any AnalysisClock
-    /// The transport's key, for the check every record passes before an
-    /// observer or the logger sees it.
+    /// Holds the transport's key: every record passes it before an observer or the logger sees it.
     let verifier: SecretVerifier
-    /// Runs once the pacer admits a send, right before it leaves.
     var preDispatch: AnalysisPreDispatchCheck? = nil
 
     func send(
@@ -32,8 +26,7 @@ struct AnalysisProviderExchange: Sendable {
         interpret: (String) -> AnalysisProviderInterpretation,
         classify: (_ status: Int, _ retryAfter: String?, _ body: String) -> AnalysisProviderErrorClassification
     ) async throws(AnalysisTransportError) -> AnalysisProviderReply {
-        // The canonical payload or the model id could not be mapped to a
-        // request for this provider; nothing is sent.
+        // `http` is nil when the payload or model id maps to no request for this provider.
         let refusal = http == nil ? AnalysisProviderErrorClassification(transport: .rejected(status: 0), listener: .requestRejected) : nil
         return try await send(
             request,
@@ -51,12 +44,8 @@ struct AnalysisProviderExchange: Sendable {
         )
     }
 
-    /// The send path with the exchange itself supplied by the transport.
-    /// `refusal`, when set, fails the send before anything is paced or sent;
-    /// `preDispatch`, once the pacer admits it, can still refuse it unsent.
-    /// `perform` runs once the pacer admits the send, with the send's
-    /// deadline in clock time (at least one tick away); time it reports to
-    /// the meter counts as paced, not as exchange time.
+    /// `perform` gets the deadline in clock time; waits it reports to the meter count as paced, not
+    /// as exchange time.
     func send(
         _ request: AnalysisProviderRequest,
         refusal: AnalysisProviderErrorClassification?,
@@ -100,7 +89,7 @@ struct AnalysisProviderExchange: Sendable {
         }
         outcome.note(exchangeFrom: admitted, to: clock.now(), waits: waits.seconds)
         outcome.status = response.status
-        // Like the services: the body must be UTF-8 whatever the status.
+        // The body must be UTF-8 whatever the status.
         guard let text = String(validating: response.body, as: UTF8.self) else {
             await pacer?.release()
             throw finish(&outcome, .invalidEncoding)
@@ -135,8 +124,6 @@ struct AnalysisProviderExchange: Sendable {
         var pacedSeconds = 0.0
         var exchangeSeconds = 0.0
 
-        /// Splits the time from admission to `end` into the waits the
-        /// exchange reported (paced) and the exchange itself.
         mutating func note(exchangeFrom admitted: Double, to end: Double, waits: Double) {
             let waited = min(max(waits, 0), max(end - admitted, 0))
             pacedSeconds += waited
@@ -144,8 +131,7 @@ struct AnalysisProviderExchange: Sendable {
         }
     }
 
-    /// Records a failed send. A send the run cancelled is recorded as
-    /// cancelled, with no listener-facing failure: the provider said nothing.
+    /// A send the run cancelled carries no listener-facing failure: the provider said nothing.
     private func finish(_ outcome: inout Outcome, _ classification: AnalysisProviderErrorClassification) -> AnalysisTransportError {
         outcome.freeTier = classification.freeTier
         if Task.isCancelled, outcome.status == nil {
@@ -177,8 +163,6 @@ struct AnalysisProviderExchange: Sendable {
         logger.log(Self.line(send))
     }
 
-    /// The model id a record may carry: the charset- and length-checked id,
-    /// unless it holds the key or a key shape, then the fixed sentinel.
     static func observableModelID(_ modelID: String, verifier: SecretVerifier) -> String {
         let scrubbed = AnalysisProviderSendRecord.scrubbedModelID(modelID)
         return verifier.verifyAppText(scrubbed) == .clean ? scrubbed : AnalysisProviderSendRecord.invalidModelID
@@ -220,8 +204,6 @@ struct AnalysisProviderExchange: Sendable {
     }
 }
 
-/// The waits an exchange spends inside its own send (a busy trial service's
-/// retry delay), which the send record counts as paced time.
 final class AnalysisSendWaitMeter: Sendable {
     private let total = Mutex(0.0)
 
@@ -234,8 +216,7 @@ final class AnalysisSendWaitMeter: Sendable {
 }
 
 extension AnalysisProviderExchange {
-    /// A count or key-test call: unpaced, outside any run, with the
-    /// auxiliary deadline.
+    /// Unpaced: count and key-test calls run outside any analysis run.
     func auxiliary(_ http: AnalysisHTTPRequest) async -> Result<(status: Int, retryAfter: String?, text: String), AnalysisProviderErrorClassification> {
         do throws(AnalysisHTTPFailure) {
             let response = try await client.send(

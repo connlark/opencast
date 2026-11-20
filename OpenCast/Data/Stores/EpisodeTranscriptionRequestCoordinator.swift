@@ -281,9 +281,8 @@ final class EpisodeTranscriptionRequestCoordinator {
         }
     }
 
-    /// Fresh Generate runs follow the global preference. A resumable Whisper
-    /// record stays on Whisper even when Apple Speech is preferred so the
-    /// explicit Resume action preserves its checkpoint.
+    /// A resumable Whisper record stays on Whisper even when Apple Speech is preferred, so Resume
+    /// keeps its checkpoint.
     private func resolvePlan(
         for episode: EpisodeListItemSnapshot,
         requestID: UUID,
@@ -309,10 +308,8 @@ final class EpisodeTranscriptionRequestCoordinator {
                 return plan
             } catch EpisodeTranscriptionError.missingSpeechModel {
                 try ensureCurrentRequest(id: requestID)
-                // One ensure round is the legitimate install path. If the
-                // store then reports installed but resolution still cannot
-                // see the model, retrying cannot converge — and this loop
-                // never suspends, so spinning would hang the main actor.
+                // One install round only: if resolution still cannot see the model, retrying cannot
+                // converge, and this loop never suspends, so spinning would hang the main actor.
                 guard !didEnsureTinyModel else {
                     throw EpisodeTranscriptionRequestError.operationFailed(
                         "The Whisper model install did not produce a usable model."

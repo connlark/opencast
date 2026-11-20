@@ -1,16 +1,8 @@
 import SwiftUI
 
-/// The Shows chip. Unlike the other chips it opens a sheet, not a menu: an
-/// iOS 27 menu rebuilds its open content whenever a value it reads changes,
-/// so each pick in a long checklist snapped the list back to the top, and a
-/// rebuild under a scrolling finger could land as a pick. A sheet's list
-/// keeps its place while the rule changes under it.
-///
-/// The sheet is presented here rather than through `SheetDestination`
-/// because a destination carries only identifiers, and the chips know only
-/// the rule: they report each change through `onChange` and the caller
-/// saves it. Presenting from the chip keeps every pick on that one save
-/// path, and the sheet reads the saved rule each time the chip re-renders.
+/// A sheet, not a menu: an iOS 27 menu rebuilds its open content when a value it reads changes,
+/// snapping a long checklist to the top. Presented here, not through `SheetDestination`, which
+/// carries only identifiers, so every pick stays on the chips' one `onChange` save path.
 struct PlaylistShowsRuleChip: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @State private var isPickerPresented = false

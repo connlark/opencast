@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Settings › Diagnostics: the recent ad detection and Chapters & Summary
-/// runs, shareable as a file built from the run records alone.
 struct AnalysisRunsDiagnosticsSection: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @State private var runCount: Int?
@@ -57,7 +55,6 @@ struct AnalysisRunsDiagnosticsSection: View {
         )
         do {
             let url = try await Self.write(from: appModel.analysisRuns, to: directory)
-            // A preparation that outlived its section leaves nothing behind.
             guard !Task.isCancelled else {
                 try? FileManager.default.removeItem(at: directory)
                 return

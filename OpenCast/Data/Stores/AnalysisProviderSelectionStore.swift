@@ -3,12 +3,8 @@ import Observation
 import OpenCastAnalysis
 import SwiftData
 
-/// The provider the listener chose for each analysis feature, kept on this
-/// device. Every load and save runs in its own short-lived context, and the
-/// stored choice changes only after a save succeeds.
-///
-/// The effective provider is derived, never stored: a choice whose key is
-/// removed stays stored and comes back when the key does.
+/// The effective provider is derived, never stored: a choice whose key is removed stays stored
+/// and comes back with the key.
 @Observable
 final class AnalysisProviderSelectionStore {
     static let adDetectionPreferenceKey = "aiServices.provider.adDetection"
@@ -19,7 +15,6 @@ final class AnalysisProviderSelectionStore {
 
     @ObservationIgnored private let save: (ModelContext) throws -> Void
 
-    /// `save` is the test seam for preference saves.
     init(save: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
         self.save = save
     }
@@ -77,8 +72,6 @@ final class AnalysisProviderSelectionStore {
         return true
     }
 
-    /// Providers, in `AnalysisProvider.allCases` order, with a saved key and
-    /// an entry for `feature` in the snapshot.
     func eligibleProviders(
         for feature: AnalysisFeature,
         presences: [AnalysisProvider: AnalysisKeyPresence],
@@ -101,9 +94,7 @@ final class AnalysisProviderSelectionStore {
         )
     }
 
-    /// The stored choice when eligible; otherwise Google (the trial's
-    /// provider) when eligible, else the first eligible provider; `nil` when
-    /// none is (the feature has no key route).
+    /// Google comes after the stored choice because it is the trial's provider.
     static func effectiveProvider(stored: AnalysisProvider?, eligible: [AnalysisProvider]) -> AnalysisProvider? {
         if let stored, eligible.contains(stored) {
             return stored

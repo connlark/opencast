@@ -1,13 +1,8 @@
 import Foundation
 
 public enum OpenCastURLSessionFactory {
-    /// General app identity for feeds, artwork, and API calls. It carries no
-    /// URL: some CDN edges (CBC's Akamai) reset connections whose User-Agent
-    /// contains one. Set once at app startup (single-threaded launch window)
-    /// before any session configuration is built; the static default serves
-    /// tests. The media profile's user agent is a separate, byte-stable parity
-    /// contract (`OpenCastMediaRequestProfile`) that episode downloads set per
-    /// request over this default, and is never derived from this.
+    /// No URL in it: some CDN edges (CBC's Akamai) reset connections whose User-Agent has one.
+    /// Written only in the single-threaded launch window, before any session configuration exists.
     nonisolated(unsafe) public private(set) static var userAgent = generalUserAgent(version: "1.0")
 
     public static func setMarketingVersion(_ version: String) {
@@ -40,9 +35,8 @@ public enum OpenCastURLSessionFactory {
         return configuration
     }
 
-    /// One `URLCache` per on-disk directory: independent instances over the
-    /// same store would keep separate in-memory indexes and eviction
-    /// accounting while contending for the same files.
+    /// One `URLCache` per directory: separate instances over one store keep separate indexes
+    /// and eviction accounting while contending for the same files.
     private static func sharedURLCache(directory: URL?) -> URLCache {
         let key = directory?.standardizedFileURL.path ?? ""
         return urlCacheLock.withLock {
@@ -66,8 +60,7 @@ public enum OpenCastURLSessionFactory {
         configuration.timeoutIntervalForResource = 300
         configuration.httpAdditionalHeaders = ["User-Agent": userAgent]
         configuration.urlCache = nil
-        // `waitsForConnectivity` stays unset so an offline refresh fails at
-        // once as unreachable; see `URLSessionOpenCastHTTPClient.feedSession`.
+        // `waitsForConnectivity` stays unset so an offline refresh fails at once as unreachable.
         return configuration
     }
 

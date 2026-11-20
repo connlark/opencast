@@ -1,4 +1,3 @@
-/// Transcript metadata of a Chapters & Summary request.
 public struct TranscriptAnalysisTranscript: Sendable, Hashable {
     public var languageCode: String
     public var audioDuration: Double
@@ -69,8 +68,6 @@ public struct TranscriptAnalysisTranscript: Sendable, Hashable {
     }
 }
 
-/// A Chapters & Summary request: the episode's identity, its real titles
-/// and its whole transcript.
 public struct TranscriptAnalysisRequest: Sendable, Hashable {
     public var schemaVersion: UInt16
     public var asyncSupported: Bool
@@ -112,7 +109,6 @@ public struct TranscriptAnalysisRequest: Sendable, Hashable {
         defaulted: ["async_supported", "episode_title", "podcast_title"]
     )
 
-    /// Reads the request JSON the Chapters & Summary service accepts.
     public init(json: JSONValue) throws(StrictDecodingError) {
         let fields = try StrictDecoding.fields(json, Self.shape)
         schemaVersion = try StrictDecoding.unsigned(fields["schema_version"]!, as: UInt16.self)

@@ -14,8 +14,6 @@ struct AdFreePassQueueSnapshot: Equatable {
     var pendingItems: [AdFreePassQueueItem] = []
     var pendingModelConsentByteCount: Int64?
 
-    /// The parked cloud head's reason, readable after the drain ended and
-    /// `activeEpisodeID` is nil.
     var remoteParkedHeadReason: RemoteTranscriptionJobExit? {
         activeEpisodeID == nil ? pendingItems.first?.remoteParkReason : nil
     }

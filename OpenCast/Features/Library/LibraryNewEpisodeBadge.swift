@@ -1,8 +1,6 @@
 import SwiftUI
 
-/// Red glass count ball on show grid tiles and list rows. Decorative: the
-/// link carries the spoken value, so the badge stays out of the accessibility
-/// tree instead of reading the number twice.
+/// Hidden from accessibility: the link carries the spoken count.
 struct LibraryNewEpisodeBadge: View {
     static let displayLimit = 99
 
@@ -17,14 +15,11 @@ struct LibraryNewEpisodeBadge: View {
             }
         }
         .font(.caption.bold())
-        // Grows with text size, but stops before it hides the artwork or
-        // crowds a row's title; the link's spoken value carries the exact count.
+        // Capped so it never hides the artwork or crowds a row's title.
         .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         .monospacedDigit()
         .foregroundStyle(.white)
         .shadow(color: .black.opacity(0.25), radius: 0.5, y: 0.5)
-        // A touch wider than tall, so a single digit sits in a ball and longer
-        // counts stretch into a pill.
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .background { gloss }
@@ -33,8 +28,6 @@ struct LibraryNewEpisodeBadge: View {
         .accessibilityHidden(true)
     }
 
-    /// A soft bright rim plus top-leading and bottom-trailing glints, drawn over
-    /// the glass so the badge reads as a lit gel ball instead of a flat pill.
     private var gloss: some View {
         ZStack {
             Capsule()
@@ -59,7 +52,6 @@ struct LibraryNewEpisodeBadge: View {
         }
     }
 
-    /// The link value rows and tiles share; empty when there is nothing new.
     static func accessibilityValue(count: Int) -> Text {
         count > 0 ? Text("^[\(count) new episode](inflect: true)") : Text(verbatim: "")
     }

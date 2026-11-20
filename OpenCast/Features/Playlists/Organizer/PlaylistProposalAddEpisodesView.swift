@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// More of the show's episodes for one proposal. The episodes not already in
-/// it are ranked against the search text, which starts as the proposal's
-/// name; taps collect episodes in order, and Done appends them.
 struct PlaylistProposalAddEpisodesView: View {
     private static let candidateLimit = 30
     private static let queryDebounce = Duration.milliseconds(150)
@@ -16,7 +13,6 @@ struct PlaylistProposalAddEpisodesView: View {
 
     let request: PlaylistProposalAddEpisodesRequest
     let show: PlaylistOrganizerShow
-    /// Builds the show's catalog on first use and keeps it for the sheet.
     let loadCatalog: @MainActor () async -> PlaylistOrganizerCatalog?
     let onDone: ([EpisodeListItemSnapshot]) -> Void
 
@@ -114,8 +110,6 @@ struct PlaylistProposalAddEpisodesView: View {
         }
         do {
             try await Task.sleep(for: Self.queryDebounce)
-        } catch is CancellationError {
-            return
         } catch {
             return
         }
@@ -127,7 +121,6 @@ struct PlaylistProposalAddEpisodesView: View {
                 limit: Self.candidateLimit
             )
         } else {
-            // Without a catalog the list falls back to the newest episodes.
             positions = Array(
                 show.episodes.indices
                     .lazy

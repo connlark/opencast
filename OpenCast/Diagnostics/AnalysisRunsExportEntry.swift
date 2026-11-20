@@ -2,11 +2,8 @@ import Foundation
 import OpenCastAnalysis
 import OpenCastAnalysisProviders
 
-/// One analysis run as the export and the episode report show it. It reads
-/// the run record's closed values and numbers only: episode and podcast ids,
-/// the transcript fingerprint and the model label stay out, the outcome and
-/// the listener failure are re-read through their enums, and the run id,
-/// model id and policy revision must pass their grammars.
+/// Closed values and numbers only: ids, the transcript fingerprint and the model label stay
+/// out, and the free-form fields must pass their grammars.
 nonisolated struct AnalysisRunsExportEntry: Encodable, Sendable, Equatable {
     struct Windows: Encodable, Sendable, Equatable {
         let total: Int

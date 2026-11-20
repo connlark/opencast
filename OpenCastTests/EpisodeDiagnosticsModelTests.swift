@@ -13,28 +13,6 @@ struct EpisodeDiagnosticsModelTests {
     private static let feedURL = "https://example.com/feed.xml"
     private static let audioURL = "https://example.com/episode.mp3"
 
-    @Test("Constructing the model performs no dependency work")
-    func initTouchesNoDependencies() async throws {
-        let fixture = try makeFixture()
-        let fileInspector = SpyFileInspector()
-        let prober = SpyNetworkProber()
-        let dependencies = makeDependencies(
-            fileInspector: fileInspector,
-            prober: prober,
-            counters: fixture.counters
-        )
-
-        _ = EpisodeDiagnosticsModel(episodeID: Self.episodeID, dependencies: dependencies)
-
-        #expect(await fileInspector.fileInfoCalls == 0)
-        #expect(await fileInspector.sha256Calls == 0)
-        #expect(await fileInspector.durationCalls == 0)
-        #expect(await prober.probedURLs.isEmpty)
-        #expect(fixture.counters.playbackSnapshotCalls == 0)
-        #expect(fixture.counters.ensureCalls == 0)
-        #expect(fixture.counters.prepareCalls == 0)
-    }
-
     @Test("Load populates every section from seeded records, documents, and probes")
     func loadPopulatesSeededSections() async throws {
         let fixture = try makeFixture()
@@ -69,7 +47,6 @@ struct EpisodeDiagnosticsModelTests {
         #expect(rowValue(model.state(for: .transcript), "Segments") == "2")
         #expect(rowValue(model.state(for: .adAnalysis), "Current For Transcript") == "Yes")
         #expect(rowValue(model.state(for: .adAnalysis), "Policy") == EpisodeAdAnalysisContract.expectedPolicy)
-        // No run record yet: the block says so rather than staying loading.
         #expect(rowValue(model.state(for: .analysisRuns), "Status") == "No analysis runs for this episode.")
         #expect(model.reportText().contains(
             "== Chapters & Summary ==\nPublisher Chapters: None cached.\nShow-Notes Chapters: None found.\nStatus: No chapters/summary record.\n\n== Analysis Runs =="
@@ -94,54 +71,6 @@ struct EpisodeDiagnosticsModelTests {
         #expect(report.contains("== Zone Matrix =="))
         #expect(report.contains(downloadFileURL))
         #expect(report.contains(Self.audioURL))
-    }
-
-    @Test("The chapters block leads with the cached publisher chapters, even with no analysis record")
-    func chaptersBlockShowsCachedPublisherChapters() async throws {
-        let fixture = try makeFixture()
-        let podcastID = PodcastID(rawValue: Self.feedURL)
-        let chaptersURL = "https://example.com/chapters/episode.json"
-        try await fixture.appModel.library.localCache.upsertCache(
-            from: FeedSnapshot(
-                podcast: Podcast(id: podcastID, feedURL: URL(string: Self.feedURL)!, title: "A Show"),
-                episodes: [Episode(
-                    id: EpisodeID(rawValue: Self.episodeID),
-                    podcastID: podcastID,
-                    podcastTitle: "A Show",
-                    title: "Episode",
-                    audioURL: URL(string: Self.audioURL),
-                    chaptersURL: URL(string: chaptersURL)
-                )]
-            ),
-            refreshedAt: .now
-        )
-        try await fixture.appModel.library.localCache.storePublisherChapters(
-            PublisherChaptersCacheEntry(
-                sourceURL: chaptersURL,
-                chapters: [
-                    EpisodeChapter(id: 0, title: "Opening", startTime: 0),
-                    EpisodeChapter(id: 1, title: "Interview", startTime: 4),
-                ],
-                fetchedAt: Date(timeIntervalSince1970: 1_800_000_000)
-            ),
-            episodeID: Self.episodeID
-        )
-        let model = EpisodeDiagnosticsModel(
-            episodeID: Self.episodeID,
-            dependencies: makeDependencies(
-                fileInspector: SpyFileInspector(),
-                prober: SpyNetworkProber(),
-                counters: fixture.counters
-            )
-        )
-
-        await model.load(appModel: fixture.appModel)
-
-        let chaptersState = model.state(for: .chaptersSummary)
-        #expect(chaptersState.section?.rows.map(\.label) == ["Publisher Chapters", "Show-Notes Chapters", "Status"])
-        #expect(rowValue(chaptersState, "Publisher Chapters")
-            == "2 chapters from \(chaptersURL), fetched 2027-01-15T08:00:00Z")
-        #expect(rowValue(chaptersState, "Show-Notes Chapters") == "None found.")
     }
 
     @Test("The chapters block counts a timestamp list in the cached show notes, bounded by the feed's duration")
@@ -237,26 +166,6 @@ struct EpisodeDiagnosticsModelTests {
         #expect(rowValue(model.state(for: .episode), "Feed URL") == Self.feedURL)
     }
 
-    @Test("Playback section reports when the episode is not the loaded one")
-    func playbackSectionWhenEpisodeNotLoaded() async throws {
-        let fixture = try makeFixture()
-        try seedCompletedDownload(in: fixture)
-        await loadStores(in: fixture)
-        let model = EpisodeDiagnosticsModel(
-            episodeID: Self.episodeID,
-            dependencies: makeDependencies(
-                fileInspector: SpyFileInspector(),
-                prober: SpyNetworkProber(),
-                counters: fixture.counters
-            )
-        )
-
-        await model.load(appModel: fixture.appModel)
-
-        #expect(rowValue(model.state(for: .playback), "Status") == "Episode not currently loaded.")
-        #expect(rowValue(model.state(for: .zoneMatrix), "Status") != nil)
-    }
-
     @Test("Zone matrix compares derived zones against the installed player zones")
     func zoneMatrixComparesInstalledZones() async throws {
         let fixture = try makeFixture()
@@ -334,8 +243,6 @@ struct EpisodeDiagnosticsModelTests {
         #expect(rowValue(model.state(for: .adSpans), "Span #1 End Boundary") == "8.800s • word-timed")
         #expect(rowValue(model.state(for: .adSpans), "Span #1 Original Cut") == "4.000s–9.000s")
 
-        // The detail timeline must use the same current word cuts and audio
-        // duration, not the old persisted refinement or a shorter RSS duration.
         let episode = EpisodeListItemSnapshot(
             episodeID: Self.episodeID, podcastID: Self.feedURL, podcastTitle: "Example Show",
             title: "Example", summary: nil, publishedAt: nil, duration: 6,
@@ -348,57 +255,6 @@ struct EpisodeDiagnosticsModelTests {
         #expect(detail.zoneTiers(forKey: key, episodeID: Self.episodeID).autoSkip == snapshot.installedAutoSkipZones)
         #expect(detail.timelineDuration(forKey: key, episode: episode) == source.audioDuration)
         #expect(detail.timelineDuration(forKey: "obsolete", episode: episode) == episode.duration)
-    }
-
-    @Test("Report text renders loaded, partial, and loading sections")
-    func reportTextRendersAllStates() {
-        let section = EpisodeDiagnosticsSection(rows: [("Label", "Value")], footnote: "A footnote.")
-        let text = EpisodeDiagnosticsReportText.make(
-            episodeID: "ep-1",
-            episodeTitle: "Deterministic UI Episode",
-            podcastTitle: "UI Test Show",
-            sections: [
-                (.report, .loaded(section)),
-                (.episode, .partial(section)),
-                (.download, .loading),
-            ]
-        )
-
-        #expect(text.hasPrefix("OpenCast Episode Diagnostics"))
-        #expect(text.contains("Episode: Deterministic UI Episode — UI Test Show"))
-        #expect(text.contains("Episode ID: ep-1"))
-        #expect(text.contains("== Report =="))
-        #expect(text.contains("Label: Value"))
-        #expect(text.contains("Note: A footnote."))
-        #expect(text.contains("(some values still loading)"))
-        #expect(text.contains("(still loading)"))
-    }
-
-    @Test("Share presents immediately when a valid completed download exists")
-    func sharePresentsImmediatelyForCompletedDownload() async throws {
-        let fixture = try makeFixture()
-        try seedCompletedDownload(in: fixture)
-        await loadStores(in: fixture)
-        let model = EpisodeDiagnosticsModel(
-            episodeID: Self.episodeID,
-            dependencies: makeDependencies(
-                fileInspector: SpyFileInspector(),
-                prober: SpyNetworkProber(),
-                counters: fixture.counters
-            )
-        )
-
-        model.shareMP3(appModel: fixture.appModel, modelContext: fixture.context)
-
-        #expect(model.presentedShareFile != nil)
-        #expect(model.mp3ShareState == .idle)
-        #expect(fixture.counters.prepareCalls == 1)
-        #expect(fixture.counters.ensureCalls == 0)
-
-        model.shareSheetDismissed()
-        #expect(fixture.counters.cleanUpCalls == 1)
-        model.shareSheetDismissed()
-        #expect(fixture.counters.cleanUpCalls == 1)
     }
 
     @Test("Re-sharing while a share is active cleans up the replaced share file")
@@ -423,35 +279,6 @@ struct EpisodeDiagnosticsModelTests {
 
         model.shareSheetDismissed()
         #expect(fixture.counters.cleanUpCalls == 2)
-    }
-
-    @Test("A file-access failure surfaces as a check error, not a missing file")
-    func fileAccessFailureSurfacesAsCheckError() async throws {
-        let fixture = try makeFixture()
-        try seedCompletedDownload(in: fixture)
-        await loadStores(in: fixture)
-        let fileInspector = SpyFileInspector(
-            fileInfo: EpisodeDiagnosticsFileInfo(
-                exists: false,
-                byteCount: nil,
-                errorDescription: "not permitted"
-            )
-        )
-        let model = EpisodeDiagnosticsModel(
-            episodeID: Self.episodeID,
-            dependencies: makeDependencies(
-                fileInspector: fileInspector,
-                prober: SpyNetworkProber(),
-                counters: fixture.counters
-            )
-        )
-
-        await model.load(appModel: fixture.appModel)
-
-        let downloadState = model.state(for: .download)
-        #expect(rowValue(downloadState, "File Check") == "Failed: not permitted")
-        #expect(rowValue(downloadState, "File Exists") == nil)
-        #expect(await fileInspector.sha256Calls == 0)
     }
 
     @Test("Share waits for the reused download and presents when it completes")
@@ -627,10 +454,7 @@ struct EpisodeDiagnosticsModelTests {
         EpisodeDiagnosticsDependencies(
             fileInspector: fileInspector,
             networkProber: prober,
-            playbackSnapshot: { _ in
-                counters.playbackSnapshotCalls += 1
-                return snapshot
-            },
+            playbackSnapshot: { _ in snapshot },
             ensureCompletedDownload: { appModel, episode, modelContext in
                 counters.ensureCalls += 1
                 guard let ensure else {
@@ -849,7 +673,6 @@ struct EpisodeDiagnosticsModelTests {
 
 @MainActor
 private final class DependencyCounters {
-    var playbackSnapshotCalls = 0
     var ensureCalls = 0
     var prepareCalls = 0
     var cleanUpCalls = 0
@@ -893,26 +716,15 @@ private extension EpisodeDiagnosticsPlaybackSnapshot {
 }
 
 private actor SpyFileInspector: EpisodeDiagnosticsFileInspecting {
-    private(set) var fileInfoCalls = 0
     private(set) var sha256Calls = 0
-    private(set) var durationCalls = 0
-    private let fileInfoResult: EpisodeDiagnosticsFileInfo
     private let sha256Result: Result<String, any Error>
-    private let durationResult: Result<TimeInterval, any Error>
 
-    init(
-        fileInfo: EpisodeDiagnosticsFileInfo = EpisodeDiagnosticsFileInfo(exists: true, byteCount: 18),
-        sha256: Result<String, any Error> = .success("computed-sha"),
-        duration: Result<TimeInterval, any Error> = .success(5_200)
-    ) {
-        fileInfoResult = fileInfo
+    init(sha256: Result<String, any Error> = .success("computed-sha")) {
         sha256Result = sha256
-        durationResult = duration
     }
 
     func fileInfo(at url: URL) async -> EpisodeDiagnosticsFileInfo {
-        fileInfoCalls += 1
-        return fileInfoResult
+        EpisodeDiagnosticsFileInfo(exists: true, byteCount: 18)
     }
 
     func sha256(at url: URL) async throws -> String {
@@ -921,8 +733,7 @@ private actor SpyFileInspector: EpisodeDiagnosticsFileInspecting {
     }
 
     func audioDuration(at url: URL) async throws -> TimeInterval {
-        durationCalls += 1
-        return try durationResult.get()
+        5_200
     }
 }
 

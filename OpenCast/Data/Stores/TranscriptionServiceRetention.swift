@@ -2,23 +2,14 @@ import Foundation
 import OpenCastTranscription
 import UIKit
 
-/// The retention seam: anything unloadable the drain can hold onto.
 protocol RetainableTranscriptionService: AnyObject, Sendable {
     func unload() async
 }
 
 extension OpenCastTranscriptionService: RetainableTranscriptionService {}
 
-/// Bounded retention of a loaded transcription service across items within
-/// one active ad-free-pass queue drain (whisper-perf E1), so items 2..n skip
-/// the ~4.4 s model load. Retention is scoped strictly to a drain: begin/end
-/// come from the queue coordinator, and anything outside a drain unloads per
-/// item exactly as before — there is never an idle resident model.
-///
-/// The retained service is dropped on: drain end, key mismatch (model or
-/// compute-profile change), any run failure or cancellation (a drain never
-/// reuses a runtime after a failed attempt), explicit hard unload, and
-/// memory-pressure warnings.
+/// Keeps the loaded service between items of one ad-free-pass queue drain, so later items skip
+/// the ~4.4 s model load. Outside a drain nothing is retained, so no model ever sits idle.
 nonisolated final class TranscriptionServiceRetention: @unchecked Sendable {
     struct Key: Equatable, Sendable {
         var modelIdentifier: String
@@ -75,9 +66,7 @@ nonisolated final class TranscriptionServiceRetention: @unchecked Sendable {
         }
     }
 
-    /// Hands the retained service to the caller when a drain is active and
-    /// the identity matches; ownership transfers out (a successful run
-    /// re-retains, a failed run unloads through the normal path).
+    /// Ownership transfers to the caller: a successful run re-retains, a failed one unloads.
     func checkout(_ key: Key) -> (any RetainableTranscriptionService)? {
         lock.withLock {
             guard drainActive, let current = retained, current.key == key else {
@@ -88,8 +77,7 @@ nonisolated final class TranscriptionServiceRetention: @unchecked Sendable {
         }
     }
 
-    /// Retains after a successful run. Returns false when no drain is active
-    /// — the caller unloads per item as before.
+    /// Returns false outside a drain, and the caller then unloads the service itself.
     func retain(_ service: any RetainableTranscriptionService, key: Key) -> Bool {
         var displaced: Retained?
         let didRetain: Bool = lock.withLock {

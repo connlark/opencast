@@ -1,9 +1,6 @@
 import CryptoKit
 import Foundation
 
-/// Everything that makes a cached recap reusable: the episode, the exact
-/// transcript document, the window kind, the playhead to the nearest bucket,
-/// and the prompt and model that produced it. Any change misses the cache.
 nonisolated struct TranscriptRecapCacheKey: Hashable, Codable, Sendable {
     static let playheadBucketSpan: TimeInterval = 30
 
@@ -36,8 +33,7 @@ nonisolated struct TranscriptRecapCacheKey: Hashable, Codable, Sendable {
         return Self.sha256(joined) + ".json"
     }
 
-    /// A transcript document that changes in any way that could move a
-    /// segment (a new source file, model, or completed rewrite) changes this.
+    /// Changes whenever the document changes in a way that could move a segment.
     static func transcriptFingerprint(for document: EpisodeTranscriptDocument) -> String {
         sha256([
             document.sourceFileSHA256,

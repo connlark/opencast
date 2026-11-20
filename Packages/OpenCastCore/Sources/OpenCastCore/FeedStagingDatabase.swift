@@ -1,8 +1,7 @@
 import Foundation
 import SQLite3
 
-/// Confined to a single synchronous preparation or replay. No connection is
-/// shared between tasks; the published episode source opens read-only readers.
+/// Confined to one synchronous preparation or replay; never shared between tasks.
 final class FeedStagingDatabase {
     private var connection: OpaquePointer?
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)

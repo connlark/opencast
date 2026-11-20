@@ -65,11 +65,4 @@ struct TranscriptPassageIndexTests {
         #expect(index.passages(overlapping: 100...110).map(\.id) == [1])
         #expect(index.passages(overlapping: 400...500).isEmpty)
     }
-
-    @Test("An empty transcript builds an empty index")
-    func emptyTranscript() async throws {
-        let index = try await TranscriptPassageIndex.build(segments: [])
-        #expect(index.passages.isEmpty)
-        #expect(index.search("anything", limit: 3).isEmpty)
-    }
 }

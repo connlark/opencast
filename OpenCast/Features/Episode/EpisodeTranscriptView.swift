@@ -90,8 +90,7 @@ struct EpisodeTranscriptView: View {
             refreshRecapMenuState()
         }
         .background {
-            // Zero-sized: only this child re-evaluates on the 1 Hz tick;
-            // the menu re-renders when a recap threshold is crossed.
+            // Zero-sized, so only this child re-evaluates on the 1 Hz tick.
             TranscriptPlaybackObserver(
                 onPositionTick: refreshRecapMenuState,
                 onStateChange: refreshRecapMenuState,
@@ -107,23 +106,20 @@ struct EpisodeTranscriptView: View {
 
     private var adAnalysisDocumentLoadIdentifier: String {
         let updatedAt = appModel.adAnalyses.record(for: episodeID)?.updatedAt.timeIntervalSince1970 ?? -1
-        // The two document tasks start independently. Wait for the actual
-        // transcript and re-resolve when a replacement finishes loading, even
-        // if the saved analysis record itself has not changed.
+        // The two document tasks start independently, so a replacement transcript re-resolves
+        // the analysis even when its record has not changed.
         return "\(episodeID)|\(updatedAt)|\(transcriptLoadRevision)"
     }
 
-    /// The cached job state feeds both the content view and the menu; it
-    /// recomputes (one fingerprint pass) only when a job or transcript state
-    /// actually changes, never per body evaluation.
+    /// The cached job state recomputes (a fingerprint pass) only when a job or transcript state
+    /// changes, never per body evaluation.
     private var adAnalysisStateIdentifier: String {
         let transcriptState = appModel.transcriptions.record(for: episodeID)?.state.rawValue ?? "missing"
         return "\(episodeID)|\(transcriptState)|\(appModel.adAnalyses.changeSequence)"
     }
 
-    /// Reloads only when a completed transcript lands (initial open or an
-    /// "Improve Transcript" regeneration finishing) — checkpoint writes during
-    /// a run keep the stamp at -1 so the old document stays on screen.
+    /// Checkpoint writes during a run keep the stamp at -1, so the old document stays on screen
+    /// until a completed transcript lands.
     private var transcriptDocumentLoadIdentifier: String {
         let record = appModel.transcriptions.record(for: episodeID)
         let completedStamp = record?.state == .completed
@@ -132,8 +128,6 @@ struct EpisodeTranscriptView: View {
         return "\(episodeID)|\(completedStamp)"
     }
 
-    /// Reloads the menu state when the document, eligibility, or the current
-    /// episode changes; playhead movement arrives through the observer.
     private var recapMenuStateIdentifier: String {
         "\(transcriptLoadRevision)|\(appModel.transcriptIntelligence.isVisible)|\(appModel.playback.currentEpisode?.id.rawValue ?? "none")"
     }
@@ -168,9 +162,7 @@ struct EpisodeTranscriptView: View {
 
     // MARK: - Recap
 
-    /// The playback controller's position while this episode is current;
-    /// the saved progress otherwise. Read in actions, never in body, so the
-    /// toolbar owner does not subscribe to the 1 Hz tick.
+    /// Read in actions, never in body, so the toolbar owner does not subscribe to the 1 Hz tick.
     private func recapPlayhead() -> TimeInterval {
         if appModel.playback.currentEpisode?.id.rawValue == episodeID {
             return appModel.playback.position
@@ -225,9 +217,8 @@ struct EpisodeTranscriptView: View {
         } catch is CancellationError {
         } catch {
             guard !Task.isCancelled else { return }
-            // A running improve points the record at its in-progress
-            // replacement document; keep the current transcript on screen
-            // until a completed one lands.
+            // A running improve points the record at its in-progress replacement document, so
+            // the current transcript stays on screen until a completed one lands.
             guard appModel.transcriptions.record(for: episodeID)?.state != .running else {
                 isLoadingDocument = false
                 return
@@ -272,8 +263,6 @@ struct EpisodeTranscriptView: View {
         refreshAdAnalysisDerivedState()
     }
 
-    /// One jobState computation feeds the content view, the menu, and the
-    /// span lookup (perf 25's double-tax collapsed to a single pass).
     private func refreshAdAnalysisDerivedState() {
         guard let document else {
             adAnalysisJobState = .unavailable("Transcript unavailable.")
@@ -346,8 +335,6 @@ struct EpisodeTranscriptView: View {
         dismiss()
     }
 
-    /// Analyze Promos & Ads and its retry and re-analyse variants: held
-    /// behind the one-time key notice like every other analysis start.
     private func analyzeAds() {
         noticeGate.run(appModel: appModel, startAdAnalysis)
     }
@@ -365,11 +352,8 @@ struct EpisodeTranscriptView: View {
         refreshAdAnalysisDerivedState()
     }
 
-    // Mutating actions refresh the derived state synchronously: deleting the
-    // record destroys the very model object whose property reads back the
-    // task-id observation, so nothing else would invalidate this body. The
-    // task id still covers background transitions (poll completion mutates a
-    // live record's updatedAt, which body observes via the load identifiers).
+    // Refreshes synchronously: deleting the record destroys the model object whose property the
+    // task id observes, so nothing else would invalidate this body.
     private func deleteAdAnalysis() {
         appModel.deleteEpisodeAdAnalysis(episodeID: episodeID, modelContext: modelContext)
         adAnalysisDocument = nil

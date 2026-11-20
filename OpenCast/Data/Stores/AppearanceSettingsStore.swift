@@ -2,11 +2,8 @@ import Foundation
 import Observation
 import SwiftData
 
-/// Device-local appearance preferences. Every load and save runs in its own
-/// short-lived context, as in `LibraryDisplaySettingsStore`: a failed save is
-/// discarded with that context instead of lingering as a dirty row that a
-/// later unrelated save would commit. Published values change only after a
-/// save succeeds.
+/// Each save runs in its own short-lived context, so a failed save is discarded with it instead of
+/// lingering as a dirty row that a later unrelated save would commit.
 @Observable
 final class AppearanceSettingsStore {
     private static let modeKey = "appearance.mode"
@@ -20,7 +17,6 @@ final class AppearanceSettingsStore {
 
     @ObservationIgnored private let save: (ModelContext) throws -> Void
 
-    /// `save` is the test seam for preference saves.
     init(save: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
         self.save = save
     }
@@ -42,9 +38,7 @@ final class AppearanceSettingsStore {
         }
     }
 
-    /// The Up Next Tab switch alone, read before the first frame
-    /// (`OpenCastAppRuntime`) so the first tab bar is already the right one;
-    /// the launch's `load` reads it again with the rest.
+    /// Read before the first frame, so the first tab bar is already the right one.
     func loadShowsUpNextTab(modelContext: ModelContext) {
         do {
             publishShowsUpNextTab(try storedShowsUpNextTab(context: ModelContext(modelContext.container)))
@@ -134,9 +128,7 @@ final class AppearanceSettingsStore {
         try storedValue(forKey: Self.showsUpNextTabPreferenceKey, context: context).flatMap(Bool.init) ?? false
     }
 
-    /// Writes only a change: the root view reads the switch to start each
-    /// scene's tab set, and an unchanged write at the launch's `load` would
-    /// cost every listener an update of it.
+    /// Writes only a change: an unchanged write still invalidates every view that reads it.
     private func publishShowsUpNextTab(_ showsUpNextTab: Bool) {
         if self.showsUpNextTab != showsUpNextTab {
             self.showsUpNextTab = showsUpNextTab

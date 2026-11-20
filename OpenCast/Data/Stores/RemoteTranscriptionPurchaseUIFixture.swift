@@ -1,8 +1,6 @@
 import Foundation
 
 #if DEBUG
-/// StoreKit-free purchase surfaces for deterministic UI verification. The
-/// explicit launch argument keeps ordinary DEBUG launches on the real path.
 nonisolated enum RemoteTranscriptionPurchaseUIFixture: String {
     case reviewScreenshot = "review-screenshot"
     case unavailable

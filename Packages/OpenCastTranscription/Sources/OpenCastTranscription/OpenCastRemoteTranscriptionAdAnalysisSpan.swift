@@ -1,7 +1,3 @@
-/// One detected ad span inside a chained cloud ad analysis. `kind` stays a
-/// raw wire string here; the app maps it to its strict span-kind enum at
-/// import and treats anything unrecognized as a failed analysis rather than
-/// skippable audio.
 public struct OpenCastRemoteTranscriptionAdAnalysisSpan: Codable, Sendable, Equatable {
     public var kind: String
     public var label: String

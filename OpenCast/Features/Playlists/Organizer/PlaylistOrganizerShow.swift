@@ -1,14 +1,11 @@
 import Foundation
 
-/// One show's episodes as the organizer sheet captured them, once per sheet,
-/// so every index the model or the episode catalog returns resolves against
-/// the same list even if the library refreshes meanwhile.
+/// Captured once per sheet, so every index the model or the catalog returns resolves against
+/// the same list while the library refreshes.
 nonisolated struct PlaylistOrganizerShow: Sendable {
     let title: String
     /// Newest first; an episode's `index` is its position here.
     let episodes: [PlaylistOrganizerEpisode]
-    /// Library snapshots carrying the show's artwork where an episode has
-    /// none, so saved items keep a cover.
     let snapshotsByEpisodeID: [String: EpisodeListItemSnapshot]
     let positionsByEpisodeID: [String: Int]
 

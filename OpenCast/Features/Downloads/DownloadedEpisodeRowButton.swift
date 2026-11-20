@@ -55,8 +55,6 @@ struct DownloadedEpisodeRowButton: View {
         }
     }
 
-    /// With Tap to Play off the row opens the episode, so the trailing glyph
-    /// becomes the play button.
     private var playButtonAction: (() -> Void)? {
         guard !appModel.playbackSettings.isTapToPlayEnabled else {
             return nil

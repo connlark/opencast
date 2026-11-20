@@ -134,9 +134,6 @@ struct EpisodeShareTokenEncoderTests {
         #expect(try EpisodeShareTokenDecoder.tupleFields(from: token) == payload.tupleFields)
     }
 
-    /// Swift is the reference encoder. Run with `OPENCAST_MINT_SHARE_VECTORS=1`
-    /// after changing a vector payload, and paste the printed JSON over the
-    /// fixture. The ShareWorker's tests import that same file.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCAST_MINT_SHARE_VECTORS"] == "1"))
     func mintVectors() throws {
         let fixture = try EpisodeShareTokenVectors.load()
@@ -150,8 +147,7 @@ struct EpisodeShareTokenEncoderTests {
                 startSeconds: vector.startTime
             )
             // Headroom for zlib builds that pick slightly different matches
-            // (Node ships Chromium's fork); the worker checks its own encoder
-            // against this cap.
+            // (Node ships Chromium's fork).
             let maxTokenLength = token.utf8.count + max(16, token.utf8.count / 20)
             if vector.name == EpisodeShareTokenVectors.dictionarySensitivityVectorName {
                 let withoutDictionary = try EpisodeShareTokenDecoder.tokenWithoutDictionary(for: payload)

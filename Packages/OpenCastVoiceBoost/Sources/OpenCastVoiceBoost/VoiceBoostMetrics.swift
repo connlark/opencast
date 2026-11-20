@@ -12,12 +12,9 @@ public struct VoiceBoostMetrics: Equatable, Sendable {
     public var currentLimiterReductionDB: Double
     public var maximumLimiterReductionDB: Double
     public var outputTruePeakDBTP: Double?
-    /// Frames of delay the processor's output path carries (the limiter
-    /// lookahead). The zero-latency boost-off path is the tap-level
-    /// short-circuit, which never invokes the processor.
+    /// Output delay in frames: the limiter lookahead.
     public var latencyFrames: Int
-    /// Times the belt-and-braces output safety clamp fired since reset.
-    /// Structurally zero; any other value is an algorithm defect.
+    /// Times the output safety clamp fired since reset; anything but zero is an algorithm defect.
     public var safetyClampCount: Int
 
     public init(

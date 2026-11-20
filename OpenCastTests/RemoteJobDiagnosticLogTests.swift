@@ -2,9 +2,6 @@ import Foundation
 import Testing
 @testable import OpenCast
 
-/// The Release diagnostic sink: bounded rotation with one previous
-/// generation, appends that are safe from any isolation and lose nothing,
-/// and an allow-list check that refuses any key outside the typed schema.
 @Suite("Remote job diagnostic log")
 struct RemoteJobDiagnosticLogTests {
     @Test("The file rotates at its cap into one previous generation without losing the newest lines")

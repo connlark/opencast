@@ -1,15 +1,11 @@
 import Foundation
 
-/// Pure mapping from queue/store state to the episode pipeline progress card.
-/// `nil` means the card is hidden. First matching rule wins; the order follows
-/// the redesign plan's mapping table.
+/// `nil` hides the card. The first matching rule wins, so rule order matters.
 struct EpisodePipelineState: Equatable {
     let title: String
     let steps: [EpisodePipelineStep]
     let footnote: String?
     let action: EpisodePipelineAction?
-    /// A prominent action under the steps. Only a parked cloud job has one:
-    /// Resume, while `action` keeps the Cancel a running pass shows.
     var footerAction: EpisodePipelineAction? = nil
 
     static let passTitle = "Making this episode ad-free"
@@ -36,8 +32,8 @@ struct EpisodePipelineState: Equatable {
     /// server needed it: a source mismatch or a failed origin fetch.
     static let cloudUploadFootnote = "Uploading your downloaded audio so ad skips match what you hear."
 
-    /// Fixed copy per persisted failure kind, so the reason survives a
-    /// relaunch; raw server strings never render on the card.
+    /// Raw server strings never render on the card; fixed copy per persisted failure kind
+    /// survives a relaunch.
     static func analysisFailedMessage(for kind: EpisodeAnalysisFailureKind?) -> String {
         switch kind {
         case .serviceUnavailable:
@@ -99,8 +95,7 @@ struct EpisodePipelineState: Equatable {
             )
         }
 
-        // A current completed analysis means the chips and ad-span timeline
-        // take over; nothing below outranks it.
+        // Nothing below outranks a current completed analysis.
         if case .completed(_, isStale: false) = analysis {
             return nil
         }
@@ -393,9 +388,6 @@ struct EpisodePipelineState: Equatable {
         )
     }
 
-    /// Cloud work before server transcription starts. The transcribe row
-    /// carries the queue surfaces' copy; an upload count stays text, never
-    /// a fraction.
     private static func cloudPreparingState(
         _ presentation: EpisodeAdFreePassPresentation,
         footnote: String? = nil,
@@ -413,9 +405,6 @@ struct EpisodePipelineState: Equatable {
         )
     }
 
-    /// Cloud detection couldn't run (credits, capacity, kill switch): name
-    /// the reason on the detect step and offer the explicit on-device
-    /// fallback — never a silent switch.
     private static func cloudUnavailableState(
         message: String,
         downloadRecord: EpisodeDownloadRecord?,
@@ -433,9 +422,6 @@ struct EpisodePipelineState: Equatable {
         )
     }
 
-    /// The cloud job keeps running on the server while this device stopped
-    /// checking on it. Resume re-attaches the same job; Cancel is the user
-    /// cancel, the only path that ends it.
     private static func remoteParkedState(
         reason: RemoteTranscriptionJobExit,
         downloadRecord: EpisodeDownloadRecord?

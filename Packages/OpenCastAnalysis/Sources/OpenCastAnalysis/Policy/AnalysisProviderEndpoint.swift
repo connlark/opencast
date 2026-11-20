@@ -1,12 +1,9 @@
 import Foundation
 
-/// Wire facts for one provider: where requests go and how the key is sent.
 /// Paths may contain `{model}`, replaced with the entry's `modelID`.
 public struct AnalysisProviderEndpoint: Sendable, Equatable, Decodable {
     public enum Auth: String, Sendable, Equatable, Decodable {
-        /// `x-goog-api-key: <key>`
         case googleAPIKey = "x-goog-api-key"
-        /// `Authorization: Bearer <key>`
         case bearer
     }
 
@@ -14,18 +11,13 @@ public struct AnalysisProviderEndpoint: Sendable, Equatable, Decodable {
     public var auth: Auth
     public var generatePath: String
     public var countTokensPath: String
-    /// Extra constant headers the provider requires (an API version, for
-    /// example). Never credentials.
+    /// Constant headers such as an API version; never credentials.
     public var versionHeaders: [String: String]
-    /// The page where a listener creates a key for this provider, as the
-    /// bundle's raw text (the clamp checks this text, before any `URL`
-    /// normalises it). `nil` in bundles that predate it.
+    /// Raw text, not a `URL`, so the clamp checks it before any normalisation.
     public var keyPage: String?
-    /// The model the tier check asks, replacing the transport's constant, so
-    /// a later bundle can move it without a build. No bundle carries it yet.
+    /// Overrides the transport's tier-check model when set.
     public var tierCheckModel: String?
 
-    /// `keyPage` to open in the browser from the key sheet.
     public var keyURL: URL? {
         keyPage.flatMap { URL(string: $0) }
     }

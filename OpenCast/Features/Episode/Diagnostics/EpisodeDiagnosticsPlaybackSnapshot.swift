@@ -1,8 +1,7 @@
 import Foundation
 import OpenCastPlayback
 
-/// Point-in-time capture of the live player taken when diagnostics load; the
-/// installed zones here are the post-policy zones actually driving skips.
+/// The installed zones are the post-policy zones actually driving skips.
 nonisolated struct EpisodeDiagnosticsPlaybackSnapshot: Sendable, Equatable {
     var loadedEpisodeID: String?
     var stateDescription: String

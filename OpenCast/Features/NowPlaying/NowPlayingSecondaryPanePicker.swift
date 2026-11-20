@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// The pane's segmented control: the four modes, the remembered one
-/// selected. Choosing the selected segment again changes nothing.
 struct NowPlayingSecondaryPanePicker: View {
     @Binding var selection: NowPlayingSecondaryPane
 

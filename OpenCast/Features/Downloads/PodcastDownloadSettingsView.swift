@@ -1,12 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// One show's Download New Episodes, Detect Ads in New Episodes and Keep
-/// Downloaded choices, pushed from the Downloads screens and presented by
-/// `PodcastDownloadSettingsSheet` from the show's actions menu. Unlike Skip
-/// Intro & Outro, whose free-text fields validate into one synced write,
-/// these are discrete device-local choices that apply on change, so turning
-/// a show on downloads at once.
 struct PodcastDownloadSettingsView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext

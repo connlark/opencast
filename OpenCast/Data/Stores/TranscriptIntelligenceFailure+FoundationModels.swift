@@ -2,9 +2,7 @@ import Foundation
 import FoundationModels
 
 extension TranscriptIntelligenceFailure {
-    /// Reduces a Foundation Models error to the product outcome. Tool failures
-    /// unwrap to their cause; the unentitled-build code gets its own state
-    /// because `availability` never reports it.
+    /// The unentitled-build error gets its own state because `availability` never reports it.
     nonisolated static func failure(mapping error: any Error) -> TranscriptIntelligenceFailure {
         if let failure = error as? TranscriptIntelligenceFailure {
             return failure

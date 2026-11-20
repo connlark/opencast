@@ -1,18 +1,12 @@
 import SwiftData
 import SwiftUI
 
-/// The playlist detail toolbar menu: Play Next, Play Last and Download All,
-/// then reorder, rename, sort, Hide Played and delete. Reorder, sort and Hide
-/// Played are manual only: a smart playlist's rule decides its order and
-/// membership, so it passes no edit mode and Edit does not show. Deleting
-/// pops back to the collection.
 struct PlaylistActionsMenu: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
 
     let summary: PlaylistSummary
-    /// Whether Edit can start; read only alongside `editMode`.
     var canEdit = false
     let canEnqueue: Bool
     let canDownloadAll: Bool
@@ -123,10 +117,9 @@ struct PlaylistActionsMenu: View {
         appModel.enqueuePlaylist(summary.playlistID, position: .last, modelContext: modelContext)
     }
 
-    // The candidates are resolved at tap time, not in `body`: resolving them
-    // checks each downloaded file on disk, so the enabled state is only a
-    // record-level gate and the empty case can still race in. Taking the
-    // count here also holds the title steady while the downloads commit.
+    // Resolved at tap time, not in `body`: resolving checks each file on disk, so the enabled
+    // state is only a record-level gate. The count taken here holds the title steady while the
+    // downloads commit.
     private func confirmDownloadAll() {
         let count = appModel.playlistDownloadAllCandidates(summary.playlistID).count
         guard count > 0 else {

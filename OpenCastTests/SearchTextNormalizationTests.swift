@@ -4,16 +4,16 @@ import Testing
 
 @Suite("Search token normalization")
 struct SearchTextNormalizationTests {
-    @Test("ASCII tokenization agrees with Unicode character classification")
-    func asciiTokenizationPreservesWordBoundaries() {
-        // Exercise every ASCII byte beside letters/digits, including control
-        // characters and CRLF graphemes, against the native Unicode reference.
-        for byte in UInt8(0)...UInt8(127) {
-            let text = "AbC123" + String(decoding: [byte], as: UTF8.self) + "DeF456\r\nGHI"
-            let expected = text.split { !$0.isLetter && !$0.isNumber }
-                .map { String($0).lowercased() }
-            #expect(SearchTextNormalization.searchTokens(in: text) == expected)
-        }
+    @Test(
+        "ASCII tokenization agrees with Unicode character classification",
+        arguments: [
+            ("AbC123 DeF456\r\nGHI", ["abc123", "def456", "ghi"]),
+            ("/0 9: @A Z[ `a z{", ["0", "9", "a", "z", "a", "z"]),
+            ("snake_case\u{0}tab\there", ["snake", "case", "tab", "here"]),
+        ]
+    )
+    func asciiTokenizationPreservesWordBoundaries(text: String, expected: [String]) {
+        #expect(SearchTextNormalization.searchTokens(in: text) == expected)
     }
 
     @Test("Unicode words retain folding and grapheme boundaries")

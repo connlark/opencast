@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// List only asks SwiftUI to diff the rows the reader has reached. The full
-/// catalog stays available to database search, counts and playback lookup.
-/// Callers with a filtered prefix can provide `hasMore` instead of a total.
 struct EpisodeCatalogContinuation: View {
     static let pageSize = 256
     private let totalCount: Int?

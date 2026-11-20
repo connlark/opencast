@@ -1,12 +1,8 @@
 import Foundation
 import OpenCastTranscription
 
-/// Validates a cloud detect job's `ad_analysis` block against the imported
-/// transcript and builds the persisted analysis document. Strict by design:
-/// a policy drift, an unknown span kind, or broken timing throws — the
-/// caller falls back to on-device analysis rather than skipping audio it
-/// cannot trust. The fingerprint is computed locally at import time so
-/// `isCurrentAnalysisDocument` matches exactly.
+/// Strict: anything it cannot trust throws, so on-device analysis runs instead of skipping
+/// audio on bad data.
 nonisolated enum EpisodeRemoteAdAnalysisMapper {
     struct ValidationError: Error, Equatable {
         let reason: String

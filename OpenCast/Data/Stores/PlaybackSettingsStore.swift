@@ -26,22 +26,18 @@ final class PlaybackSettingsStore {
     private(set) var skipBackwardOption = PlaybackSkipIntervalOption.defaultBackward
     private(set) var skipForwardOption = PlaybackSkipIntervalOption.defaultForward
     private(set) var isAutoSkipPromosAndAdsEnabled = true
-    /// Played over an automatic skip; nil is None. Kept while Auto-Skip is
-    /// off, when the controller gets no cue.
+    /// nil is the None choice. Kept while Auto-Skip is off.
     private(set) var autoSkipSound: SkipSound?
-    /// The listener's own sound, read when it is the choice or when the
-    /// picker opens (`loadCustomSkipSound`); nil until then and when there is
-    /// none. Whenever `autoSkipSound` is the custom sound, this is it.
+    /// Loaded when it is the choice or the picker opens. Whenever `autoSkipSound` is the custom
+    /// sound, this holds it.
     private(set) var customSkipSound: CustomSkipSound?
     private(set) var showsPrivateNoteButtons = false
     private(set) var isTapToPlayEnabled = true
     private(set) var isRequeueInterruptedEpisodeEnabled = false
-    /// Six distinct slots in the listener's order; the sleep timer sheet
-    /// sorts them.
+    /// Six distinct slots in the listener's order, unsorted.
     private(set) var sleepTimerPresets = SleepTimerPresetDuration.defaults
     private(set) var lastErrorMessage: String?
-    /// The stored global speed. The controller plays at a show's own speed
-    /// instead while one applies, so this can differ from `playback.rate`.
+    /// Differs from `playback.rate` while a show's own speed applies.
     private(set) var globalPlaybackRate: Float = 1
     @ObservationIgnored private let save: (ModelContext) throws -> Void
     @ObservationIgnored private let skipSoundURL: @MainActor (SkipSound) -> URL?
@@ -49,14 +45,10 @@ final class PlaybackSettingsStore {
     /// Counts Delete Data resets, so an import that was in flight across one
     /// is discarded.
     @ObservationIgnored private var dataNukeGeneration = 0
-    /// Imports whose file work is running. While one is, nothing sweeps the
-    /// directory: the import may have moved its file in and not yet saved
-    /// the preference that references it.
+    /// While nonzero, nothing sweeps the directory: an import may have moved its file in before
+    /// saving the preference that references it.
     @ObservationIgnored private var customSkipSoundImportsInFlight = 0
 
-    /// `save` is the test seam for preference saves; `skipSoundURL` finds a
-    /// chosen bundled sound's file; `customSkipSoundFiles` holds the
-    /// listener's own.
     init(
         save: @escaping (ModelContext) throws -> Void = { try $0.save() },
         skipSoundURL: @escaping @MainActor (SkipSound) -> URL? = { SkipSoundCatalog.url(for: $0, in: .main) },
@@ -71,8 +63,6 @@ final class PlaybackSettingsStore {
         voiceBoostMode == .perEpisode && currentEpisodeID != nil
     }
 
-    /// `rateOverride` is the loaded show's own speed; nil plays the global
-    /// speed.
     func load(
         episodeID: String? = nil,
         podcastID: String? = nil,
@@ -140,10 +130,8 @@ final class PlaybackSettingsStore {
         apply(to: playback)
     }
 
-    /// Plays at `rate` and saves it: through `persist` when given (a show's
-    /// own speed), else as the global speed. The save follows the stored
-    /// target, not the controller: the speed already playing can differ from
-    /// the one stored for its scope.
+    /// Whether to save compares with the stored target, not `playback.rate`: the speed playing can
+    /// differ from the one stored for its scope.
     @discardableResult
     func setPlaybackRate(
         _ rate: Float,
@@ -298,10 +286,7 @@ final class PlaybackSettingsStore {
         }
     }
 
-    /// Chooses the sound played over an automatic skip (nil is None), then
-    /// plays a chosen sound once, also one already chosen, so the picker can
-    /// audition it. None plays nothing. The custom sound can be chosen only
-    /// as `customSkipSound` holds it.
+    /// Plays the sound even when it is already the choice, so the picker can audition it.
     @discardableResult
     func setAutoSkipSound(
         _ sound: SkipSound?,
@@ -338,9 +323,6 @@ final class PlaybackSettingsStore {
         return true
     }
 
-    /// The picker's read of the listener's own sound: its preferences and
-    /// whether its file is still there. It also deletes any other file in
-    /// the directory, one a failed delete left behind.
     func loadCustomSkipSound(modelContext: ModelContext) {
         do {
             let stored = try storedCustomSkipSound(modelContext: modelContext)
@@ -351,13 +333,6 @@ final class PlaybackSettingsStore {
         }
     }
 
-    /// Copies `source` in as the listener's own sound, replacing any earlier
-    /// one, chooses it and plays it once, as choosing any sound does. A file
-    /// the checks refuse throws and changes nothing. A failed save keeps the
-    /// earlier sound, its file and the cue, removes the new file and returns
-    /// false. The earlier file, and any other file nothing references, is
-    /// deleted once the new one is chosen. An import that Delete Data
-    /// overtakes removes its file, changes nothing else and returns false.
     @discardableResult
     func importCustomSkipSound(
         from source: URL,
@@ -409,9 +384,8 @@ final class PlaybackSettingsStore {
         return try await customSkipSoundFiles.importSound(from: source)
     }
 
-    /// Deletes the listener's own sound: its preferences, then its file.
-    /// When it is the choice, the choice becomes None and the controller
-    /// gets no cue.
+    /// Preferences go before the file: a failed file delete leaves only an unreferenced file,
+    /// which the next sweep removes.
     @discardableResult
     func removeCustomSkipSound(
         modelContext: ModelContext,
@@ -449,16 +423,11 @@ final class PlaybackSettingsStore {
         return true
     }
 
-    /// Delete Data removes the file and the preferences; this forgets the
-    /// sound the store still holds, which `load` keeps when it is not the
-    /// choice, and discards any import still in flight.
     func resetAfterDataNuke() {
         customSkipSound = nil
         dataNukeGeneration += 1
     }
 
-    /// Whether a tap on an episode row plays it. Off, the row opens the
-    /// episode and its trailing glyph becomes the play button.
     @discardableResult
     func setTapToPlayEnabled(
         _ isEnabled: Bool,
@@ -474,8 +443,6 @@ final class PlaybackSettingsStore {
         )
     }
 
-    /// Whether starting another episode puts the one playing at the head of
-    /// Up Next so it resumes afterward.
     @discardableResult
     func setRequeueInterruptedEpisodeEnabled(
         _ isEnabled: Bool,
@@ -491,9 +458,6 @@ final class PlaybackSettingsStore {
         )
     }
 
-    /// Puts `duration` in one of the six sleep timer preset slots. A
-    /// duration another slot already holds is refused, so the sheet always
-    /// lists six.
     @discardableResult
     func setSleepTimerPreset(
         _ duration: SleepTimerPresetDuration,
@@ -650,8 +614,6 @@ final class PlaybackSettingsStore {
         )
     }
 
-    /// Unsubscribe cleanup: removes the per-episode Voice Boost switches for
-    /// the given episodes (device-local preference rows).
     @discardableResult
     func removeVoiceBoostPreferences(
         forEpisodeIDs episodeIDs: [String],
@@ -729,10 +691,6 @@ final class PlaybackSettingsStore {
         return VoiceBoostMode(rawValue: rawValue) ?? .defaultMode
     }
 
-    /// Absent, empty and unknown ids all read as None. The custom sound's
-    /// preferences are read only when it is the choice, and whether its file
-    /// is still there only when the cue is applied, so never while Auto-Skip
-    /// is off.
     private func loadAutoSkipSound(modelContext: ModelContext) throws {
         let id = try preferenceRecord(
             key: Self.autoSkipSoundPreferenceKey,
@@ -747,7 +705,6 @@ final class PlaybackSettingsStore {
         autoSkipSound = customSkipSound?.skipSound
     }
 
-    /// Nil when either preference is absent or empty. Reads no file.
     private func storedCustomSkipSound(modelContext: ModelContext) throws -> CustomSkipSound? {
         guard let fileName = try preferenceRecord(
             key: Self.customSkipSoundFilePreferenceKey,
@@ -774,8 +731,7 @@ final class PlaybackSettingsStore {
         }
     }
 
-    /// Heals a file a failed delete left behind. Skipped while an import is
-    /// in flight; that import sweeps once it succeeds.
+    /// Skipped while an import is in flight; that import sweeps once it succeeds.
     private func removeUnreferencedCustomSkipSoundFiles(keeping fileName: String?) {
         guard customSkipSoundImportsInFlight == 0 else {
             return
@@ -815,8 +771,6 @@ final class PlaybackSettingsStore {
         return option
     }
 
-    /// Anything but six distinct known durations loads as the defaults and
-    /// leaves the stored value alone.
     private func storedSleepTimerPresets(modelContext: ModelContext) throws -> [SleepTimerPresetDuration] {
         guard let value = try preferenceRecord(
             key: Self.sleepTimerPresetsPreferenceKey,
@@ -889,9 +843,6 @@ final class PlaybackSettingsStore {
         playback.setAutoSkipEnabled(isAutoSkipPromosAndAdsEnabled)
     }
 
-    /// Nothing can play the cue while Auto-Skip is off, so the controller
-    /// then gets nil, as with None, and no file is looked up. A chosen custom
-    /// sound whose file is gone reads as None, like an unknown id.
     private func applyAutoSkipCue(to playback: any PlaybackSettingsControlling) {
         guard isAutoSkipPromosAndAdsEnabled, let autoSkipSound else {
             playback.setAutoSkipCue(nil)
@@ -906,7 +857,6 @@ final class PlaybackSettingsStore {
         playback.setAutoSkipCue(url)
     }
 
-    /// A bundled sound's file, or the custom sound's while it exists.
     private func soundURL(for sound: SkipSound) -> URL? {
         guard sound.id == SkipSoundCatalog.customID else {
             return skipSoundURL(sound)

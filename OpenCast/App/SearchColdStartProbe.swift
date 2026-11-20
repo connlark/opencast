@@ -1,9 +1,7 @@
 import Foundation
 import OpenCastCore
 
-/// Opt-in Release-capable harness for the process-cold first-usable gate.
-/// It uses a dedicated cache database and never changes the user's cache.
-/// Flags resolve through `OpenCastLaunchConfiguration`, the launch-flag seam.
+/// Uses a dedicated cache database and never changes the user's cache.
 enum SearchColdStartProbe {
     static let probeArgument = "--opencast-run-search-cold-start-probe"
     static let seedArgument = "--opencast-seed-search-cold-start-corpus"

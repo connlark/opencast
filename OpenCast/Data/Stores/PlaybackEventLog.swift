@@ -1,8 +1,6 @@
 import Foundation
 import os
 
-/// Sparse playback transitions, retained locally across launches in release
-/// builds so source selection and skip landings survive a later bug report.
 /// Use one active writer per log path.
 actor PlaybackEventLog {
     static let shared = PlaybackEventLog()

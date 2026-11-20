@@ -2,11 +2,6 @@ import Foundation
 import OpenCastPlayback
 
 extension OpenCastAppModel {
-    /// Appended to the Now Playing diagnostics text so one report establishes
-    /// both source-identity invariants for the current episode: which bytes
-    /// the transcript and download recorded, which asset the live player item
-    /// actually loaded, whether their timelines agree, and the resulting
-    /// alignment verdict — plus the build that produced the report.
     var playbackSourceIdentityDiagnostics: String {
         guard let episodeID = playback.currentEpisode?.id.rawValue else {
             return ""

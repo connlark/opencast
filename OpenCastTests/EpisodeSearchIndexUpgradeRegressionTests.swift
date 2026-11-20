@@ -6,13 +6,6 @@ import SwiftData
 import Testing
 @testable import OpenCast
 
-/// Regression coverage for the derived-index upgrade path: an installed cache
-/// on the previous schema/content version (schema 5, the single evidence
-/// table carrying body_data) must rebuild exactly once, persist the current
-/// version, and never rebuild again on later launches — including launches
-/// that interrupt the upgrade rebuild and the real composition ordering where
-/// the transcription store's reconciliation races the library's index
-/// preparation.
 @MainActor
 @Suite("Episode search index upgrade regression")
 struct EpisodeSearchIndexUpgradeRegressionTests {
@@ -39,8 +32,6 @@ struct EpisodeSearchIndexUpgradeRegressionTests {
 
         try downgradeToInstalledSchema5(contentVersion: "11", databaseURL: databaseURL)
 
-        // First launch after the update: stale version means the index is not
-        // ready, search uses the fallback, and preparation runs one rebuild.
         let upgradeStore = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
         #expect(
             try await upgradeStore.episodeSearchIndexStateDescription()
@@ -61,7 +52,6 @@ struct EpisodeSearchIndexUpgradeRegressionTests {
                 == expectedIDs
         )
 
-        // Second launch: validation only — zero row writes, no rebuild.
         let relaunchStore = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
         #expect(
             try await relaunchStore.episodeSearchIndexStateDescription()
@@ -146,8 +136,6 @@ struct EpisodeSearchIndexUpgradeRegressionTests {
         defer { try? FileManager.default.removeItem(at: transcriptDirectory) }
         let fileStore = EpisodeTranscriptFileStore(baseDirectory: transcriptDirectory)
 
-        // The installed v10 device state: indexed metadata, one completed
-        // transcript record with its sidecar, ready index.
         let installedStore = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
         try await seedCorpus(in: installedStore)
         try await installedStore.prepareEpisodeSearchIndex()
@@ -173,9 +161,8 @@ struct EpisodeSearchIndexUpgradeRegressionTests {
         )
         try downgradeToInstalledSchema5(contentVersion: "10", databaseURL: databaseURL)
 
-        // Launch after the update, in composition order: index store assigned
-        // before load, library preparation racing the transcription store's
-        // reconciliation, small batches to open interleaving windows.
+        // The app's launch order: the index store is assigned before load, and preparation
+        // races reconciliation in small batches.
         let launchStore = SQLiteLocalLibraryCacheStore(
             databaseURL: databaseURL,
             episodeSearchRebuildBatchSize: 5
@@ -189,8 +176,7 @@ struct EpisodeSearchIndexUpgradeRegressionTests {
         await libraryPreparation.value
         await launchTranscriptions.waitForEpisodeSearchIndexSync()
 
-        // The rebuild handler's follow-up reconciliation is scheduled through
-        // a task hop; give it a bounded window to land, then drain the chain.
+        // The rebuild's follow-up reconciliation lands after a task hop, so poll for it.
         var transcriptRecovered = false
         let deadline = ContinuousClock.now + .seconds(60)
         while ContinuousClock.now < deadline {
@@ -210,9 +196,6 @@ struct EpisodeSearchIndexUpgradeRegressionTests {
         #expect(try readStoredContentVersion(databaseURL: databaseURL)
                 == String(SQLiteEpisodeSearchIndex.contentVersion))
 
-        // Converged means quiet: once ready, further sync passes must not
-        // rewrite transcript rows (version short-circuit) or re-trigger a
-        // rebuild (no state flapping).
         let changesAfterConvergence = try await launchStore.totalRowChangeCount()
         try? await Task.sleep(for: .milliseconds(300))
         await launchTranscriptions.waitForEpisodeSearchIndexSync()
@@ -223,7 +206,6 @@ struct EpisodeSearchIndexUpgradeRegressionTests {
                 == "ready"
         )
 
-        // Second launch: no rebuild, transcript still indexed.
         let relaunchStore = SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
         let relaunchTranscriptions = EpisodeTranscriptionStore(fileStore: fileStore)
         relaunchTranscriptions.episodeSearchIndexStore = relaunchStore
@@ -244,11 +226,6 @@ struct EpisodeSearchIndexUpgradeRegressionTests {
 
     // MARK: - Fixtures
 
-    /// Restores the installed pre-current derived shape: PRAGMA user_version
-    /// 5 with the single evidence table carrying body_data (content version
-    /// 11), optionally downgraded further to the version-10 column set. The
-    /// schema-version bump then drops and recreates every derived table and
-    /// the content-version mismatch forces the one-time rebuild.
     private func downgradeToInstalledSchema5(
         contentVersion: String,
         databaseURL: URL

@@ -21,9 +21,7 @@ struct NotificationSubscriptionSyncService {
     }
 
     func syncIfRegistered(activePodcastIDs: Set<String>) async throws -> NotificationSubscriptionSyncResponse? {
-        // The guard keeps the "never registers a fresh install" contract;
-        // past it, recoverable credential failures re-attest and retry
-        // exactly like `sync` instead of failing with no recovery.
+        // Never registers a fresh install: without a credential there is nothing to sync.
         guard try credentialService.loadRegisteredCredential() != nil else {
             return nil
         }

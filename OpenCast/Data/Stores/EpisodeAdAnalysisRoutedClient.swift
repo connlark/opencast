@@ -1,8 +1,6 @@
 import Foundation
 
-/// Pin polls of a job an earlier build started to the same StoreKit
-/// environment as the cloud transcription path. Unknown environments never
-/// guess production.
+/// Polls use the app's StoreKit environment; an unknown one never falls back to production.
 actor EpisodeAdAnalysisRoutedClient: EpisodeAdAnalysisClient {
     private let environmentProvider: @Sendable () async throws -> RemoteTranscriptionStoreEnvironment
     private let clientFactory: @Sendable (AdAnalysisBackendConfiguration) -> any EpisodeAdAnalysisClient

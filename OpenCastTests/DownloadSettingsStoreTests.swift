@@ -11,7 +11,6 @@ struct DownloadSettingsStoreTests {
 
     @Test("Preference keys stay stable")
     func preferenceKeysStayStable() {
-        // Stored keys are a storage contract; the literals pin them.
         #expect(DownloadSettingsStore.autoDownloadKeyPrefix == "downloads.autoDownloadNewEpisodes.")
         #expect(DownloadSettingsStore.autoDownloadWatermarkKeyPrefix == "downloads.autoDownloadWatermark.")
         #expect(DownloadSettingsStore.keepLimitKeyPrefix == "downloads.keepLimit.")
@@ -423,8 +422,6 @@ struct DownloadSettingsStoreTests {
     }
 }
 
-/// Stands in for the store's save seam, called after the isolated context
-/// has been mutated.
 private final class DownloadSettingsSaveProbe {
     var failsSaves = false
     private(set) var callCount = 0

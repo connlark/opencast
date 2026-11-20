@@ -4,10 +4,6 @@ import FoundationModels
 import OSLog
 import UIKit
 
-/// Launch-arg probe for stage 0 of transcript intelligence: does Private
-/// Cloud Compute honor tool calls through the production client, in plain and
-/// structured turns, with tool calling required, and what does the model do
-/// without a tool? Writes `Documents/transcript-intelligence-tool-probe.json`.
 enum TranscriptIntelligenceToolProbe {
     nonisolated static let requestArgument = "--transcript-intelligence-tool-probe"
     nonisolated static let requestEnvironmentKey = "OPENCAST_TRANSCRIPT_INTELLIGENCE_TOOL_PROBE"
@@ -120,7 +116,6 @@ enum TranscriptIntelligenceToolProbe {
         logger.log("probe finished")
     }
 
-    /// Bounded like production requests; a hung turn is reported as `timeout`.
     private static let stepDeadline: Duration = .seconds(45)
 
     private static func runTextTurn(

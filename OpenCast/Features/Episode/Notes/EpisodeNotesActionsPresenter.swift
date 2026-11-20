@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Presents the editor, the share sheet and the error alerts that an
-/// `EpisodeNotesActions` asks for.
 struct EpisodeNotesActionsPresenter: ViewModifier {
     @Bindable var actions: EpisodeNotesActions
 

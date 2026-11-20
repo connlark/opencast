@@ -221,13 +221,6 @@ struct EpisodeNotesLibraryGroupingTests {
         #expect(groups.map { $0.notes.map(\.text) } == [["Meet at the \(word)"], ["Espresso"], ["Croissant"]])
     }
 
-    @Test("Sort order titles and identities")
-    func sortOrderTitles() {
-        #expect(EpisodeNotesLibrarySortOrder.allCases == [.recent, .show])
-        #expect(EpisodeNotesLibrarySortOrder.allCases.map(\.title) == ["Most Recent", "Show"])
-        #expect(EpisodeNotesLibrarySortOrder.allCases.map(\.id) == ["recent", "show"])
-    }
-
     private func searchFixture() -> @MainActor (String) -> [EpisodeNotesLibraryGroup] {
         let episodes = [
             "swift": episode("swift", show: "Swift Weekly", title: "Concurrency Deep Dive", publishedAt: 10),

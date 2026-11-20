@@ -1,13 +1,6 @@
 import OSLog
 import SwiftUI
 
-/// Records a two-pane viewport against the tab accessory: the accessory's
-/// geometry, the viewport's own frame and the bottom clearance the shell's
-/// rule gives it (`TabAccessoryGeometry.bottomClearance(over:rowSpacing:)`,
-/// the List row gap), once per change. It measures; it never changes
-/// layout. Installed only where the two-pane roots add a viewport the shell
-/// did not have: the split's detail column and the Up Next tab's queue,
-/// which exist only on a foldable scene's inner display.
 struct TwoPaneRootClearanceProbe: ViewModifier {
     private static let logger = Logger(subsystem: "com.connor.opencast", category: "TwoPaneRoot")
 
@@ -16,7 +9,6 @@ struct TwoPaneRootClearanceProbe: ViewModifier {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var viewport: CGRect?
 
-    /// Names the viewport in the log.
     let name: String
 
     func body(content: Content) -> some View {

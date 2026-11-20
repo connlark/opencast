@@ -1,9 +1,7 @@
 import OpenCastAnalysis
 import Synchronization
 
-/// Token usage as the provider bills it: input (cached and cache-write
-/// tokens included), cached input, cache writes, output (reasoning included)
-/// and the reasoning share of the output.
+/// `input` includes `cached` and `write`; `output` includes `reasoning`.
 public struct AnalysisBilledUsage: Sendable, Hashable, Codable {
     public var input: UInt64
     public var cached: UInt64
@@ -20,11 +18,8 @@ public struct AnalysisBilledUsage: Sendable, Hashable, Codable {
     }
 }
 
-/// What one provider send did, for the run record and diagnostics. Never
-/// carries provider text, a header or the key: every field is a closed
-/// value or a number, and the model id is the entry's, kept only when it is
-/// 1 to 64 of `[A-Za-z0-9._:-]` (``invalidModelID`` otherwise), so an
-/// observer that sees a record before any logger sees nothing to scrub.
+/// Never carries provider text, a header or the key: every field is a closed value, a number or
+/// a scrubbed model id, so an observer that sees a record before any logger has nothing to scrub.
 public struct AnalysisProviderSendRecord: Sendable, Hashable {
     public static let invalidModelID = "invalid_model_id"
 
@@ -41,23 +36,13 @@ public struct AnalysisProviderSendRecord: Sendable, Hashable {
     public var feature: AnalysisFeature
     public var purpose: AnalysisProviderRequest.Purpose
     public var sendIndex: Int
-    /// The HTTP status, when a response arrived.
     public var status: Int?
-    /// How the answer ended, when a 2xx arrived; a closed set, never
-    /// provider text.
     public var finishReason: AnalysisFinishReason?
-    /// Why the send failed; `nil` when a 2xx answer arrived or the run
-    /// cancelled the send.
     public var failure: AnalysisProviderFailure?
-    /// The run cancelled the send (another window had already failed, or
-    /// the caller stopped the run); the provider said nothing about it.
     public var cancelled: Bool
-    /// Google named the key free tier in its answer to this send.
     public var freeTier: Bool
     public var usage: AnalysisBilledUsage?
-    /// Seconds spent waiting for the key's pacer before sending.
     public var pacedSeconds: Double
-    /// Seconds from admission to the end of the body read.
     public var exchangeSeconds: Double
 
     public init(
@@ -91,13 +76,11 @@ public struct AnalysisProviderSendRecord: Sendable, Hashable {
     }
 }
 
-/// Receives a record of every send a transport makes.
 public protocol AnalysisProviderSendObserver: Sendable {
     func record(_ send: AnalysisProviderSendRecord)
 }
 
-/// The sends of one run, in completion order. The app resolves the
-/// listener-facing failure from them with ``AnalysisProviderFailure/resolve(_:sends:)``.
+/// In completion order.
 public final class AnalysisProviderSendLog: AnalysisProviderSendObserver {
     private let storage = Mutex<[AnalysisProviderSendRecord]>([])
 

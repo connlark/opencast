@@ -2,21 +2,13 @@ import SwiftUI
 import Testing
 @testable import OpenCast
 
-/// The panel rendered by SwiftUI in a window at the fixture squares, read
-/// from the UIKit views it renders through: each row's glass and the
-/// toggle's system switch. (A unit-test host builds no accessibility
-/// elements, so frames come from the views.) This is frame containment:
-/// raw frames do not shrink when an ancestor clips them, so an overflowing
-/// control fails here; the close target is the layout's derived span, not
-/// the artwork's composited overlay.
 @MainActor
 @Suite("Sound Lab hosted fit")
 struct NowPlayingSoundLabHostedFitTests {
     struct Rendered {
         let square: CGRect
         let views: [(view: UIView, frame: CGRect)]
-        /// One display pixel: SwiftUI snaps each rendered edge to the pixel
-        /// grid, so a frame can sit up to a pixel from its layout value.
+        /// SwiftUI snaps rendered edges to the pixel grid: a frame can sit a pixel from its layout value.
         let pixel: CGFloat
 
         var rows: [CGRect] {
@@ -50,9 +42,8 @@ struct NowPlayingSoundLabHostedFitTests {
         .environment(\.dynamicTypeSize, dynamicTypeSize)
     }
 
-    /// Hosts `content` at the window's top-leading corner, lets the glass
-    /// settle, and returns every visible view it rendered with its frame in
-    /// the window (hidden subtrees and empty views left out).
+    // A unit-test host builds no accessibility elements, so frames come from the UIKit views. Raw
+    // frames do not shrink when an ancestor clips them, so an overflowing control shows here.
     static func render(_ content: some View, square side: CGFloat) throws -> Rendered {
         let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
@@ -90,9 +81,6 @@ struct NowPlayingSoundLabHostedFitTests {
             && inner.maxX <= outer.maxX + tolerance && inner.maxY <= outer.maxY + tolerance
     }
 
-    /// 154 is the inline floor, 156.33 Closed at L, 166.92 Closed at AX XXL,
-    /// 214.24 the pinned iPhone at AX XXXL, 220 the first square with
-    /// today's whole rail, 280.8 the pinned iPhone at L.
     @Test(
         "Panel frames: every rendered control inside the square and clear of the derived close target",
         arguments: [
@@ -133,7 +121,6 @@ struct NowPlayingSoundLabHostedFitTests {
                 "control \(control) past the trailing inset"
             )
         }
-        // The switch sits whole inside the toggle row, the first row.
         let toggleRow = try #require(rows.min { $0.minY < $1.minY })
         let toggleSwitch = try #require(switches.first)
         #expect(
@@ -152,7 +139,6 @@ struct NowPlayingSoundLabHostedFitTests {
             #expect(abs(row.minX - 27.33) <= rendered.pixel, "row \(row)")
             #expect(abs(row.width - 120) <= rendered.pixel, "row \(row)")
         }
-        // The toggle row is the 44 pt capsule at the top inset.
         #expect(abs(rows[0].minY - 9) <= rendered.pixel)
         #expect(abs(rows[0].height - 44) <= rendered.pixel)
         let toggleSwitch = try #require(rendered.switches.first)

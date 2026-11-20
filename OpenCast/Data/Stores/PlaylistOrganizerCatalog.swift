@@ -1,9 +1,6 @@
 import Foundation
 import NaturalLanguage
 
-/// One show's retrieval state: its metadata lines, the BM25 index and, when
-/// the show's language has a word embedding on this device, the word-vector
-/// index. Built once per sheet and queried for every request and search.
 nonisolated struct PlaylistOrganizerCatalog: Sendable {
     let lines: [EpisodeMetadataLine]
     let lexicalIndex: EpisodeMetadataIndex
@@ -25,9 +22,6 @@ nonisolated struct PlaylistOrganizerCatalog: Sendable {
         )
     }
 
-    /// The production candidate window for a request: the lines holding an
-    /// informative term in BM25 order (at most 150), then the 30 nearest
-    /// other lines by word vector.
     @concurrent
     func window(for query: String) async -> EpisodeCandidateWindow {
         let lexical = lexicalIndex.informativeMatches(query)
@@ -35,9 +29,6 @@ nonisolated struct PlaylistOrganizerCatalog: Sendable {
         return EpisodeCandidateRanking.lexicalFirst(lexical: lexical, semantic: semantic)
     }
 
-    /// Ranked positions for the "Add Episodes…" list: every word match first,
-    /// then the nearest lines by word vector, cut to `limit`. A query with
-    /// neither a searchable word nor a vector lists the newest episodes.
     @concurrent
     func additions(for query: String, excluding: Set<Int>, limit: Int = 30) async -> [Int] {
         guard limit > 0 else {

@@ -3,18 +3,12 @@ import AudioToolbox
 import OpenCastVoiceBoost
 
 nonisolated struct VoiceBoostAudioTapRuntimeState {
-    /// The tap's engagement state machine. Steady states are `bypassed`
-    /// (untouched zero-latency dry) and `engaged`
-    /// (pure processor output). The transitions exist because the processor
-    /// output is delayed by its lookahead: leaving or entering the C path
-    /// needs a drain (wet ramps to dry inside C on time-aligned legs) and a
-    /// latency splice (a short live/delayed crossfade of bit-identical dry
-    /// programme ~5 ms apart), never a cut or a forward skip.
+    /// The processor's output lags by its lookahead, so entering or leaving it takes a drain
+    /// (wet ramps to dry inside the processor) and a latency splice (a short crossfade of
+    /// identical dry programme about 5 ms apart), never a cut or a forward skip.
     enum EnginePhase: Equatable {
         case bypassed
-        /// Delay-line warmup (pure live output while the freshly reset
-        /// processor fills its lookahead), then the splice ramps toward
-        /// processor output.
+        /// Pure live output while the freshly reset processor fills its lookahead, then the splice.
         case engaging(warmupFramesRemaining: Int)
         case engaged
         /// Processor keeps running with a disabled configuration until its
@@ -24,15 +18,14 @@ nonisolated struct VoiceBoostAudioTapRuntimeState {
     }
 
     var configuration: VoiceBoostConfiguration
-    // VoiceBoostProcessor has no internal synchronization; every access is serialized by VoiceBoostAudioTapContext.stateLock.
+    // VoiceBoostProcessor has no internal synchronization: every access is serialized by
+    // VoiceBoostAudioTapContext.stateLock.
     var processor: VoiceBoostProcessor?
     var channelCount = 0
     var isFloat32 = false
     var isNonInterleaved = false
-    /// Preallocated copy of the incoming (live, undelayed) buffer, needed
-    /// only while a transition blends live against processor output. The
-    /// planar path stores channel-major slices (channel c at offset
-    /// c * frameCount); the interleaved path stores frames interleaved.
+    /// Preallocated live-input copy for transitions: channel-major (channel c at c * frameCount)
+    /// on the planar path, interleaved otherwise.
     var dryScratch: [Float] = []
     private(set) var phase: EnginePhase = .bypassed
     /// Blend position of the latency splice: 1 is pure live input, 0 is
@@ -40,9 +33,8 @@ nonisolated struct VoiceBoostAudioTapRuntimeState {
     private(set) var liveMixWeight: Double = 1
     private var latencyFrames = 0
     private var spliceStep = 1.0
-    /// Gain and completed loudness history carried across processor recreation.
-    /// Captured on unprepare and at disable time (pre-drain), applied on
-    /// prepare; the controller hands it across track-bound tap reinstalls.
+    /// Gain and loudness history carried across processor recreation: captured on unprepare and
+    /// at disable (pre-drain), applied on prepare.
     private(set) var pendingContinuationState: VoiceBoostContinuationState?
 
     init(configuration: VoiceBoostConfiguration) {
@@ -131,11 +123,9 @@ nonisolated struct VoiceBoostAudioTapRuntimeState {
         if newConfiguration.isEnabled {
             switch phase {
             case .bypassed:
-                // The idle delay line holds stale pre-bypass audio and
-                // bypass durations are unbounded: reset (while the
-                // processor is still configured dry, so the wet mix
-                // restarts at zero), then re-seed the adaptation state so
-                // gain does not re-bootstrap through the low-confidence cap.
+                // The idle delay line holds stale audio: reset while the processor is still
+                // dry, so the wet mix restarts at zero, then re-seed adaptation so gain does
+                // not re-bootstrap through the low-confidence cap.
                 let continuationState = pendingContinuationState ?? processor.continuationState
                 processor.reset()
                 processor.update(configuration: newConfiguration)
@@ -245,10 +235,8 @@ nonisolated struct VoiceBoostAudioTapRuntimeState {
         return runEngine(on: buffer, frameCount: frameCount, processor: processor)
     }
 
-    /// The production path on the simulator and (per format) devices: the
-    /// tap's non-interleaved channel pointers go straight into the planar C
-    /// engine — no marshalling copies (the per-sample Swift copy
-    /// loops this replaces were most of the Debug-build CPU delta).
+    /// Channel pointers go straight into the planar C engine: per-sample Swift copies cost most of
+    /// the Debug-build CPU.
     private mutating func processPlanar(
         buffers: inout UnsafeMutableAudioBufferListPointer,
         frameCount: Int,
@@ -316,9 +304,7 @@ nonisolated struct VoiceBoostAudioTapRuntimeState {
         }
     }
 
-    /// Planar variant of `runTransition` — same weight trajectory and phase
-    /// bookkeeping, channel-major dry copies and blend indexing. Scalar per
-    /// frame by design; it only runs for ~one lookahead per toggle.
+    /// Scalar per frame by design: it runs for only about one lookahead per toggle.
     private mutating func runTransitionPlanar(
         channels: UnsafeMutablePointer<UnsafeMutablePointer<Float>?>,
         frameCount: Int,
@@ -328,9 +314,6 @@ nonisolated struct VoiceBoostAudioTapRuntimeState {
     ) -> VoiceBoostTapProcessOutcome {
         let sampleCount = frameCount * channelCount
         guard sampleCount <= dryScratch.count else {
-            // Unreachable under the prepare contract (maximumFrames bounds
-            // every callback); degrade to unblended processing rather than
-            // wedge the transition.
             processor.processPlanarFloat32(channels, frameCount: frameCount)
             return .processedTransition
         }
@@ -414,12 +397,6 @@ nonisolated struct VoiceBoostAudioTapRuntimeState {
         }
     }
 
-    /// Runs the processor and blends its (delayed) output against the live
-    /// input per the phase: engaging holds pure live through the warmup then
-    /// ramps toward processor output; disengaging waits for the in-processor
-    /// drain to reach exactly dry, then ramps toward live and parks in
-    /// bypass. Both splice legs carry the same programme ~5 ms apart, so the
-    /// blend is click-free by construction.
     private mutating func runTransition(
         on buffer: UnsafeMutableBufferPointer<Float>,
         frameCount: Int,
@@ -429,9 +406,6 @@ nonisolated struct VoiceBoostAudioTapRuntimeState {
     ) -> VoiceBoostTapProcessOutcome {
         let sampleCount = frameCount * channelCount
         guard sampleCount <= dryScratch.count else {
-            // Unreachable under the prepare contract (maximumFrames bounds
-            // every callback); degrade to unblended processing rather than
-            // wedge the transition.
             processor.processInterleavedFloat32(buffer, frameCount: frameCount)
             return .processedTransition
         }

@@ -11,13 +11,9 @@ struct PodcastEpisodeListModel {
         episodes.isEmpty && totalEpisodeCount > 0
     }
 
-    /// One pass over the show's episodes derives the filtered list, the
-    /// unplayed count, and the primary action together — each episode's
-    /// progress summary is looked up exactly once per evaluation.
-    /// `hiddenEpisodeIDs` (Up Next, when a Group by Podcast visit hides it)
-    /// leave the list only; the unplayed count and primary action still see
-    /// every episode. Resume passes over an archived episode, as
-    /// `PodcastPrimaryAction.resolve` does.
+    /// One pass, so each episode's progress summary is looked up once per evaluation.
+    /// `hiddenEpisodeIDs` leave the list only; the unplayed count and primary action still see
+    /// every episode.
     static func make(
         episodes: [EpisodeListItemSnapshot],
         filter: PodcastEpisodeFilter,

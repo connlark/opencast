@@ -1,14 +1,6 @@
 import SwiftUI
 
-/// Ranks the shows whose episodes lead a smart playlist. The First section
-/// holds the ranked shows in order, with reorder handles; the shows below
-/// are the rule's other candidates, the listed shows or every subscription.
-/// Tapping a show adds it to the end of First or removes it. Each change
-/// reports the new rule at once through `onChange`, and the rows read the
-/// rule the sheet is handed, so the list updates in place and keeps its
-/// scroll position.
 struct PlaylistPriorityPickerSheet: View {
-    /// Above this many shows the search field stays in view.
     private static let searchThreshold = 10
 
     @Environment(OpenCastAppModel.self) private var appModel
@@ -23,9 +15,8 @@ struct PlaylistPriorityPickerSheet: View {
         let candidates = candidateShows
 
         NavigationStack {
-            // Always attached: removing a conditional `.searchable` mid-update
-            // can strand the system's search dismissal. A short list only
-            // tucks the field away until the listener pulls down.
+            // Always attached: removing a conditional `.searchable` mid-update can strand the
+            // system's search dismissal.
             showList(candidates)
                 .searchable(
                     text: $searchText,
@@ -64,10 +55,9 @@ struct PlaylistPriorityPickerSheet: View {
         return List {
             if searchText.isEmpty, !first.isEmpty {
                 Section {
-                    // A different identity from the Shows rows below, so a
-                    // show changing sections is a removal and an insertion.
-                    // As a move, the cell kept its Shows configuration and a
-                    // newly ranked row had no reorder handle.
+                    // A different identity from the Shows rows below, so a show changing
+                    // sections is a removal and an insertion: as a move, the cell kept its Shows
+                    // configuration and a newly ranked row had no reorder handle.
                     ForEach(first, id: \.priorityPickerFirstRowID) { show in
                         PlaylistShowsPickerRow(
                             title: show.title,
@@ -128,7 +118,6 @@ struct PlaylistPriorityPickerSheet: View {
         .accessibilityIdentifier("Priority Picker")
     }
 
-    /// Subscribed shows the rule draws from, in the Library's title order.
     private var candidateShows: [SubscriptionRecord] {
         let shows = appModel.library.uniqueSubscriptions
         guard let podcastIDs = rule.podcastIDs else {

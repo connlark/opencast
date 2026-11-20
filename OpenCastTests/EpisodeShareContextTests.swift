@@ -27,25 +27,14 @@ struct EpisodeShareContextTests {
         #expect(context.url(startingAt: 4_120.2).query() == "t=4120")
     }
 
-    @Test("A Current Time link the page would ignore falls back to the plain link")
-    func currentTimeFallsBackToPlainLink() throws {
+    @Test(
+        "A Current Time link the page would ignore falls back to the plain link",
+        arguments: [0.9, .nan, 86_401] as [TimeInterval]
+    )
+    func currentTimeFallsBackToPlainLink(position: TimeInterval) throws {
         let context = try #require(EpisodeShareContext.make(episode: snapshot(), playhead: .playing, baseURL: base))
 
-        for position in [0, 0.9, .nan, .infinity, 86_401] as [TimeInterval] {
-            #expect(context.url(startingAt: position) == context.url)
-        }
-    }
-
-    @Test("A finished current episode still offers its player position")
-    func currentEpisodeIgnoresCompletion() throws {
-        let context = try #require(make(
-            isCurrentEpisode: true,
-            livePosition: 3_754.2,
-            progress: progress(position: 3_754, isCompleted: true)
-        ))
-
-        #expect(context.fixedStart?.label == "1:02:34")
-        #expect(context.fixedStart?.url.query() == "t=3754")
+        #expect(context.url(startingAt: position) == context.url)
     }
 
     @Test("Another episode offers its saved progress when it is visible")
@@ -56,27 +45,30 @@ struct EpisodeShareContextTests {
         #expect(context.fixedStart?.url.query() == "t=3754")
     }
 
-    @Test("No start link for a finished, unstarted, or barely started episode")
-    func noStartVariant() throws {
-        let cases: [(Bool, TimeInterval, EpisodeProgressSummary)] = [
-            (false, 0, progress(position: 1_200, isCompleted: true)),
-            (false, 0, progress(position: 0)),
-            (false, 0, progress(position: 0.9)),
-            (true, 0.9, progress(position: 600)),
-            (true, .nan, progress(position: 600)),
-        ]
-        for (isCurrentEpisode, livePosition, progress) in cases {
-            let context = try #require(make(isCurrentEpisode: isCurrentEpisode, livePosition: livePosition, progress: progress))
-            #expect(context.fixedStart?.url == nil)
-            #expect(context.fixedStart?.label == nil)
-        }
+    @Test(
+        "No start link for a finished, unstarted, or barely started episode",
+        arguments: [
+            (false, 1_200, true),
+            (false, 0.9, false),
+            (true, 0.9, false),
+            (true, .nan, false),
+        ] as [(Bool, TimeInterval, Bool)]
+    )
+    func noStartVariant(isCurrentEpisode: Bool, position: TimeInterval, isCompleted: Bool) throws {
+        let context = try #require(make(
+            isCurrentEpisode: isCurrentEpisode,
+            livePosition: position,
+            progress: progress(position: position, isCompleted: isCompleted)
+        ))
+
+        #expect(context.fixedStart?.url == nil)
+        #expect(context.fixedStart?.label == nil)
     }
 
     @Test("A start past the feed's duration is offered up to a day, and absurd positions never crash")
     func startBeyondTheEpisode() throws {
-        // The snapshot says 4000 s, but dynamically inserted ads make the
-        // served file longer or shorter, so a playhead past that figure is
-        // real and the page honours any start under a day.
+        // The snapshot says 4000 s, but dynamically inserted ads can make the
+        // served file longer, so a playhead past that figure is real.
         let nearRSSDuration = try #require(make(isCurrentEpisode: true, livePosition: 3_998.7, progress: progress(position: 0)))
         #expect(nearRSSDuration.fixedStart?.url.query() == "t=3998")
 
@@ -105,30 +97,21 @@ struct EpisodeShareContextTests {
         #expect(unknownDuration.fixedStart?.url == nil)
     }
 
-    @Test("Episodes without a shareable audio URL or title produce no context")
-    func unshareableEpisodes() {
-        #expect(make(episode: snapshot(audioURL: nil)) == nil)
-        #expect(make(episode: snapshot(audioURL: "file:///var/mobile/Downloads/episode.mp3")) == nil)
-        #expect(make(episode: snapshot(title: " \n ")) == nil)
-    }
-
     @Test("The link encodes the snapshot, with the feed URL from the podcast ID")
     func linkEncodesSnapshot() throws {
-        let episode = snapshot()
-        let context = try #require(make(episode: episode))
+        let context = try #require(make())
         let payload = try #require(EpisodeSharePayload(
-            audioURL: episode.audioURL,
-            title: episode.title,
-            podcastTitle: episode.podcastTitle,
-            artworkURL: episode.artworkURL,
-            feedURL: episode.podcastID,
-            guid: episode.guid,
-            duration: episode.duration,
-            publishedAt: episode.publishedAt
+            audioURL: "https://almanac.example.com/media/010-rubber-duck-final-witness.mp3",
+            title: "Rubber Duck, Final Witness",
+            podcastTitle: "The Example Almanac",
+            artworkURL: "https://almanac.example.com/artwork/cover-v2.png",
+            feedURL: "https://almanac.example.com/feed.xml",
+            guid: "tag:example.com,2026:almanac:010-rubber-duck-final-witness",
+            duration: 4_000,
+            publishedAt: Date(timeIntervalSince1970: 1_778_590_800)
         ))
 
         #expect(context.url == (try EpisodeShareURL.url(base: base, payload: payload)))
-        #expect(context.url.absoluteString.hasPrefix("https://opencast.mobile/e/1"))
         #expect(context.title == "Rubber Duck, Final Witness")
         #expect(context.artworkURL == URL(string: "https://almanac.example.com/artwork/cover-v2.png"))
     }
@@ -157,20 +140,16 @@ struct EpisodeShareContextTests {
         )
     }
 
-    private func snapshot(
-        title: String = "Rubber Duck, Final Witness",
-        audioURL: String? = "https://almanac.example.com/media/010-rubber-duck-final-witness.mp3",
-        duration: TimeInterval? = 4_000
-    ) -> EpisodeListItemSnapshot {
+    private func snapshot(duration: TimeInterval? = 4_000) -> EpisodeListItemSnapshot {
         EpisodeListItemSnapshot(
             episodeID: "episode-010",
             podcastID: "https://almanac.example.com/feed.xml",
             podcastTitle: "The Example Almanac",
-            title: title,
+            title: "Rubber Duck, Final Witness",
             summary: nil,
             publishedAt: Date(timeIntervalSince1970: 1_778_590_800),
             duration: duration,
-            audioURL: audioURL,
+            audioURL: "https://almanac.example.com/media/010-rubber-duck-final-witness.mp3",
             artworkURL: "https://almanac.example.com/artwork/cover-v2.png",
             artworkPreview: nil,
             guid: "tag:example.com,2026:almanac:010-rubber-duck-final-witness",

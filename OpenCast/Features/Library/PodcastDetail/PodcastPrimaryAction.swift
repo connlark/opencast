@@ -20,8 +20,7 @@ enum PodcastPrimaryAction: Equatable {
         }
     }
 
-    /// Resume picks the in-progress episode heard most recently. An archived
-    /// one is passed over: archiving moves `updatedAt` without a listen.
+    /// Archived episodes are passed over: archiving moves `updatedAt` without a listen.
     static func resolve(
         episodes: [EpisodeListItemSnapshot],
         library: LibraryStore

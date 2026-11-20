@@ -1,16 +1,13 @@
-/// Label/enabled mapping for the shared context menu's Detect Ads action.
 enum EpisodeDetectAdsMenuState: Equatable {
     case detect
     case detecting
     case queued
     case detected
-    /// A current analysis whose trusted download is gone: its skips cannot
-    /// install until a pass makes the download and transcript match again.
+    /// A current analysis whose trusted download is gone, so its skips cannot install.
     case detectAgain
 
-    /// A retained session outcome is history, not work in flight, so it is
-    /// decided like `.notQueued`. Attachment costs a file stat, so it is
-    /// read only once the analysis is known to be current.
+    /// A retained session outcome is history, not work in flight, so it decides like `.notQueued`.
+    /// Attachment costs a file stat, so it is read only for a current analysis.
     init(
         queueStatus: AdFreePassQueueEpisodeStatus,
         hasCurrentCompletedAnalysis: Bool,
@@ -49,14 +46,11 @@ enum EpisodeDetectAdsMenuState: Equatable {
         self == .detect || self == .detectAgain
     }
 
-    /// Episode Actions offers the full pass by name only when it restores
-    /// skips the page says are unavailable.
     var offersDetectAgain: Bool {
         self == .detectAgain
     }
 
-    /// An analysis-only run over the existing transcript: never for a
-    /// current analysis, attached or not, which it could only repeat.
+    /// Never for a current analysis, attached or not: an analysis-only run could only repeat it.
     var enablesAnalysisOnly: Bool {
         self == .detect
     }

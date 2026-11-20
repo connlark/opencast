@@ -1,12 +1,9 @@
 import Foundation
 
-/// Copy for the "playing from a playlist" surfaces. Grammar agreement
-/// resolves only on the attributed localization path, and that path also
-/// parses Markdown inside interpolated values, so only the count phrase goes
-/// through it; names and titles are interpolated with `String(localized:)`.
+/// Grammar agreement resolves only on the attributed localization path, which also parses
+/// Markdown in interpolated values, so only the count phrase goes through it; names and
+/// titles use `String(localized:)`.
 enum PlaylistPlaybackSourceText {
-    /// The separately laid-out count segment of the mini player's second
-    /// line, including its leading separator.
     static func miniPlayerRemainingSegment(remainingCount: Int) -> String {
         String(localized: " · \(remainingCount) left")
     }

@@ -1,17 +1,11 @@
-/// The finite wall budget of one ad-detection run. The service's budget is
-/// allocated across the worst-case waves of windows including the transport
-/// retry and the semantic repair, so a short episode can wait for a slow
-/// valid answer without extending the whole run. The trial's serial budget
-/// gives each send up to the model's per-call timeout while the floor is
-/// left; the floor admits sends and never cuts one short.
+/// The service splits its budget across the worst-case waves of windows, retry and repair
+/// included. The trial floor only admits a send; it is never taken off the send's timeout.
 struct AdRunBudget: Sendable {
     let clock: any AnalysisClock
     let deadline: Double
     let callTimeoutSeconds: Double
     let maxBackoffSeconds: Int
-    /// The least time left that admits a send.
     let sendFloorSeconds: Double
-    /// The time a pause must leave before the deadline.
     let backoffReserveSeconds: Double
 
     init(
@@ -37,8 +31,6 @@ struct AdRunBudget: Sendable {
         }
     }
 
-    /// `((budget / waves) - backoff) / attempts`, capped by the model's
-    /// per-call timeout, in whole seconds.
     static func callTimeoutSeconds(segmentCount: Int, policy: AdDetectionPolicy, model: AnalysisModelEntry) -> Int {
         let windows = AdWindowing.windowCount(segmentCount: segmentCount, policy: policy)
         let inFlight = max(1, policy.window.maxInFlight)
@@ -76,8 +68,6 @@ struct AdRunBudget: Sendable {
     }
 }
 
-/// Exponential backoff between attempts without a `Retry-After`: 2, 4, 8,
-/// then 16 seconds (`min(2^min(attempt, 4), 20)`).
 func analysisBackoffSeconds(attempt: Int) -> Int {
     min(1 << min(attempt, 4), 20)
 }

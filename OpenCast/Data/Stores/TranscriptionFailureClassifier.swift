@@ -21,9 +21,8 @@ struct TranscriptionFailureClassifier {
             return .cancelled
         }
 
-        // Whisper-perf G2: the audio spill makes disk headroom a runtime
-        // dependency; exhaustion is environmental in any scene state — the
-        // episode must interrupt (resumable), not fail terminally.
+        // The audio spill makes disk headroom a runtime dependency, so exhaustion interrupts the
+        // episode (resumable) in any scene state instead of failing it.
         if isStorageExhaustion(nsError) {
             return .environmentalStorage
         }

@@ -41,8 +41,8 @@ struct DiagnosticsDeveloperSection: View {
         }
     }
 
-    // The flag lives in UserDefaults behind a static gate, so the alert-style
-    // manual Binding exception applies: local @State mirrors it for SwiftUI.
+    // Binding(get:set:) because the flag lives in UserDefaults behind a static gate; local
+    // @State mirrors it for SwiftUI.
     private var remoteTranscriptionDevBinding: Binding<Bool> {
         Binding(
             get: { remoteTranscriptionDevEnabled },

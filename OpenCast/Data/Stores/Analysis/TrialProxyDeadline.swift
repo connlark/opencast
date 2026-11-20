@@ -2,13 +2,8 @@ import Foundation
 import OpenCastAnalysisProviders
 import Synchronization
 
-/// Bounds one trial post, signing included: the call returns the
-/// operation's result, or fails with `AnalysisHTTPFailure.timeout` once the
-/// deadline passes, whichever comes first. The operation runs in a task of
-/// its own that the deadline (or the caller's cancellation) cancels and
-/// that may finish unwinding after the call returns: a DeviceCheck call
-/// does not stop for cancellation, and the key's assertion gate stays held
-/// until that send is done, so no later send overtakes its counter.
+/// The operation may keep unwinding after `run` returns: DeviceCheck ignores cancellation, and the
+/// key's assertion gate stays held until that send is done, so no later send overtakes its counter.
 nonisolated enum TrialProxyDeadline {
     static func run<Value: Sendable>(
         seconds: Double,
@@ -25,8 +20,6 @@ nonisolated enum TrialProxyDeadline {
     }
 }
 
-/// Resumes the caller once, with the first of the operation's result, the
-/// deadline or the caller's cancellation, and then cancels both tasks.
 private nonisolated final class TrialProxyDeadlineRace<Value: Sendable>: Sendable {
     private struct State {
         var continuation: CheckedContinuation<Value, any Error>?

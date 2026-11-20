@@ -1,17 +1,11 @@
 import SwiftUI
 
 struct NowPlayingMoreMenu: View {
-    /// The cached snapshot of the current episode, for sharing; nil when the
-    /// episode is neither cached nor downloaded.
     let episode: EpisodeListItemSnapshot?
     let hasTranscript: Bool
     let canShowDescription: Bool
     let canShowShow: Bool
-    /// The name of the playlist playback came from; nil when there is none.
     let playlistSourceName: String?
-    /// Whether Private Notes appears; follows the Playback setting that shows
-    /// the note circle, so a listener who hasn't opted in doesn't see it here
-    /// either. Adding a note is the circle's job, never the menu's.
     let showsPrivateNotes: Bool
     let onTranscriptAction: () -> Void
     let onShowNotes: () -> Void

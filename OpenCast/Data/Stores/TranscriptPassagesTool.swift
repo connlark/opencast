@@ -1,9 +1,5 @@
 import FoundationModels
 
-/// `searchTranscript`: the lexical retrieval tool behind Ask. Returns the
-/// most relevant passages as segment lines, most relevant first, inside the
-/// per-call token budget, and the stop instruction once the turn's call
-/// allowance is spent.
 nonisolated final class TranscriptPassagesTool: Tool {
     typealias Arguments = TranscriptPassagesToolArguments
 

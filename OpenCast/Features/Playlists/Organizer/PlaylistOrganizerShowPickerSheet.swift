@@ -1,10 +1,6 @@
 import SwiftUI
 
-/// Make a Playlist from the Playlists collection. The organizer drafts from
-/// one show, so this sheet asks which; the presenter dismisses it and opens
-/// the organizer for the chosen show.
 struct PlaylistOrganizerShowPickerSheet: View {
-    /// Past this many shows the search field stays visible.
     private static let alwaysVisibleSearchShowCount = 8
 
     @Environment(OpenCastAppModel.self) private var appModel
@@ -12,8 +8,7 @@ struct PlaylistOrganizerShowPickerSheet: View {
 
     let onChoose: (String) -> Void
 
-    /// Nil while loading. Captured once, so a refresh never reorders rows
-    /// under a finger.
+    /// Captured once, so a refresh never reorders rows under a finger.
     @State private var choices: [PlaylistOrganizerShowChoice]?
     @State private var query = ""
 

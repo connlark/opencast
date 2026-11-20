@@ -1,8 +1,7 @@
 import Foundation
 import OpenCastAnalysis
 
-/// One header of a provider request. Its value may be a credential, so no
-/// textual or reflected form of a header ever shows the value.
+/// The value may be a credential: no textual or reflected form shows it.
 public struct AnalysisHTTPHeader: Sendable, Equatable {
     /// Lowercase.
     public var name: String
@@ -20,11 +19,9 @@ extension AnalysisHTTPHeader: CustomStringConvertible, CustomDebugStringConverti
     public var customMirror: Mirror { Mirror(self, children: ["name": name]) }
 }
 
-/// One request a provider transport sends.
 public struct AnalysisHTTPRequest: Sendable, Equatable {
     public var method: String
     public var url: URL
-    /// In send order.
     public var headers: [AnalysisHTTPHeader]
     public var body: Data?
 
@@ -58,18 +55,13 @@ extension AnalysisHTTPRequest: CustomStringConvertible, CustomDebugStringConvert
     }
 }
 
-/// A provider's answer to one request, read whole. The body may echo request
-/// content, so no textual or reflected form shows it. The `Retry-After` and
-/// `Content-Type` headers are kept only as parsed values; no raw header is
-/// stored.
+/// The body may echo request content: no textual or reflected form shows it. No raw header is
+/// stored, only parsed values.
 public struct AnalysisHTTPResponse: Sendable, Equatable {
     public var status: Int
-    /// `Retry-After` as whole seconds, capped at
-    /// ``GeminiErrorClassifier/maxRetryAfterSeconds``, the services' reading
-    /// of it; `nil` when absent or unreadable.
+    /// Whole seconds, capped at ``GeminiErrorClassifier/maxRetryAfterSeconds``.
     public var retryAfterSeconds: Int?
-    /// The media type from `Content-Type`, from a closed set
-    /// (``knownContentTypes``) or `other`; `nil` when absent.
+    /// A member of ``knownContentTypes`` or `other`.
     public var contentType: String?
     public var body: Data
 
@@ -77,11 +69,6 @@ public struct AnalysisHTTPResponse: Sendable, Equatable {
         "application/json", "text/html", "text/plain", "text/event-stream", "application/x-ndjson",
     ]
 
-    /// - Parameters:
-    ///   - retryAfter: The `Retry-After` header as sent; only its parsed,
-    ///     capped value is kept.
-    ///   - contentType: The `Content-Type` header as sent; only its media
-    ///     type, read into the closed set, is kept.
     public init(status: Int, retryAfter: String? = nil, contentType: String? = nil, body: Data) {
         self.status = status
         retryAfterSeconds = retryAfter.flatMap(GeminiErrorClassifier.retryAfterSeconds)
@@ -94,8 +81,6 @@ public struct AnalysisHTTPResponse: Sendable, Equatable {
         self.body = body
     }
 
-    /// The kept delay in header form, for the classifiers, which read
-    /// whole seconds.
     public var retryAfter: String? { retryAfterSeconds.map(String.init) }
 }
 
@@ -108,21 +93,14 @@ extension AnalysisHTTPResponse: CustomStringConvertible, CustomDebugStringConver
     }
 }
 
-/// Why an exchange produced no response.
 public enum AnalysisHTTPFailure: Error, Sendable, Hashable {
-    /// The deadline passed before the whole body was read.
     case timeout
-    /// The request never reached the provider or the body stream failed.
     case network
-    /// The body grew past the cap.
     case oversizedBody
 }
 
-/// Sends one request and reads the whole response body.
 public protocol AnalysisHTTPClient: Sendable {
-    /// The exchange, send and body read, completes within `timeoutSeconds`
-    /// or fails with ``AnalysisHTTPFailure/timeout``; a body larger than
-    /// `maximumBodyBytes` fails with ``AnalysisHTTPFailure/oversizedBody``.
+    /// `timeoutSeconds` bounds the whole exchange, body read included.
     func send(
         _ request: AnalysisHTTPRequest,
         timeoutSeconds: Double,

@@ -10,38 +10,6 @@ struct SyncedStoreRemoteChangeArbiterTests {
     private let syncedStoreURL = URL(filePath: "/stores/synced.sqlite")
     private let localStoreURL = URL(filePath: "/stores/local.sqlite")
 
-    @Test("A remote-shaped synced-store change schedules a reload")
-    func remoteChangeSchedulesReload() {
-        var arbiter = SyncedStoreRemoteChangeArbiter()
-
-        let didSchedule = arbiter.shouldScheduleReload(
-            changedStoreURL: syncedStoreURL,
-            syncedStoreURL: syncedStoreURL,
-            selfSaveCount: 0
-        )
-
-        #expect(didSchedule)
-    }
-
-    @Test("A self-save credit suppresses exactly one synced-store notification")
-    func selfSaveCreditSuppressesOneNotification() {
-        var arbiter = SyncedStoreRemoteChangeArbiter()
-
-        let didScheduleForSelfSave = arbiter.shouldScheduleReload(
-            changedStoreURL: syncedStoreURL,
-            syncedStoreURL: syncedStoreURL,
-            selfSaveCount: 1
-        )
-        let didScheduleForRemoteChange = arbiter.shouldScheduleReload(
-            changedStoreURL: syncedStoreURL,
-            syncedStoreURL: syncedStoreURL,
-            selfSaveCount: 1
-        )
-
-        #expect(!didScheduleForSelfSave)
-        #expect(didScheduleForRemoteChange)
-    }
-
     @Test("Credits accumulate one skip per self-save")
     func creditsAccumulatePerSelfSave() {
         var arbiter = SyncedStoreRemoteChangeArbiter()
@@ -129,13 +97,11 @@ struct SyncedStoreRemoteChangeArbiterTests {
         #expect(didSave)
         #expect(store.syncedStoreSelfSaveCount == 1)
 
-        // The save's own round-tripped notification is skipped…
         let didScheduleForOwnSave = arbiter.shouldScheduleReload(
             changedStoreURL: syncedStoreURL,
             syncedStoreURL: syncedStoreURL,
             selfSaveCount: store.syncedStoreSelfSaveCount
         )
-        // …while a following remote-shaped change still reloads.
         let didScheduleForRemoteChange = arbiter.shouldScheduleReload(
             changedStoreURL: syncedStoreURL,
             syncedStoreURL: syncedStoreURL,

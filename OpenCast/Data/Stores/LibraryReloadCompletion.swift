@@ -1,9 +1,7 @@
 import Foundation
 
-/// Superseding a reload may discard its snapshot, but its caller must still
-/// wait for a published library before restoring playback or pruning history.
-/// A canceled loader asks one surviving waiter to replace it; canceling an
-/// individual waiter only removes that waiter.
+/// A superseded reload's caller must still wait for a published library. Cancelling one waiter
+/// only removes that waiter.
 final class LibraryReloadCompletion {
     enum WaitResult {
         case published

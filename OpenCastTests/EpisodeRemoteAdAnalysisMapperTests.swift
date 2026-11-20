@@ -27,8 +27,6 @@ struct EpisodeRemoteAdAnalysisMapperTests {
         #expect(document.spans[0].id == 0)
         #expect(document.spans[0].confidence == 1.0)
 
-        // The locally computed fingerprint must satisfy the exact currency
-        // check the zones/skip pipeline runs.
         let store = EpisodeAdAnalysisStore()
         #expect(store.isCurrentAnalysisDocument(document, for: transcript))
     }

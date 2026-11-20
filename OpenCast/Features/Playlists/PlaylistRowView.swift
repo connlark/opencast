@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// A playlist in the collection's list layout: a small cover, the name and
-/// its size line.
 struct PlaylistRowView: View {
     private static let artworkSide = 56.0
 

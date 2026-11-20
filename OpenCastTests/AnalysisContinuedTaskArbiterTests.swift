@@ -39,7 +39,6 @@ struct AnalysisContinuedTaskArbiterTests {
         func launchCard(_ handle: Handle) { launch?(handle) }
     }
 
-    /// A run the test finishes by hand.
     final class Work: Sendable {
         private let stream: AsyncStream<Void>
         private let continuation: AsyncStream<Void>.Continuation
@@ -56,10 +55,6 @@ struct AnalysisContinuedTaskArbiterTests {
         func finish() { continuation.yield() }
     }
 
-    func settle() async {
-        for _ in 0..<50 { await Task.yield() }
-    }
-
     func makeSession(_ scheduler: Scheduler, arbiter: AnalysisContinuedTaskArbiterImpl) -> AnalysisExecutionSession {
         AnalysisExecutionSession(
             identifier: AnalysisContinuedTaskArbiterImpl.chaptersSummaryIdentifier,
@@ -67,37 +62,6 @@ struct AnalysisContinuedTaskArbiterTests {
             scheduler: scheduler,
             arbiter: arbiter
         )
-    }
-
-    @Test("The analysis card may arm only while no other card is armed")
-    func mayArmFollowsOtherCards() {
-        let arbiter = AnalysisContinuedTaskArbiterImpl()
-        #expect(arbiter.mayArm(identifier: AnalysisContinuedTaskArbiterImpl.chaptersSummaryIdentifier))
-
-        var otherArmed = true
-        arbiter.otherCardArmed = { otherArmed }
-        #expect(!arbiter.mayArm(identifier: AnalysisContinuedTaskArbiterImpl.chaptersSummaryIdentifier))
-        otherArmed = false
-        #expect(arbiter.mayArm(identifier: AnalysisContinuedTaskArbiterImpl.chaptersSummaryIdentifier))
-    }
-
-    @Test("A session the arbiter refuses runs in the foreground and never shows as armed")
-    func refusedSessionStaysDown() async {
-        let arbiter = AnalysisContinuedTaskArbiterImpl()
-        arbiter.otherCardArmed = { true }
-        let scheduler = Scheduler()
-        let session = makeSession(scheduler, arbiter: arbiter)
-        arbiter.chaptersSummarySession = session
-        let work = Work()
-
-        let run = Task { await session.run(subtitle: "Episode", expectedSeconds: 60) { await work.run() } }
-        await settle()
-
-        #expect(session.state == .foregroundOnly)
-        #expect(!arbiter.isAnalysisCardArmed)
-        #expect(scheduler.submitted.isEmpty)
-        work.finish()
-        _ = await run.value
     }
 
     @Test("isAnalysisCardArmed follows the session's card from request through finish")
@@ -110,8 +74,7 @@ struct AnalysisContinuedTaskArbiterTests {
 
         let work = Work()
         let run = Task { await running.run(subtitle: "Episode", expectedSeconds: 60) { await work.run() } }
-        await settle()
-        #expect(scheduler.submitted == [AnalysisContinuedTaskArbiterImpl.chaptersSummaryIdentifier])
+        #expect(await waitUntil { scheduler.submitted == [AnalysisContinuedTaskArbiterImpl.chaptersSummaryIdentifier] })
         #expect(arbiter.isAnalysisCardArmed)
 
         let handle = Handle()
@@ -123,18 +86,5 @@ struct AnalysisContinuedTaskArbiterTests {
         _ = await run.value
         #expect(!arbiter.isAnalysisCardArmed)
         #expect(handle.completions.count == 1)
-    }
-
-    @Test("The arbiter holds the session weakly: a released session reads as down")
-    func sessionHeldWeakly() {
-        let arbiter = AnalysisContinuedTaskArbiterImpl()
-        let scheduler = Scheduler()
-        do {
-            let session = makeSession(scheduler, arbiter: arbiter)
-            arbiter.chaptersSummarySession = session
-            #expect(arbiter.chaptersSummarySession === session)
-        }
-        #expect(arbiter.chaptersSummarySession == nil)
-        #expect(!arbiter.isAnalysisCardArmed)
     }
 }

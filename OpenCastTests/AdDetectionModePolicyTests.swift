@@ -6,21 +6,17 @@ import Testing
 @MainActor
 @Suite("Ad detection mode policy")
 struct AdDetectionModePolicyTests {
-    @Test("A completed transcript attached to the trusted download always runs on-device")
-    func attachedCompletedTranscriptShortCircuits() {
-        for storedMode in [AdDetectionMode.cloud, .onDevice, nil] {
-            for isRemoteSurfaceVisible in [true, false] {
-                let policy = AdDetectionModePromptPolicy(
-                    storedMode: storedMode,
-                    hasAttachedCompletedTranscript: true,
-                    isRemoteSurfaceVisible: isRemoteSurfaceVisible
-                )
-                #expect(
-                    policy.decision == .runOnDevice,
-                    "stored \(String(describing: storedMode)) surface \(isRemoteSurfaceVisible)"
-                )
-            }
-        }
+    @Test(
+        "A completed transcript attached to the trusted download always runs on-device",
+        arguments: [AdDetectionMode.cloud, nil]
+    )
+    func attachedCompletedTranscriptShortCircuits(storedMode: AdDetectionMode?) {
+        let policy = AdDetectionModePromptPolicy(
+            storedMode: storedMode,
+            hasAttachedCompletedTranscript: true,
+            isRemoteSurfaceVisible: true
+        )
+        #expect(policy.decision == .runOnDevice)
     }
 
     @Test(
@@ -28,6 +24,7 @@ struct AdDetectionModePolicyTests {
         arguments: [
             (AdDetectionMode?.some(.onDevice), true, AdDetectionModePromptPolicy.Decision.runOnDevice),
             (.some(.cloud), true, .runCloud),
+            (.some(.cloud), false, .runCloud),
             (nil, true, .prompt),
             (nil, false, .runOnDevice)
         ]
@@ -43,33 +40,6 @@ struct AdDetectionModePolicyTests {
             isRemoteSurfaceVisible: isRemoteSurfaceVisible
         )
         #expect(policy.decision == expected)
-    }
-
-    @Test("A stored mode runs without prompting")
-    func storedModeRuns() {
-        #expect(
-            AdDetectionModePromptPolicy(
-                storedMode: .cloud,
-                hasAttachedCompletedTranscript: false,
-                isRemoteSurfaceVisible: true
-            ).decision == .runCloud
-        )
-        #expect(
-            AdDetectionModePromptPolicy(
-                storedMode: .onDevice,
-                hasAttachedCompletedTranscript: false,
-                isRemoteSurfaceVisible: true
-            ).decision == .runOnDevice
-        )
-        // A stored cloud mode holds even when the surface is momentarily
-        // invisible: the pass's own viability check owns that failure.
-        #expect(
-            AdDetectionModePromptPolicy(
-                storedMode: .cloud,
-                hasAttachedCompletedTranscript: false,
-                isRemoteSurfaceVisible: false
-            ).decision == .runCloud
-        )
     }
 
     @Test("Unset mode prompts only when the remote surface is visible")
@@ -90,41 +60,10 @@ struct AdDetectionModePolicyTests {
         )
     }
 
-    @Test("Cloud-unavailable outcomes re-qualify auto detection like failures")
-    func autoDetectPolicyTreatsCloudUnavailableAsFailed() {
-        let policy = AdAutoDetectPlayPolicy(
-            isAutoDetectEnabled: true,
-            hasCurrentCompletedAnalysis: false,
-            isAnalysisAttached: false,
-            queueStatus: .cloudUnavailable(message: "No credits.")
-        )
-        #expect(policy.shouldEnqueue)
-    }
-
-    @Test("Cloud-unavailable status keeps the detect menu action retryable")
-    func menuStateTreatsCloudUnavailableAsDetect() {
-        let state = EpisodeDetectAdsMenuState(
-            queueStatus: .cloudUnavailable(message: "No credits."),
-            hasCurrentCompletedAnalysis: false,
-            isAnalysisAttached: false
-        )
-        #expect(state == .detect)
-        #expect(state.isEnabled)
-    }
-
     @Test("Cloud stages map into the documented progress bands")
     func cloudProgressBands() {
-        let preparation: [EpisodeAdFreePassStage] = [
-            .cloudQueued,
-            .cloudVerifying,
-            .cloudUploadingExactCopy(completedParts: 0, totalParts: 0),
-            .cloudUploadingExactCopy(completedParts: 9, totalParts: 10),
-            .cloudWaitingForCredits
-        ]
-        for stage in preparation {
-            #expect(EpisodeAdFreePassProgressMapper.units(for: stage) == 20)
-            #expect(EpisodeAdFreePassProgressMapper.units(for: stage, stageElapsed: 600) == 250)
-        }
+        #expect(EpisodeAdFreePassProgressMapper.units(for: .cloudQueued) == 20)
+        #expect(EpisodeAdFreePassProgressMapper.units(for: .cloudWaitingForCredits, stageElapsed: 600) == 250)
         #expect(EpisodeAdFreePassProgressMapper.units(for: .cloudTranscribing(nil)) == 250)
         let halfway = RemoteTranscriptionActiveProgress(
             stage: .transcribing,

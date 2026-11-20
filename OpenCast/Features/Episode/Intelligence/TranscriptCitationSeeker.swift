@@ -1,10 +1,6 @@
 import Foundation
 import SwiftData
 
-/// Seeks playback to a cited transcript time from a Recap or Ask sheet:
-/// scrubs the current episode, or starts this episode at the time without
-/// presenting Now Playing. Errors surface through the app model's playback
-/// error like every other play action.
 enum TranscriptCitationSeeker {
     static func seek(
         to time: TimeInterval,

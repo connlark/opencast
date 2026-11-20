@@ -46,14 +46,10 @@ struct OpenCastAppModelUnsubscribeTests {
         }
         #expect(appModel.lastUnsubscribeErrorMessage != nil)
         #expect(appModel.lastPlaybackError == nil)
-        // The success-gated sidecar block never ran.
         let preferenceKeys = try context.fetch(FetchDescriptor<LocalPreferenceRecord>()).map(\.key)
         #expect(preferenceKeys.contains("playback.voiceBoost.episode.\(episodeID)"))
         #expect(preferenceKeys.contains("podcastDetail.sortOrder.\(feedURL)"))
         #expect(preferenceKeys.contains("downloads.detectAdsPending.\(episodeID)"))
-        // A still-subscribed feed keeps its audio: files cannot be rolled
-        // back, and a dynamic-enclosure re-download may not be
-        // byte-identical.
         #expect(fileStore.fileExists(relativePath: downloadRelativePath))
         #expect(downloadStore.record(for: episodeID) != nil)
         #expect(try context.fetch(FetchDescriptor<EpisodeDownloadRecord>()).count == 1)

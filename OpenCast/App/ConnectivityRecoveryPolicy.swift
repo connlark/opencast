@@ -4,17 +4,15 @@ nonisolated struct ConnectivityRecoveryPolicy {
     var pathIsSatisfied: Bool
     var lastRefreshWasOffline: Bool
 
-    /// Only an observed offline-to-online transition refreshes. A first
-    /// satisfied report may follow a reconnect made while backgrounded, which
-    /// the activation pass already covers, and a pass that ran offline on
-    /// fresh feeds leaves nothing stale; both still need the marker cleared.
+    /// Only an observed offline-to-online transition refreshes: a first satisfied
+    /// report may follow a background reconnect the activation pass covered.
     var decision: ConnectivityRecoveryDecision {
         guard pathIsSatisfied else {
             return .doNothing
         }
 
-        // The reconnect can precede delivery of an outstanding offline fetch
-        // result. Preserve it even before that result sets the marker.
+        // The reconnect can arrive before an outstanding offline fetch result
+        // sets the marker, so the transition alone refreshes.
         if previousPathWasSatisfied == false {
             return .clearMarkerAndRefresh
         }

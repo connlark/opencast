@@ -93,9 +93,6 @@ struct EpisodeAdAnalysisFileStore: AnalysisDocumentFileStore {
         try removeItemIfPresent(at: analysesDirectory.appending(path: safeStem(episodeID)))
     }
 
-    /// Renames the per-episode directory when an episode's identity migrates.
-    /// If the successor already has a directory, files merge into it and
-    /// name-conflicting leftovers (already present there) are dropped.
     nonisolated func migrateAnalyses(fromEpisodeID oldEpisodeID: String, to newEpisodeID: String) throws {
         let fileManager = FileManager.default
         let sourceURL = analysesDirectory.appending(path: safeStem(oldEpisodeID), directoryHint: .isDirectory)

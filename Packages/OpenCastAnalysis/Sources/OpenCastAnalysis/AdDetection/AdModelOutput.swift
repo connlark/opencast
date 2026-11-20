@@ -1,4 +1,3 @@
-/// One break exactly as the model returned it, before validation.
 public struct AdModelSpan: Sendable, Hashable {
     public var kind: String
     public var label: String
@@ -64,8 +63,6 @@ public struct AdModelSpan: Sendable, Hashable {
     }
 }
 
-/// The model's whole answer for one window: every break it found. Unknown
-/// or missing fields, wrong types and repeated fields reject the answer.
 public struct AdModelOutput: Sendable, Hashable {
     public var spans: [AdModelSpan]
 
@@ -82,7 +79,6 @@ public struct AdModelOutput: Sendable, Hashable {
         self.spans = spans
     }
 
-    /// Parses answer text with the service's acceptance rules.
     public init(text: String) throws {
         try self.init(json: try JSONParser.parse(text))
     }

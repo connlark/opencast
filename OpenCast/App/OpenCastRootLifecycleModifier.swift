@@ -239,10 +239,8 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
         }
     }
 
-    /// Watches the network path only while the scene is active. A reconnect
-    /// clears the offline marker at once, but its refresh pass waits out Now
-    /// Playing on its own: the deferred activation maintenance also uploads
-    /// the notification registration, which a reconnect must not trigger.
+    /// A reconnect's refresh waits out Now Playing on its own, not through the
+    /// deferred maintenance, which also uploads the notification registration.
     private func startConnectivityRecovery() {
         connectivityRecoveryTask?.cancel()
         connectivityRecoveryTask = nil
@@ -263,8 +261,6 @@ struct OpenCastRootLifecycleModifier: ViewModifier {
                 } ?? false
                 previousPath = path
                 await recoverConnectivity(decision)
-                // Downloads deferred on cellular or Low Data Mode start once
-                // Wi-Fi is back.
                 if reachedAutomaticDownloadNetwork, !Task.isCancelled, appModel.isSceneActive {
                     appModel.scheduleAutoDownloadPass(modelContext: modelContext)
                 }

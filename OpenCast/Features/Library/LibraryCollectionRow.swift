@@ -1,9 +1,6 @@
 import SwiftUI
 
-/// One Library collection row: a tinted glyph in a fixed icon column, the
-/// title, the item count (hidden at zero) and, for rows that push, a
-/// chevron. The count is spoken through the containing control's value, so
-/// it stays out of the label.
+/// The count is spoken through the containing control's value, so it stays out of the label.
 struct LibraryCollectionRow: View {
     let title: String
     let systemImage: String

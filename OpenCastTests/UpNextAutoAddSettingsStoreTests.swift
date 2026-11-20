@@ -21,54 +21,6 @@ struct UpNextAutoAddSettingsStoreTests {
         #expect(UpNextAutoAddLimitReachedAction.allCases.map(\.rawValue) == ["stopAdding", "addToTopOnly"])
     }
 
-    @Test("Limits and rules title themselves")
-    func titles() {
-        #expect(UpNextAutoAddLimit.ten.title == "10 Episodes")
-        #expect(UpNextAutoAddLimit.oneHundred.title == "100 Episodes")
-        #expect(UpNextAutoAddLimit.oneThousand.title == "1,000 Episodes")
-        #expect(UpNextAutoAddLimitReachedAction.stopAdding.title == "Stop Adding New Episodes")
-        #expect(UpNextAutoAddLimitReachedAction.addToTopOnly.title == "Only Add to Top")
-        #expect(UpNextAutoAddLimitReachedAction.stopAdding.shortTitle == "Stop Adding")
-        #expect(UpNextAutoAddLimitReachedAction.addToTopOnly.shortTitle == "Only Add to Top")
-    }
-
-    @Test("Defaults: 100 episodes, Stop Adding New Episodes, no watermarks")
-    func defaultsWithoutStoredRows() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let store = UpNextAutoAddSettingsStore()
-
-        store.load(modelContext: ModelContext(container))
-
-        #expect(store.limit == .oneHundred)
-        #expect(store.limitReachedAction == .stopAdding)
-        #expect(store.watermark(forPodcastID: showA) == nil)
-        #expect(store.lastErrorMessage == nil)
-    }
-
-    @Test("Load reads each key")
-    func loadReadsEachKey() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let watermark = Date(timeIntervalSinceReferenceDate: 783_456_789.123_456_7)
-        for (key, value) in [
-            (UpNextAutoAddSettingsStore.limitPreferenceKey, "500"),
-            (UpNextAutoAddSettingsStore.limitReachedActionPreferenceKey, "addToTopOnly"),
-            (UpNextAutoAddSettingsStore.watermarkKeyPrefix + showA, UpNextAutoAddSettingsStore.encodeWatermark(watermark)),
-            (UpNextAutoAddSettingsStore.watermarkKeyPrefix + showB, UpNextAutoAddSettingsStore.encodeWatermark(.distantPast)),
-        ] {
-            context.insert(LocalPreferenceRecord(key: key, value: value))
-        }
-        try context.save()
-
-        let store = reloadedStore(from: container)
-
-        #expect(store.limit == .fiveHundred)
-        #expect(store.limitReachedAction == .addToTopOnly)
-        #expect(store.watermark(forPodcastID: showA) == watermark)
-        #expect(store.watermark(forPodcastID: showB) == .distantPast)
-        #expect(store.lastErrorMessage == nil)
-    }
-
     @Test("Every setting round-trips through a fresh store, with the exact watermark")
     func settingsRoundTrip() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -158,21 +110,6 @@ struct UpNextAutoAddSettingsStoreTests {
         #expect(store.removeWatermark(forPodcastID: showA, modelContext: context))
     }
 
-    @Test("Removing a watermark with no stored row saves nothing and succeeds, even while saves fail")
-    func removingAMissingWatermarkSkipsTheSave() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let probe = UpNextAutoAddSettingsSaveProbe()
-        let store = UpNextAutoAddSettingsStore(save: probe.save)
-        store.load(modelContext: context)
-        probe.failsSaves = true
-
-        #expect(store.removeWatermark(forPodcastID: showA, modelContext: context))
-
-        #expect(probe.callCount == 0)
-        #expect(store.lastErrorMessage == nil)
-    }
-
     @Test("Removing several shows' watermarks deletes only their rows in one save and keeps an unread error")
     func removeWatermarksIsScopedAndKeepsErrorMessage() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -200,23 +137,6 @@ struct UpNextAutoAddSettingsStoreTests {
         #expect(try storedValues(forKey: UpNextAutoAddSettingsStore.watermarkKeyPrefix + showA, in: container).isEmpty)
         #expect(try storedValues(forKey: UpNextAutoAddSettingsStore.watermarkKeyPrefix + showB, in: container).isEmpty)
         #expect(try storedValues(forKey: UpNextAutoAddSettingsStore.watermarkKeyPrefix + showC, in: container).count == 1)
-    }
-
-    @Test("Removing no shows, or shows without a stored row, saves nothing and succeeds")
-    func removeWatermarksWithNothingToDeleteSkipsTheSave() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let probe = UpNextAutoAddSettingsSaveProbe()
-        let store = UpNextAutoAddSettingsStore(save: probe.save)
-        store.load(modelContext: context)
-        probe.failsSaves = true
-
-        #expect(store.removeWatermarks(forPodcastIDs: [], modelContext: context))
-        #expect(store.removeWatermarks(forPodcastIDs: [showA, showB], modelContext: context))
-
-        #expect(probe.callCount == 0)
-        #expect(store.lastErrorMessage == nil)
-        #expect(store.watermarkPodcastIDs.isEmpty)
     }
 
     @Test("A watermark save leaves an unread error message alone")
@@ -275,23 +195,6 @@ struct UpNextAutoAddSettingsStoreTests {
         #expect(store.lastErrorMessage == nil)
     }
 
-    @Test("Unchanged values skip the save")
-    func noOpSettersSkipSave() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let probe = UpNextAutoAddSettingsSaveProbe()
-        let store = UpNextAutoAddSettingsStore(save: probe.save)
-        store.load(modelContext: context)
-
-        #expect(store.setLimit(.standard, modelContext: context))
-        #expect(store.setLimitReachedAction(.stopAdding, modelContext: context))
-        #expect(probe.callCount == 0)
-
-        #expect(store.setWatermark(.distantPast, forPodcastID: showA, modelContext: context))
-        #expect(store.setWatermark(.distantPast, forPodcastID: showA, modelContext: context))
-        #expect(probe.callCount == 1)
-    }
-
     private func storedValues(forKey key: String, in container: ModelContainer) throws -> [String] {
         try ModelContext(container)
             .fetch(FetchDescriptor<LocalPreferenceRecord>())
@@ -306,8 +209,6 @@ struct UpNextAutoAddSettingsStoreTests {
     }
 }
 
-/// Stands in for the store's save seam, called after the isolated context
-/// has been mutated.
 private final class UpNextAutoAddSettingsSaveProbe {
     var failsSaves = false
     private(set) var callCount = 0

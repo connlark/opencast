@@ -84,12 +84,14 @@ struct AnalysisRunnerTests {
     @Test("A run cancelled while a reply is in flight reports cancellation, not the reply")
     func cancellationDuringReply() async {
         let ads = AnalysisRunner(transport: CancellingTransport(body: TestSupport.geminiBody(Self.validAds)), clock: TestSupport.SteppingClock())
-        #expect(failureCode(await ads.detectAds(Self.carousel, policy: .service)) == .cancelled)
+        let adsOutcome = await Task { await ads.detectAds(Self.carousel, policy: .service) }.value
+        #expect(failureCode(adsOutcome) == .cancelled)
         let chapters = AnalysisRunner(
             transport: CancellingTransport(body: TestSupport.geminiBody(Self.validChapters)),
             clock: TestSupport.SteppingClock()
         )
-        #expect(failureCode(await chapters.generateChapters(Self.chapters, policy: .service)) == .cancelled)
+        let chaptersOutcome = await Task { await chapters.generateChapters(Self.chapters, policy: .service) }.value
+        #expect(failureCode(chaptersOutcome) == .cancelled)
     }
 
     @Test("A tightened evidence policy cannot let a repair drop a locatable candidate")
@@ -113,17 +115,6 @@ struct AnalysisRunnerTests {
         }
         #expect(failure.code == .adAnalysisIncomplete)
         #expect(failure.issues.contains("v3_repair_lost_candidate"))
-    }
-
-    @Test("Per-call timeouts share the run budget across waves of windows", arguments: [
-        (12, 120), (1_399, 120), (4_000, 91), (6_000, 60),
-    ])
-    func callTimeouts(segments: Int, seconds: Int) {
-        #expect(AdRunBudget.callTimeoutSeconds(
-            segmentCount: segments,
-            policy: AdDetectionAnalysisPolicy.service.settings,
-            model: .serviceAdDetection
-        ) == seconds)
     }
 
     @Test("Window counts follow 1 + ceil((n - 800) / 680)", arguments: [

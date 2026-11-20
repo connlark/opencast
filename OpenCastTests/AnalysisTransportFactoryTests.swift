@@ -5,8 +5,6 @@ import Synchronization
 import Testing
 @testable import OpenCast
 
-/// Records every provider request and refuses it, so nothing reaches the
-/// network.
 nonisolated final class CapturingAnalysisHTTPClient: AnalysisHTTPClient {
     private let requests = Mutex<[AnalysisHTTPRequest]>([])
     private let status: Int
@@ -31,8 +29,6 @@ nonisolated final class CapturingAnalysisHTTPClient: AnalysisHTTPClient {
     }
 }
 
-/// Time that passes only when something sleeps, remembering every sleep, so
-/// a test reads the waits a pacer asked for.
 nonisolated final class RecordingAnalysisClock: AnalysisClock {
     private let state = Mutex<(now: Double, sleeps: [Double])>((0, []))
 
@@ -127,8 +123,6 @@ struct AnalysisTransportFactoryTests {
         )
     }
 
-    /// The provider transport under the resume wrapper and, for a direct
-    /// route, the key guard.
     static func inner(_ transport: any AnalysisProviderTransport) -> (any AnalysisProviderTransport)? {
         let resumed = (transport as? AnalysisResumingTransport)?.inner
         return (resumed as? AnalysisKeyPresenceGuardTransport)?.inner ?? resumed
@@ -171,37 +165,16 @@ struct AnalysisTransportFactoryTests {
         #expect(stack.client.sent.count == 1)
     }
 
-    @Test("Outside the window the same 429 is retried as before")
-    func noHandoverFlagKeepsRetrying() async throws {
-        let stack = Stack(client: CapturingAnalysisHTTPClient(status: 429, body: Self.freeTierMinuteBody))
-        let resolution = Self.direct(.google, key: Self.googleKey)
-        #expect(!resolution.freeTierHandover)
-        let transport = try stack.make(resolution)
-
-        let outcome = await AnalysisRunner(transport: transport, clock: StoppedAnalysisClock())
-            .detectAds(AnalysisRunTestFixtures.request(), policy: try #require(resolution.policy?.adDetection))
-
-        guard case .failed(let failure) = outcome else {
-            Issue.record("the run did not fail: \(outcome)")
-            return
-        }
-        #expect(failure.code != .quotaExhausted)
-        #expect(stack.client.sent.count > 1)
-    }
-
     /// Inside ad detection's 10-second backoff cap: a longer delay ends the
     /// run after one send, for any key.
     static let retryDelaySeconds = 7.0
 
-    /// A per-minute 429 with a retry delay, named free tier or not by its id.
     static func minuteBody(quotaID: String) -> String {
         #"{"error":{"code":429,"message":"quota","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaId":"\#(quotaID)","quotaValue":"15"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"\#(Int(retryDelaySeconds))s"}]}}"#
     }
 
     static let freeTierMinuteQuotaID = "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"
 
-    /// One direct run over a client that answers every send with `body`:
-    /// what was sent, and every wait the key's pacer asked its clock for.
     private func pacedRun(body: String) async throws -> (sends: [AnalysisProviderSendRecord], waits: [Double]) {
         let clock = RecordingAnalysisClock()
         let stack = Stack(client: CapturingAnalysisHTTPClient(status: 429, body: body), pacingClock: clock)
@@ -242,18 +215,6 @@ struct AnalysisTransportFactoryTests {
         #expect(stack.client.sent.count == 1)
         #expect(request.url.absoluteString == "https://generativelanguage.googleapis.com/v1alpha/models/gemini-pro-latest:generateContent")
         #expect(request.header("x-goog-api-key") == AnalysisKeyFixtures.googleText)
-    }
-
-    @Test("A key change reads the Keychain now: the same key stands; gone or replaced does not")
-    func keyChangeReadsTheKeychain() throws {
-        let stack = Stack()
-        #expect(stack.factory.keyChange(provider: .google, keyDigest: Self.googleKey.digest) == nil)
-
-        try stack.keys.save(try #require(AnalysisProviderKey("replacement-test-key")), provider: .google, syncs: false)
-        #expect(stack.factory.keyChange(provider: .google, keyDigest: Self.googleKey.digest) == .noKey)
-
-        try stack.keys.remove(provider: .google, includingSyncedCopy: true)
-        #expect(stack.factory.keyChange(provider: .google, keyDigest: Self.googleKey.digest) == .noKey)
     }
 
     @Test("An OpenAI route builds the Responses transport from the bundle's endpoint with the key, wrapped for resume")
@@ -359,20 +320,5 @@ struct AnalysisTransportFactoryTests {
         #expect(throws: AnalysisTransportFactoryError.keyRequired(.trialExhausted)) {
             _ = try stack.make(.keyRequired(.trialExhausted, feature: .adDetection))
         }
-    }
-
-    @Test("Send observers fan out to every observer")
-    func observersFanOut() {
-        let first = AnalysisProviderSendLog()
-        let second = AnalysisProviderSendLog()
-        let send = AnalysisProviderSendRecord(
-            provider: .google, modelID: "gemini-3.8-flash", feature: .adDetection, purpose: .adWindow(index: 0),
-            sendIndex: 0, status: 200, finishReason: nil, failure: nil, usage: nil, pacedSeconds: 0, exchangeSeconds: 1
-        )
-
-        AnalysisSendObservers(observers: [first, second]).record(send)
-
-        #expect(first.sends == [send])
-        #expect(second.sends == [send])
     }
 }

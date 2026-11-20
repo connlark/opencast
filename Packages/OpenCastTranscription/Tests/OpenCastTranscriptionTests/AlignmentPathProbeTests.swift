@@ -3,10 +3,6 @@ import Testing
 @testable import OpenCastTranscription
 @preconcurrency import WhisperKit
 
-/// Opt-in real-model probe proving the word-timestamps path still produces
-/// word timings after alignment accumulation became conditional (B2).
-/// Requires the Tiny model installed locally and
-/// OPENCAST_ALIGNMENT_PROBE=1 OPENCAST_TRANSCRIPTION_AUDIO=<file>.
 @Suite("Alignment path probe")
 struct AlignmentPathProbeTests {
     @Test(

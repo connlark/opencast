@@ -1,14 +1,11 @@
 import OpenCastAnalysis
 import OpenCastAnalysisProviders
 
-/// The kind a failed Chapters & Summary run keeps on its record, and the
-/// message beside it. Every message is built from closed-vocabulary codes,
-/// so no provider body, request text or key can reach the record.
+/// Messages are built from closed-vocabulary codes only, so no provider body, request text or key
+/// reaches the record.
 enum ChaptersSummaryFailureMapping {
-    /// Google naming the free tier is read first: a final or daily 429 on
-    /// such a key would otherwise read as the key refused. Then the
-    /// listener-facing provider failure when the run has one; the pipeline's
-    /// own code decides otherwise.
+    /// Free tier is read first: a final or daily 429 on such a key would otherwise read as the key
+    /// refused.
     static func failure(
         _ failure: AnalysisFailure,
         listenerFailure: AnalysisProviderFailure?,
@@ -37,26 +34,21 @@ enum ChaptersSummaryFailureMapping {
         return ChaptersSummaryRunFailure(kind: kind, message: message(kind.rawValue))
     }
 
-    /// The answer decoded but not into the document contract.
     static let unexpectedContract = ChaptersSummaryRunFailure(
         kind: .validationExhausted,
         message: message("unexpected_contract")
     )
 
-    /// A resume whose route, model or policy changed since it was
-    /// interrupted, or that can no longer resume at all.
     static let interrupted = ChaptersSummaryRunFailure(
         kind: .interrupted,
         message: "Chapters & Summary was interrupted."
     )
 
-    /// The run record could not be written, so nothing was sent.
     static let runRecordUnavailable = ChaptersSummaryRunFailure(
         kind: .generic,
         message: message("run_record_unavailable")
     )
 
-    /// The policy names a provider endpoint the transports refuse.
     static let providerConfiguration = ChaptersSummaryRunFailure(
         kind: .providerUnavailable,
         message: message("provider_configuration")
@@ -91,8 +83,6 @@ enum ChaptersSummaryFailureMapping {
         }
     }
 
-    /// Codes the Chapters engine can emit when no provider failure explains
-    /// the run; the ad-only codes map to `generic` for completeness.
     static func kind(for code: AnalysisFailureCode) -> EpisodeAnalysisFailureKind {
         switch code {
         case .invalidModelOutput, .modelOutputTruncated, .responseOversized, .responseEncoding,

@@ -30,9 +30,8 @@ nonisolated struct OpenCastPlaylistEntity: AppEntity {
         updatedAt = summary.updatedAt
     }
 
-    /// Every playlist as an entity, most recently updated first (the store's
-    /// array follows the collection's sort preference, so the order is made
-    /// here), ties by id.
+    /// Most recently updated first, ties by id; the store's array follows the collection's
+    /// sort preference instead.
     @MainActor
     static func entities(
         for summaries: [PlaylistSummary],

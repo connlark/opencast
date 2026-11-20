@@ -1,24 +1,15 @@
-/// Why a policy bundle was not used. `code` is stable and content-free, for
-/// run records and the diagnostics export.
+/// `code` is kept in run records and exported: it stays stable and free of bundle content.
 public enum AnalysisPolicyRejection: Error, Sendable, Equatable, Codable {
-    /// The download failed (offline, timeout, a non-200 status).
     case fetchFailed(String)
-    /// The document or its signature was larger than the loader accepts.
     case tooLarge(bytes: Int)
     case signatureInvalid(String)
     case decodeFailed(String)
     case unsupportedSchemaVersion(Int)
-    /// The bundle needs a newer app build than this one.
     case appBuildTooOld(required: Int, actual: Int)
-    /// A value outside the app's hard bounds, or a malformed one. The whole
-    /// bundle is rejected; `field` is the JSON path.
+    /// `field` is the JSON path.
     case outOfBounds(field: String)
-    /// The server offered a lower version than one already accepted.
     case rollback(accepted: Int, offered: Int)
-    /// The cached bundle was not confirmed by the server for too long.
     case cacheStale(days: Int)
-    /// An accepted bundle could not be written to disk; it stays active for
-    /// this session and the refresh is retried.
     case persistenceFailed
 
     public var code: String {

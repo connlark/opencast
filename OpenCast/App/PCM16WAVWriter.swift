@@ -1,9 +1,8 @@
 import Foundation
 
-/// Byte-deterministic PCM16 WAV writer for seeded audio fixtures. Not
-/// `#if DEBUG` — the UI-test seed caller compiles in Release — and
-/// deliberately not `AVAudioFile`: the manual header keeps the fixtures
-/// byte-identical, which the perf baselines rely on.
+/// Not `#if DEBUG`: the UI-test seed caller compiles in Release. Not
+/// `AVAudioFile`: the manual header keeps fixtures byte-identical, which the
+/// perf baselines rely on.
 enum PCM16WAVWriter {
     static func write(
         to fileURL: URL,

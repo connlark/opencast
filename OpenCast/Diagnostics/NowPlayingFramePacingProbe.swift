@@ -1,10 +1,5 @@
 import Foundation
 
-/// Reports the corresponding presentation state and optional frame-probe marker.
-///
-/// Frame sampling requires DEBUG or OPENCAST_PERFORMANCE_PROBES and opt-in
-/// (`--opencast-frame-probe` / `OPENCAST_FRAME_PROBE=1`). It measures smoothness independent
-/// of screen recording, which warms the compositor and masks first-frame stalls.
 @inline(always)
 func nowPlayingProbeMark(_ label: String) {
     PerformanceStateReporter.shared.nowPlayingMarker(label)
@@ -28,9 +23,6 @@ final class NowPlayingFramePacingProbe: NSObject {
 
     private(set) var isEnabled = false
     var onMark: ((String) -> Void)?
-    /// Flushed per-session summary lines, exposed to UI tests via accessibility
-    /// because xcodebuild runs tests on an ephemeral simulator clone whose
-    /// container is unreadable from the host.
     private(set) var sessionSummaries: [String] = []
     private var displayLink: CADisplayLink?
     private var frames: [Double] = []
@@ -109,7 +101,6 @@ final class NowPlayingFramePacingProbe: NSObject {
         let windowStart = firstEvent.time
         let windowEnd = lastEvent.time + Self.analysisTail
 
-        // Inter-frame deltas whose end timestamp falls inside the analysis window.
         var deltas: [(end: Double, delta: Double)] = []
         deltas.reserveCapacity(frames.count)
         for index in frames.indices.dropFirst() {
@@ -123,9 +114,8 @@ final class NowPlayingFramePacingProbe: NSObject {
         let eventLine = events.map { String(format: "%@@+%.0f", $0.label, ($0.time - origin) * 1000) }
             .joined(separator: " ")
         guard !deltas.isEmpty else {
-            // A stalled/throttled display link can have no sample in the
-            // event window. Preserve lifecycle evidence without inventing a
-            // zero frame gap or silently dropping the event's session.
+            // A stalled display link can leave no sample in the window; the session is still
+            // recorded, without an invented zero gap.
             recordSummary(
                 "session=\(sessionIndex) frames=0 refresh=unavailable maxGap=unavailable | events: \(eventLine) | topGaps: unavailable",
                 origin: origin

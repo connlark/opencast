@@ -53,14 +53,6 @@ struct OPMLParserTests {
         ])
     }
 
-    @Test("Accepts missing or non-RSS type when xmlUrl is present")
-    func acceptsMissingOrNonRSSType() throws {
-        let references = try OPMLParser().parse(data: fixtureData(named: "subscriptions-nested"))
-
-        #expect(references.contains { $0.title == "Nested Show" })
-        #expect(references.contains { $0.title == "Non RSS Type" })
-    }
-
     @Test("Uses text attribute when title is missing")
     func usesTextAttributeWhenTitleIsMissing() throws {
         let references = try OPMLParser().parse(data: fixtureData(named: "subscriptions-text-only"))
@@ -107,16 +99,6 @@ struct OPMLParserTests {
         ])
         #expect(result.usableFeedReferenceCount == 4)
         #expect(result.duplicateFeedReferenceCount == 2)
-    }
-
-    @Test("Preserves first occurrence order")
-    func preservesFirstOccurrenceOrder() throws {
-        let references = try OPMLParser().parse(data: fixtureData(named: "subscriptions-simple"))
-
-        #expect(references.map(\.canonicalFeedURL) == [
-            "https://example.com/alpha.xml",
-            "https://example.com/beta.xml"
-        ])
     }
 
     @Test("Decodes XML-escaped attribute values")

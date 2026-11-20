@@ -1,9 +1,6 @@
 import Foundation
 import StoreKit
 
-/// StoreKit environment of this install, used to route a Release process to
-/// one isolated money/state lane: sandbox/Xcode → prod-staging, production →
-/// production, and unknown → disabled.
 nonisolated enum RemoteTranscriptionStoreEnvironment: Sendable, Equatable {
     case sandbox
     case xcode

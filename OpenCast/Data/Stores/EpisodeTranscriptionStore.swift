@@ -9,9 +9,6 @@ import UIKit
 final class EpisodeTranscriptionStore {
     static let environmentalInterruptMessage = "Paused in background - will resume."
 
-    // The index rebuilds on every mutation (didSet), so per-row lookups stay
-    // O(1) and can never go stale; keep-first mirrors the replaced
-    // `records.first` lookup (house precedent: LibraryStore.episodeIndexByID).
     private(set) var records: [EpisodeTranscriptRecord] = [] {
         didSet {
             recordsRevision &+= 1
@@ -22,14 +19,10 @@ final class EpisodeTranscriptionStore {
         }
     }
     @ObservationIgnored private var recordsByEpisodeID: [String: EpisodeTranscriptRecord] = [:]
-    // Pairs the ignored index with a tracked revision so `record(for:)`
-    // registers a dependency even when it returns nil — a body that saw no
-    // record must still invalidate when one appears (house pattern:
-    // LibraryStore.progressIndexRevision).
+    // Tracked so `record(for:)` registers a dependency even when it returns nil: a body that saw
+    // no record must still invalidate when one appears.
     private var recordsRevision = 0
-    // Reservations live in the plain work coordinator; every reserve and
-    // release bumps this so `holdsWorkReservation(forEpisodeID:)` registers
-    // a dependency the same way.
+    // Bumped on every reserve and release: the reservations live in the unobserved work coordinator.
     private var workRevision = 0
     private(set) var progressByEpisodeID: [String: EpisodeTranscriptionProgress] = [:]
     private(set) var lastErrorMessage: String?
@@ -41,9 +34,7 @@ final class EpisodeTranscriptionStore {
     }
     private(set) var diagnosticWhisperComputeClass = "background-safe"
     private var lastErrorEpisodeID: String?
-    /// Episode-ID groups that held more than one record and were collapsed to
-    /// a proven survivor, cumulative for this process (startup repair plus
-    /// migration collisions). Diagnostics-only; never names episodes.
+    /// Cumulative for this process; diagnostics only.
     private(set) var duplicateRepairCount = 0
 
     @ObservationIgnored private let transcriber: any EpisodeTranscribing
@@ -51,20 +42,14 @@ final class EpisodeTranscriptionStore {
     @ObservationIgnored private let failureEnvironment: @MainActor () -> EpisodeTranscriptionFailureEnvironment
     @ObservationIgnored let workCoordinator: EpisodeTranscriptionWorkCoordinator
     @ObservationIgnored private var activeTask: Task<Void, Never>?
-    /// Names the active run, so a caller can tell a run it started from one
-    /// started since for the same episode.
     @ObservationIgnored private(set) var activeRunID: UUID?
     @ObservationIgnored private var activeSourceFileURL: URL?
     @ObservationIgnored private var activeEngine: EpisodeTranscriptionEngine?
     @ObservationIgnored private var activeCancellationPreservesPartial = false
-    /// Set with a preserving cancel that the caller will resume by itself:
-    /// the run lands as an environmental interruption does.
     @ObservationIgnored private var activeInterruptionHoldsForAutoResume = false
     @ObservationIgnored private var activePriorCompletedTranscriptPolicy = PriorCompletedTranscriptPolicy.discard
     @ObservationIgnored private var priorCompletedTranscriptSnapshot: PriorCompletedTranscriptSnapshot?
-    /// Set when a caller restored the active run's prior transcript without
-    /// waiting for the run (`restorePriorCompletedTranscriptEndingActiveRun`).
-    /// The run may still be unwinding; nothing it does may write again.
+    /// The run may still be unwinding after a restore ended it; nothing it does may write again.
     @ObservationIgnored private var activeRunEndedByRestore = false
     @ObservationIgnored private var replacementStopsByEpisodeID: [String: EpisodeTranscriptionReplacementStop] = [:]
     @ObservationIgnored private let stateChanges = StoreChangeNotifier()
@@ -74,16 +59,11 @@ final class EpisodeTranscriptionStore {
             scheduleEpisodeSearchIndexReconciliation()
         }
     }
-    /// Reconciliation treats `records` as the complete canonical set and
-    /// deletes every transcript document it does not retain. At composition
-    /// time the index store is assigned before `load(modelContext:)` can run,
-    /// so an ungated reconciliation would wipe the whole transcript index on
-    /// every launch. Only record sets fetched from (or authoritatively
-    /// emptied against) the model context may drive reconciliation.
+    /// Reconciliation deletes every indexed transcript `records` lacks, and the index store is
+    /// assigned before `load(modelContext:)` runs: only records fetched from the context may drive
+    /// it, or every launch would wipe the index.
     @ObservationIgnored private var hasAuthoritativeRecords = false
-    /// Episodes that may hold transcript documents in the search index
-    /// (conservative superset). Lets non-completed state commits skip
-    /// enqueueing removes for episodes the index has never seen.
+    /// A superset of the episodes the search index may hold.
     @ObservationIgnored private var searchIndexCandidateEpisodeIDs: Set<String> = []
     @ObservationIgnored private var episodeSearchIndexSyncTask: Task<Void, Never>?
     @ObservationIgnored private var lastProgressPublicationByEpisodeID: [String: Date] = [:]
@@ -92,10 +72,6 @@ final class EpisodeTranscriptionStore {
     @ObservationIgnored var setIdleTimerDisabled: (Bool) -> Void = {
         UIApplication.shared.isIdleTimerDisabled = $0
     }
-    /// Set when a run's protected default-compute attempt was classified as an
-    /// environmental compute failure and retried on `.cpuOnly` — the queue
-    /// coordinator reads this to carry the degraded profile across items
-    /// within one protected drain.
     @ObservationIgnored private(set) var lastEnvironmentalComputeFallbackEpisodeID: String?
 
     init(
@@ -166,9 +142,6 @@ final class EpisodeTranscriptionStore {
         workRevision &+= 1
     }
 
-    /// Whether a local or remote transcription request holds the episode,
-    /// from its first step to its release; observable, unlike the work
-    /// coordinator it asks.
     func holdsWorkReservation(forEpisodeID episodeID: String) -> Bool {
         _ = workRevision
         return workCoordinator.holdsReservation(forEpisodeID: episodeID)
@@ -240,9 +213,6 @@ final class EpisodeTranscriptionStore {
         record.state == .interrupted && record.errorMessage == Self.environmentalInterruptMessage
     }
 
-    /// Whether this episode's replacement transcription was interrupted
-    /// since its last start, and how. The record cannot say: the
-    /// interruption restored the prior completed transcript onto it.
     func interruptedReplacement(for episodeID: String) -> EpisodeTranscriptionReplacementInterruption? {
         guard case .interrupted(let interruption) = replacementStopsByEpisodeID[episodeID] else {
             return nil
@@ -250,8 +220,6 @@ final class EpisodeTranscriptionStore {
         return interruption
     }
 
-    /// `interruptedReplacement(for:)`, cleared, so the one caller that acts
-    /// on an interruption reads it once.
     func consumeInterruptedReplacement(for episodeID: String) -> EpisodeTranscriptionReplacementInterruption? {
         guard let interruption = interruptedReplacement(for: episodeID) else {
             return nil
@@ -260,10 +228,6 @@ final class EpisodeTranscriptionStore {
         return interruption
     }
 
-    /// Whether this episode's replacement transcription was cancelled since
-    /// its last start, cleared as it is read, for the one caller that
-    /// reports the stop. The record cannot say: the cancel restored the
-    /// prior completed transcript onto it.
     func consumeCancelledReplacement(for episodeID: String) -> Bool {
         guard replacementStopsByEpisodeID[episodeID] == .cancelled else {
             return false
@@ -281,10 +245,6 @@ final class EpisodeTranscriptionStore {
         return try? fileStore.read(relativePath: relativePath)
     }
 
-    /// The persisted transcript a remote job produced, when the episode's
-    /// transcript carries that job's provenance token. Import is idempotent
-    /// by the token, so this is how a re-attach recognizes its own result
-    /// after a death following import or ack.
     func importedRemoteDocument(jobID: String, for episodeID: String) -> EpisodeTranscriptDocument? {
         guard record(for: episodeID)?.engineProvenance == .remoteWhisper,
               let document = document(for: episodeID),
@@ -335,8 +295,6 @@ final class EpisodeTranscriptionStore {
         return try await fileStore.readOffCaller(relativePath: relativePath)
     }
 
-    /// Resolved by the store so the diagnostics sheet never duplicates the
-    /// Application Support layout rules.
     func diagnosticsDocumentFileURL(for episodeID: String) -> URL? {
         record(for: episodeID)?.transcriptRelativePath.map(fileStore.fileURL(relativePath:))
     }
@@ -505,11 +463,8 @@ final class EpisodeTranscriptionStore {
         activeTask?.cancel()
     }
 
-    /// Stops the active run, keeping what it transcribed to resume from.
-    /// With `holdsForAutoResume` the caller resumes it by itself, so the run
-    /// lands as an environmental interruption does: its record reads
-    /// `environmentalInterruptMessage`, and an interrupted replacement is
-    /// noted as environmental.
+    /// With `holdsForAutoResume` the caller resumes the run by itself, so it lands as an
+    /// environmental interruption does.
     func interruptActiveJob(modelContext: ModelContext, holdsForAutoResume: Bool = false) {
         guard activeTask != nil else {
             return
@@ -535,8 +490,7 @@ final class EpisodeTranscriptionStore {
                 try fileStore.delete(relativePath: record.transcriptRelativePath)
                 modelContext.delete(record)
             }
-            // Sweep the per-episode directory like the ad-analysis twin so
-            // unrecorded leftovers cannot outlive the delete.
+            // The sweep catches files no record names.
             try fileStore.deleteTranscripts(forEpisodeID: episodeID)
             try modelContext.save()
             clearTransientProgress(episodeID: episodeID)
@@ -602,16 +556,9 @@ final class EpisodeTranscriptionStore {
         }
     }
 
-    /// Puts back the prior transcript the active preserving run holds,
-    /// without waiting for that run, for a caller that ends the run and
-    /// cannot await it unwinding: deleting the download it transcribes (the
-    /// partial-record sweep that follows then leaves the restored record
-    /// alone), or admitting a restart over it once it is cancelled (it could
-    /// restore nothing after that). The run writes nothing more, so neither
-    /// its own stop handlers nor a failure already in flight (`markFailed`)
-    /// can touch the restored record. The partial is discarded, unless
-    /// `keepsInterruptedPartial` and the run's own stop would have kept it:
-    /// an interrupted Whisper replacement (`handleCancellation`).
+    /// Restores without awaiting the run, which then writes nothing more, so neither its stop
+    /// handlers nor a failure in flight can touch the restored record. The partial is kept only
+    /// with `keepsInterruptedPartial`, for an interrupted Whisper replacement.
     private func restorePriorCompletedTranscriptEndingActiveRun(
         episodeID: String?,
         keepsInterruptedPartial: Bool,
@@ -687,13 +634,9 @@ final class EpisodeTranscriptionStore {
                let fileName = relativePath.split(separator: "/").last {
                 record.transcriptRelativePath = "\(newDirectory)/\(fileName)"
             }
-            // Reconciliation rejects a sidecar whose embedded identity does
-            // not match its migrated record. Rewrite valid documents while
-            // leaving unreadable legacy sidecars to the existing repair path.
-            // A failed rewrite must not abort the migration after records
-            // were already re-keyed: the stale sidecar stays identity-guarded
-            // out of the search index, and duplicate collapse, reload, and
-            // the state-change notification below must always run.
+            // Reconciliation rejects a sidecar whose embedded identity does not match its record. A
+            // failed rewrite must not abort a migration whose records are already re-keyed: the stale
+            // sidecar stays identity-guarded out of the search index.
             if let relativePath = record.transcriptRelativePath,
                var document = try? fileStore.read(relativePath: relativePath) {
                 document.episodeID = newEpisodeID
@@ -712,10 +655,8 @@ final class EpisodeTranscriptionStore {
             )
         }
 
-        // A SwiftData refetch is not guaranteed to return the same object
-        // instances held by `records`. Reload once from the final migration
-        // set so lookup, duplicate repair, and derived-index reconciliation
-        // all observe the successor identity.
+        // A SwiftData refetch need not return the instances `records` holds; reloading makes every
+        // lookup see the successor identity.
         try reload(modelContext: modelContext)
         notifyEpisodeStateChanged(newEpisodeID)
     }
@@ -745,8 +686,6 @@ final class EpisodeTranscriptionStore {
         await transcriber.unload()
     }
 
-    /// Drain-scoped model retention (whisper-perf E1) — forwarded from the
-    /// ad-free-pass queue coordinator around one queue drain.
     func beginModelRetentionDrain() {
         transcriber.beginDrainRetention()
     }
@@ -976,10 +915,8 @@ final class EpisodeTranscriptionStore {
             "transcription starting engine=\(engine.rawValue) model=\(modelIdentity.modelIdentifier) version=\(modelIdentity.version) language=\(languageCode) resume=\((resumeStart ?? 0).backgroundLogSeconds) audio=\(audioDuration.backgroundLogSeconds) sourceBytes=\(identity.byteCount) sourceSHA=\(identity.sha256) priority=\(priority?.description ?? "inherited")"
         )
 
-        // Checkpoints are cumulative, so each full document rewrite persists
-        // every Nth one; the latest skipped checkpoint flushes on any exit so
-        // cancellation and interruption never lose transcribed audio. Resume
-        // stamps advance only with an actually-written document.
+        // Each rewrite holds every checkpoint so far, so only every Nth is written; the latest skipped
+        // one flushes on any exit. Resume stamps advance only with a written document.
         var checkpointEventCount = 0
         var pendingCheckpoint: OpenCastLongFormTranscriptionCheckpoint?
         do {
@@ -990,10 +927,8 @@ final class EpisodeTranscriptionStore {
                 }
                 switch event {
                 case .progress(let progress):
-                    // Progress stays transient and rate-limited: Apple Speech emits
-                    // events every 40–100ms, and dirtying the record per event both
-                    // autosaves churn and invalidates every observer at event rate.
-                    // Checkpoints persist completedDuration durably.
+                    // Transient and rate-limited: Apple Speech emits progress every 40 to 100 ms, and
+                    // dirtying the record per event would autosave and invalidate every observer.
                     publishProgress(progress, episodeID: episode.episodeID)
                 case .checkpoint(let checkpoint):
                     checkpointEventCount += 1
@@ -1114,9 +1049,7 @@ final class EpisodeTranscriptionStore {
         }
     }
 
-    /// Whisper-perf G2: disk exhaustion during the audio spill. A lower
-    /// compute rung cannot free storage, so skip the retry ladder and
-    /// interrupt (resumable) directly.
+    /// A lower compute rung cannot free storage, so this skips the retry ladder.
     private func handleEnvironmentalStorageFailure(
         episodeID: String,
         relativePath: String?,
@@ -1159,8 +1092,7 @@ final class EpisodeTranscriptionStore {
             }
             recordFailureDiagnostics(error: error, record: record)
 
-            // The CoreML CPU-only retry is a whisper mechanism; Apple runs
-            // restart from zero instead.
+            // The CPU-only retry is a Whisper mechanism; an Apple Speech run restarts from zero.
             guard engine == .whisper, attemptedComputeProfile != .cpuOnly else {
                 markInterruptedAfterEnvironmentalFailure(
                     record: record,
@@ -1182,13 +1114,8 @@ final class EpisodeTranscriptionStore {
         }
     }
 
-    /// True while `record` is still the live, running row for this run. The
-    /// delete paths cancel the active task without awaiting it and leave the
-    /// active-run stamps in place, so `ownsActiveRun` alone cannot see that
-    /// the record was deleted (and its files swept) mid-run — persisting then
-    /// would read and mutate a deleted model and resurrect a swept transcript
-    /// file. `episodeID` is passed separately so a deleted `record` is never
-    /// read.
+    /// Delete paths cancel the run without awaiting it and leave its stamps, so `ownsActiveRun` alone
+    /// misses a record deleted mid-run. `episodeID` comes separately so a deleted record is never read.
     private func isPersistableRunRecord(
         _ record: EpisodeTranscriptRecord,
         episodeID: String,
@@ -1198,10 +1125,6 @@ final class EpisodeTranscriptionStore {
         return storedRecord === record && storedRecord?.state == .running
     }
 
-    /// Places a run's staged document only while the run still owns the live
-    /// record. A caller that ended the run without waiting for it (a restore,
-    /// a delete) has already settled the run's files, and a write that
-    /// comes back later must not undo that.
     private func placeStagedDocument(
         at stagedURL: URL,
         relativePath: String,
@@ -1335,13 +1258,6 @@ final class EpisodeTranscriptionStore {
         lastErrorEpisodeID = nil
     }
 
-    /// Narrow import path for remotely produced transcripts. Writes the
-    /// schema-3 document atomically at its remote fingerprint, upserts the
-    /// record with explicit remote provenance, preserves any prior completed
-    /// transcript until the new document has committed, and notifies the
-    /// existing UI. Remote jobs never touch the local run loop: the import
-    /// stands down for a local run of the episode, one admitted while its
-    /// document was being written included, and writes nothing.
     func importRemoteTranscript(
         _ document: EpisodeTranscriptDocument,
         modelContext: ModelContext
@@ -1415,10 +1331,6 @@ final class EpisodeTranscriptionStore {
         notifyEpisodeStateChanged(document.episodeID)
     }
 
-    /// A committed transcript supersedes the episode's other documents: the
-    /// prior one a replacement preserved, and any partial an earlier attempt
-    /// left for other bytes or another model. A cleanup failure never fails
-    /// the commit.
     private func deleteSupersededTranscriptDocuments(
         episodeID: String,
         keeping relativePath: String,
@@ -1540,8 +1452,7 @@ final class EpisodeTranscriptionStore {
             }
             recordFailureDiagnostics(error: error, record: record)
             if let snapshot = takePriorCompletedTranscriptSnapshot(for: episodeID) {
-                // The replacing run failed; the prior transcript comes back
-                // while the failure stays surfaced (the improve banner reads it).
+                // The prior transcript comes back while the failure stays surfaced.
                 try restore(
                     snapshot,
                     onto: record,
@@ -1624,8 +1535,6 @@ final class EpisodeTranscriptionStore {
         )
     }
 
-    /// Notes how the active run's cancellation stopped its replacement: as
-    /// a lifecycle interruption, or as a cancel.
     private func noteStoppedReplacement(episodeID: String) {
         guard !activeCancellationPreservesPartial else {
             noteInterruptedReplacement(episodeID: episodeID, isEnvironmental: activeInterruptionHoldsForAutoResume)
@@ -1657,10 +1566,7 @@ final class EpisodeTranscriptionStore {
         stateChanges.notify()
     }
 
-    /// Aborted replacing runs put the app back exactly as before the run: the
-    /// record is rewound to the preserved completed transcript and the
-    /// partial replacement document is discarded, unless the caller keeps it
-    /// (nil) for an interrupted Whisper replacement to resume from.
+    /// A nil `relativePath` keeps the partial for an interrupted Whisper replacement to resume from.
     private func restore(
         _ snapshot: PriorCompletedTranscriptSnapshot,
         onto record: EpisodeTranscriptRecord,
@@ -1749,12 +1655,9 @@ final class EpisodeTranscriptionStore {
         return duplicateGroups.count
     }
 
-    /// Collapses one episode's transcript records to a single survivor. The
-    /// ladder prefers a completed record whose document decodes and whose
-    /// source hash matches the episode's proven download; a survivor that
-    /// contradicts a proven download is kept but failed so stale timings are
-    /// never presented. Loser documents are removed immediately — losing is
-    /// deterministic, so an interrupted save re-runs the same collapse.
+    /// A survivor that contradicts the proven download is kept but failed, so stale timings are
+    /// never presented. Losers' documents go at once: the choice is deterministic, so an interrupted
+    /// save re-runs the same collapse.
     private func collapseDuplicateRecords(
         _ group: [EpisodeTranscriptRecord],
         subscribedFeedURLs: Set<String>,
@@ -1811,11 +1714,6 @@ final class EpisodeTranscriptionStore {
         return deletedRecords
     }
 
-    /// 4: completed, document decodes, hash matches the proven download.
-    /// 3: completed with a valid document and nothing to contradict it.
-    /// 2: completed with a valid document that contradicts the proven
-    ///    download — survives only when nothing better exists, and is failed.
-    /// 1: interrupted with a resumable whisper checkpoint. 0: everything else.
     private func repairScore(_ record: EpisodeTranscriptRecord, downloadHash: String?) -> Int {
         guard record.state == .completed,
               let relativePath = record.transcriptRelativePath,
@@ -1829,8 +1727,6 @@ final class EpisodeTranscriptionStore {
         return 3
     }
 
-    /// The one identity the episode's completed download proves, or nil when
-    /// there is no completed download or its rows disagree (mid-repair).
     private func provenDownloadHash(episodeID: String, modelContext: ModelContext) -> String? {
         let targetEpisodeID = episodeID
         let downloadRecords = (try? modelContext.fetch(
@@ -1872,8 +1768,7 @@ final class EpisodeTranscriptionStore {
         modelIdentity: EpisodeTranscriptionModelIdentity,
         engine: EpisodeTranscriptionEngine
     ) async -> (start: TimeInterval, document: EpisodeTranscriptDocument)? {
-        // Apple Speech restarts from zero; resume is a
-        // whisper-checkpoint mechanism.
+        // Apple Speech restarts from zero; resume is a Whisper checkpoint mechanism.
         guard engine == .whisper,
               let record,
               hasWhisperResumeMetadata(record),
@@ -1894,10 +1789,8 @@ final class EpisodeTranscriptionStore {
         return (checkpoint.completedDuration, document)
     }
 
-    /// An interrupted replacement restored the prior transcript onto the
-    /// record, so only the partial it left at this run's own fingerprint path
-    /// can say where to resume, and it is checked against what this run is
-    /// about to write instead of against the record.
+    /// The record holds the restored prior transcript, so only the partial at this run's path can
+    /// say where to resume, checked against what this run will write.
     private func resumableInterruptedReplacementState(
         at relativePath: String,
         expecting expectation: WhisperResumeExpectation,
@@ -2058,9 +1951,8 @@ final class EpisodeTranscriptionStore {
         let episodeID = record.episodeID
         let snapshot = searchIndexSnapshot(for: record)
         if snapshot == nil {
-            // Non-completed state commits (progress checkpoints, failures of
-            // never-indexed episodes) would otherwise enqueue a remove for an
-            // episode the index has never seen.
+            // Otherwise every progress checkpoint would enqueue a remove for an episode the index has
+            // never seen.
             guard searchIndexCandidateEpisodeIDs.contains(episodeID) else {
                 return
             }
@@ -2093,8 +1985,7 @@ final class EpisodeTranscriptionStore {
                 }
             } catch is CancellationError {
             } catch {
-                // This is a fully derived index. Canonical transcript state
-                // remains authoritative and the next load reconciles it.
+                // A derived index: the next load reconciles it.
             }
         }
     }
@@ -2116,9 +2007,7 @@ final class EpisodeTranscriptionStore {
             return
         }
         Task { [weak self] in
-            // A rebuild restores metadata from `episode_cache` but cannot
-            // read transcript sidecars; re-reconcile so transcript documents
-            // repopulate without waiting for the next launch.
+            // A rebuild restores metadata from `episode_cache` but cannot read transcript sidecars.
             await store.setEpisodeSearchIndexRebuildHandler {
                 self?.scheduleEpisodeSearchIndexReconciliation()
             }
@@ -2290,10 +2179,8 @@ final class EpisodeTranscriptionStore {
         onEpisodeStateChanged?(episodeID)
     }
 
-    /// Full document rewrites land on checkpoints 1, 6, 11, … — a rewrite is
-    /// the entire cumulative document (~20 MB total writes for a 1 h episode
-    /// when written every checkpoint), and the throttled tail is bounded by
-    /// the terminal flush.
+    /// A rewrite is the whole cumulative document: about 20 MB of writes for a one-hour episode when
+    /// every checkpoint writes.
     static let checkpointDocumentWriteInterval = 5
 
     private static let minimumProgressPublicationInterval: TimeInterval = 0.5
@@ -2315,8 +2202,6 @@ final class EpisodeTranscriptionStore {
         lastProgressPublicationByEpisodeID[episodeID] = nil
     }
 
-    /// Whether the run may still act on the store: it is the active run and
-    /// no restore has ended it early.
     private func ownsActiveRun(episodeID: String, runID: UUID) -> Bool {
         isActiveRun(episodeID: episodeID, runID: runID) && !activeRunEndedByRestore
     }
@@ -2353,8 +2238,6 @@ private struct EpisodeSearchIndexDocumentSnapshot: Sendable {
     let relativePath: String
 }
 
-/// What a Whisper partial must describe for a run to resume from it: the
-/// interrupted record's values, or the values a run is about to write.
 private struct WhisperResumeExpectation {
     let episodeID: String
     let podcastID: String
@@ -2402,8 +2285,6 @@ private struct WhisperResumeExpectation {
         self.audioDuration = audioDuration
     }
 
-    /// The checkpoint to resume from, or nil when the document describes
-    /// other audio, another model or language, or holds no usable checkpoint.
     func lastResumableCheckpoint(of document: EpisodeTranscriptDocument) -> EpisodeTranscriptCheckpoint? {
         guard document.schemaVersion > 0,
               document.schemaVersion <= EpisodeTranscriptDocument.currentSchemaVersion,
@@ -2432,11 +2313,8 @@ private struct WhisperResumeExpectation {
     }
 }
 
-/// In-memory image of a completed transcript record taken before a
-/// preserving run (Improve, or the ad-free pass's replacement) rewrites the
-/// single per-episode record in place. Lost on force-quit (documented edge:
-/// the record then relaunches interrupted on the partial replacement; a
-/// Whisper one resumes from its checkpoint, an Apple Speech one restarts).
+/// In memory only: after a force-quit the record relaunches interrupted on the partial
+/// replacement.
 private struct PriorCompletedTranscriptSnapshot {
     let episodeID: String
     let modelIdentifier: String

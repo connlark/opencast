@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// A show's artwork and title, with an optional summary line, as the
-/// per-show rows in Settings lead with them.
 struct SettingsShowLabel: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -13,8 +11,6 @@ struct SettingsShowLabel: View {
         appModel.library.podcastCache(for: subscription.feedURL)
     }
 
-    /// Accessibility sizes put the artwork above the text, which then has
-    /// the row's full width.
     var body: some View {
         let layout = dynamicTypeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))

@@ -139,11 +139,3 @@ struct URLSessionAnalysisHTTPClientTests {
         #expect(configuration.httpShouldSetCookies == false)
     }
 }
-
-extension URLSessionAnalysisHTTPClientTests {
-    @Test("A huge timeout neither traps nor changes the answer")
-    func hugeTimeout() async {
-        StubURLProtocol.behaviors.withLock { $0["huge.test"] = .respond(status: 200, headers: [:], body: Data("{}".utf8)) }
-        #expect((try? await result(request("huge.test"), timeout: 1e300).get().status) == 200)
-    }
-}

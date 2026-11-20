@@ -1,9 +1,5 @@
 import SwiftUI
 
-/// Glass status card for the remote transcription flow on episode detail:
-/// live phase with Cancel while a request runs, Resume (and Cancel) while
-/// the job is parked on the server, and a visible terminal state with Try
-/// Again and the on-device fallback when it ends without a transcript.
 struct RemoteTranscriptionStatusCard: View {
     let presentation: RemoteTranscriptionStatusPresentation
     let onTranscribeLocally: () -> Void

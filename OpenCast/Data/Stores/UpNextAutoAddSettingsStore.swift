@@ -2,13 +2,7 @@ import Foundation
 import Observation
 import SwiftData
 
-/// The device-local half of Auto Add to Up Next: each show's release
-/// watermark, the Auto Add Limit and the If Limit Reached rule. Whether a
-/// show is on, and at which position, is the synced subscription value read
-/// through `LibraryStore`, so nothing here gates on it. Loads and saves run
-/// in their own short-lived context, as in `DownloadSettingsStore`, and
-/// published values change only after a save succeeds. The store never
-/// queues anything.
+/// Published values change only after a save succeeds.
 @Observable
 final class UpNextAutoAddSettingsStore {
     static let watermarkKeyPrefix = "upNext.autoAddWatermark."
@@ -24,7 +18,6 @@ final class UpNextAutoAddSettingsStore {
 
     @ObservationIgnored private let save: (ModelContext) throws -> Void
 
-    /// `save` is the test seam for preference saves.
     init(save: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
         self.save = save
     }
@@ -66,21 +59,16 @@ final class UpNextAutoAddSettingsStore {
         }
     }
 
-    /// Episodes released after this instant are the show's candidates. Nil
-    /// until the show is turned on on this device, or when its row is
-    /// missing.
     func watermark(forPodcastID podcastID: String) -> Date? {
         watermarksByPodcastID[podcastID]
     }
 
-    /// The shows with a loaded watermark; read only by the pass.
     var watermarkPodcastIDs: Set<String> {
         Set(watermarksByPodcastID.keys)
     }
 
-    /// A failure is reported, but success leaves any user-facing message
-    /// alone: a pass runs on its own and must not clear an error the user
-    /// has not read yet.
+    /// Success leaves `lastErrorMessage` alone: a pass runs on its own and must not clear an
+    /// error the user has not read yet.
     @discardableResult
     func setWatermark(
         _ watermark: Date,
@@ -117,8 +105,6 @@ final class UpNextAutoAddSettingsStore {
         return true
     }
 
-    /// Deletes every listed show's row in one save. As with `setWatermark`,
-    /// success leaves an unread message alone: the pass calls it on its own.
     @discardableResult
     func removeWatermarks(forPodcastIDs podcastIDs: Set<String>, modelContext: ModelContext) -> Bool {
         guard !podcastIDs.isEmpty else {
@@ -191,9 +177,7 @@ final class UpNextAutoAddSettingsStore {
         return podcastID.isEmpty ? nil : podcastID
     }
 
-    /// Writes each value, or deletes every row for a key whose value is nil,
-    /// in one save. With nothing to delete or write there is no save, so
-    /// removing a row that is not there succeeds even when saves fail.
+    /// No changes means no save, so removing a missing row succeeds even when saves fail.
     private func persist(
         _ changes: [(key: String, value: String?)],
         modelContext: ModelContext,

@@ -1,9 +1,6 @@
 import Foundation
 import Observation
 
-/// The install's last trial status, kept for an hour (and across launches)
-/// so route resolution asks the trial service at most hourly. Every status
-/// it reads is published to `onStatus`, which feeds the key notice.
 @Observable
 final class AnalysisTrialStatusCache {
     static let timeToLive: TimeInterval = 60 * 60
@@ -32,8 +29,6 @@ final class AnalysisTrialStatusCache {
         }
     }
 
-    /// The status, from the cache when younger than an hour and not forced;
-    /// `nil` when it could not be read.
     func status(forceRefresh: Bool) async -> AnalysisTrialProxyStatus? {
         if !forceRefresh, let status, let fetchedAt, now().timeIntervalSince(fetchedAt) < Self.timeToLive, fetchedAt.timeIntervalSinceReferenceDate <= now().timeIntervalSinceReferenceDate {
             return status
@@ -48,7 +43,6 @@ final class AnalysisTrialStatusCache {
         return fetched
     }
 
-    /// Forgets the cached status (Delete Data).
     func reset() {
         status = nil
         fetchedAt = nil

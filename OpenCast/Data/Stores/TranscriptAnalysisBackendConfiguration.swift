@@ -85,10 +85,7 @@ struct TranscriptAnalysisBackendConfiguration: Sendable {
         isEnabled: true
     )
 
-    /// Release lane routing (RTW precedent): production StoreKit → the
-    /// production worker; Sandbox/Xcode (TestFlight) → prod-staging so
-    /// sandbox purchases exercise prod-staging billing end-to-end; unknown →
-    /// disabled (fail closed — never guess a money lane).
+    /// Sandbox and TestFlight installs bill on prod-staging; an unknown lane fails closed.
     nonisolated static func release(
         for environment: RemoteTranscriptionStoreEnvironment
     ) -> Self {
@@ -102,17 +99,14 @@ struct TranscriptAnalysisBackendConfiguration: Sendable {
         }
     }
 
-    /// Fail-closed configuration for unresolved release environments and
-    /// tests.
     nonisolated static let disabled = Self(
         workerBaseURL: defaultDebugWorkerBaseURL,
         authentication: .appAttest(keychainService: TranscriptAnalysisAppAttestKeychainServices.development),
         isEnabled: false
     )
 
-    /// Release lanes all authenticate with App Attest, so the synchronous
-    /// start-gate message is lane-independent; the concrete lane resolves
-    /// per-request in `TranscriptAnalysisRoutedAPIClient`.
+    /// Every release lane authenticates with App Attest, so this message does not depend on
+    /// the lane.
     static var releaseAnalysisUnavailableMessage: String? {
         production.analysisUnavailableMessage
     }

@@ -1,6 +1,4 @@
-/// One server-catalog entry: a consumable product and the exact seconds it
-/// grants. The mapping is immutable per SKU; drift between this and the
-/// app's embedded catalog is a fail-closed condition.
+/// Immutable per SKU; drift from the app's embedded catalog fails closed.
 public struct OpenCastRemoteTranscriptionCatalogProduct: Codable, Sendable, Equatable, Hashable {
     public var productID: String
     public var grantSeconds: Int64

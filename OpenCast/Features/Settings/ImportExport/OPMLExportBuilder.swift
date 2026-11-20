@@ -20,7 +20,7 @@ enum OPMLExportBuilder {
     }
 
     static func feedReferences(from subscriptions: [SubscriptionRecord]) -> [OPMLFeedReference] {
-        // Keep this helper defensive for tests and synthetic callers that pass unsanitized rows.
+        // Defensive: a caller can pass unsanitized rows.
         var seenCanonicalFeedURLs: Set<String> = []
         var references: [OPMLFeedReference] = []
 

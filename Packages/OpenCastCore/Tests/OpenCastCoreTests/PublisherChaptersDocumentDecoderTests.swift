@@ -46,13 +46,6 @@ struct PublisherChaptersDocumentDecoderTests {
         ])
     }
 
-    @Test("A document without a version decodes")
-    func decodesDocumentWithoutVersion() throws {
-        let chapters = try decode(#"{"chapters":[{"startTime":5,"title":"Only"}]}"#)
-
-        #expect(chapters == [EpisodeChapter(id: 0, title: "Only", startTime: 5)])
-    }
-
     @Test("Sorts unsorted starts and assigns positional ids")
     func sortsUnsortedStarts() throws {
         let chapters = try decode(

@@ -19,8 +19,7 @@ nonisolated enum NetworkPathObserver {
         }
     }
 
-    /// The current path: a started monitor reports it at once. Cancellation
-    /// ends the wait with `.unavailable`.
+    /// A started monitor reports the current path at once.
     static func currentPath() async -> NetworkPathSnapshot {
         for await path in pathUpdates() {
             return path

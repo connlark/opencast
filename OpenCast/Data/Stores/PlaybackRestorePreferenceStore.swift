@@ -2,20 +2,14 @@ import Foundation
 import SwiftData
 import os
 
-/// Device-local memory of the last-played episode and the playlist it was
-/// playing from — the keys launch restore reads. Lives in
-/// `LocalPreferenceRecord` with the rest of the wipeable local state.
 final class PlaybackRestorePreferenceStore {
     private static let logger = Logger(subsystem: "com.connor.opencast", category: "PlaybackRestoreState")
     static let episodeIDKey = "playback.lastEpisodeID"
     static let sourcePlaylistIDKey = "playback.currentSourcePlaylistID"
-    // The periodic flush calls remember every tick; the remembered pair makes
-    // the unchanged tick a pure no-op instead of a refetch plus a guaranteed
-    // dirty save. A nil source inside the pair means its row is known absent.
+    // Makes an unchanged pair a no-op on every flush tick. A nil source means its row is absent.
     private var rememberedPair: (episodeID: String, sourcePlaylistID: String?)?
-    // A failed save leaves its edits pending in the shared context, so the
-    // next tick's upsert sees them as current and reports no change; this
-    // flag makes that tick retry the save instead of marking the pair saved.
+    // A failed save leaves its edits pending in the shared context, so the next upsert reports no
+    // change; this makes that tick retry the save instead of marking the pair saved.
     private var hasUnsavedChanges = false
 
     func storedEpisodeID(modelContext: ModelContext) -> String? {
@@ -26,8 +20,6 @@ final class PlaybackRestorePreferenceStore {
         preferences(forKey: Self.sourcePlaylistIDKey, modelContext: modelContext).first?.value.trimmedNonEmpty
     }
 
-    /// Writes both keys; a nil source deletes its row rather than storing an
-    /// empty value.
     func remember(_ episodeID: String, sourcePlaylistID: String?, modelContext: ModelContext) {
         let sourcePlaylistID = sourcePlaylistID?.trimmedNonEmpty
         if let rememberedPair,

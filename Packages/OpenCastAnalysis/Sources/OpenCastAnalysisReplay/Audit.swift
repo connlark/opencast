@@ -2,10 +2,7 @@ import Foundation
 import OpenCastAnalysis
 import OpenCastAnalysisProviders
 
-/// `audit`: how the recorder sink would treat existing artifacts with the
-/// given keys registered, as counts only. Measures how often the 4-scalar
-/// fragment check flags provider text that holds no key (its false
-/// positives). Never prints a key, a fragment or any artifact text.
+/// Prints counts only: never a key, a fragment or any artifact text.
 struct Audit {
     let arguments: Arguments
 
@@ -53,8 +50,7 @@ struct Audit {
                             walk(member.value)
                         }
                     case .tooDeepContainer:
-                        // Nested past the parser's limit: syntax-checked but not kept,
-                        // so its text cannot be inspected.
+                        // Its text was not kept, so it cannot be shown clean.
                         flagged += 1
                         add("strings_flagged_bound")
                     case .null, .bool, .number, .unpairedSurrogateString, .unrepresentableNumber:

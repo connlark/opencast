@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// One conversation row: the listener's question right-aligned, the
-/// assistant's answer (streaming, validated, or failed) left-aligned.
 struct TranscriptAskMessageRow: View {
     let message: TranscriptAskMessage
     let onSeek: (TranscriptAskCitation) -> Void

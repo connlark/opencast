@@ -1,7 +1,3 @@
-/// What the Downloads storage bar draws: completed downloads by show,
-/// largest first. Up to six shows each get a segment; past six, the five
-/// largest keep theirs and the rest share Other, so every segment stays wide
-/// enough to see and to number.
 struct DownloadsStorageGraphModel {
     static let maximumSegmentCount = 6
 
@@ -9,7 +5,6 @@ struct DownloadsStorageGraphModel {
     let totalByteCount: Int64
     let totalEpisodeCount: Int
 
-    /// The bar's VoiceOver value: "Show A, 45 percent, 1.2 GB; …".
     var accessibilitySummary: String {
         segments.map { segment in
             let name = segment.isOther ? "\(segment.members.count) other shows" : segment.title
@@ -70,9 +65,7 @@ struct DownloadsStorageGraphModel {
         )
     }
 
-    /// Segment widths for a bar `totalWidth` wide: each segment gets
-    /// `minimumWidth`, and the rest of the bar is shared by fraction, so the
-    /// widths always fill the bar exactly.
+    /// `fractions` must sum to 1 for the widths to fill the bar.
     static func segmentWidths(
         fractions: [Double],
         totalWidth: Double,
@@ -98,7 +91,6 @@ struct DownloadsStorageGraphModel {
         return comparison == .orderedSame ? lhs.podcastID < rhs.podcastID : comparison == .orderedAscending
     }
 
-    /// "45 percent"; a sliver reads "less than 1 percent" rather than zero.
     private static func percentText(_ fraction: Double) -> String {
         let percent = Int((fraction * 100).rounded())
         return percent == 0 && fraction > 0 ? "less than 1 percent" : "\(percent) percent"

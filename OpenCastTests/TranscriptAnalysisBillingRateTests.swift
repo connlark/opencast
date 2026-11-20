@@ -19,11 +19,6 @@ struct TranscriptAnalysisBillingRateTests {
 
     @Test("Client rate pins the shared worker fixture")
     func clientRatePinsSharedWorkerFixture() throws {
-        // The worker's host suite pins the same file against its constant
-        // (`billing.rs::rate_matches_shared_client_fixture`), so an H11 rate
-        // change must touch the fixture — which fails both suites until both
-        // constants follow. Display drift can mis-display but never
-        // mis-charge; this pin exists so it can't happen silently.
         let fixtureURL = URL(filePath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()

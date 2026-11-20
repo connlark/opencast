@@ -1,6 +1,3 @@
-/// One-time confirmation before the first Recap or Ask request, recorded like
-/// the Chapters & Summary disclosure. The body states the whole data path so
-/// the sheets never need to repeat it.
 enum TranscriptIntelligenceDisclosureCopy {
     nonisolated static let title = "Use Apple Intelligence?"
     nonisolated static let confirmButtonTitle = "Continue"

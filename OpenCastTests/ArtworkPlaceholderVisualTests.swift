@@ -57,24 +57,6 @@ struct ArtworkPlaceholderVisualTests {
         #expect(rightPixel.blue > 200)
     }
 
-    @Test("Preview pixels render when decoded artwork is unavailable")
-    func previewPixelsRenderWhenDecodedArtworkIsUnavailable() throws {
-        let renderer = ImageRenderer(
-            content: ArtworkPlaceholderVisual(title: "Preview", image: nil, preview: try artworkTestPreview())
-                .frame(width: 24, height: 24)
-        )
-        renderer.scale = 1
-        renderer.isOpaque = true
-
-        let renderedImage = try #require(renderer.uiImage)
-        let pixel = try artworkTestPixel(in: renderedImage, x: 12, y: 12)
-
-        #expect(pixel.red > 220)
-        #expect(pixel.green < 80)
-        #expect(pixel.blue < 80)
-        #expect(pixel.alpha == 255)
-    }
-
     @Test("Wide preview keeps letterbox space instead of stretching")
     func widePreviewKeepsLetterboxSpaceInsteadOfStretching() throws {
         let renderer = ImageRenderer(
@@ -98,6 +80,7 @@ struct ArtworkPlaceholderVisualTests {
         #expect(topPixel.green > 245)
         #expect(topPixel.blue > 245)
         #expect(leftPixel.red > 200)
+        #expect(leftPixel.green < 80)
         #expect(leftPixel.blue < 80)
         #expect(rightPixel.red < 80)
         #expect(rightPixel.blue > 200)

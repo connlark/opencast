@@ -5,13 +5,6 @@ import SwiftData
 import Testing
 @testable import OpenCast
 
-/// The recovery rows the runner and plain coordinator own, driven by the
-/// fixture catalog's fault scripts: a create that never leaves or loses its
-/// response keeps the same client request ID, only a user cancel reaches
-/// `/cancel` (exactly once, after an in-flight create has attached), every
-/// transport or local give-up keeps the attached reference for Resume, and
-/// `acknowledged` reconciles against local provenance instead of rendering
-/// as a server rejection.
 @MainActor
 @Suite("Remote transcription recovery", .serialized)
 struct EpisodeRemoteTranscriptionRecoveryTests {
@@ -56,7 +49,6 @@ struct EpisodeRemoteTranscriptionRecoveryTests {
             .init(leg: .create, clientRequestID: reference.clientRequestID, jobID: nil, reachedServer: false, responseDelivered: false),
         ])
 
-        // Try Again repeats the same ID; the server mints exactly one job.
         try await runUntilAttached(environment)
         #expect(environment.reference()?.jobID == "job-fake-1")
         #expect(environment.reference()?.clientRequestID == reference.clientRequestID)
@@ -229,7 +221,6 @@ struct EpisodeRemoteTranscriptionRecoveryTests {
         #expect(retained.jobID == "job-fake-1")
         #expect(environment.diagnostics.containsInOrder([.userCancelRequested, .cancelUncertain]))
 
-        // The persisted intent is never re-attached as an active job.
         let pollsBefore = api.pollCalls.count
         #expect(environment.coordinator.start(episode: environment.episode, modelContext: environment.context)
             == .rejected("The previous remote transcription is still being cancelled."))
@@ -238,7 +229,6 @@ struct EpisodeRemoteTranscriptionRecoveryTests {
         }
         #expect(api.pollCalls.count == pollsBefore)
 
-        // The next recovery trigger retries the same intent exactly once.
         let resolution = await environment.runner.cancelServerJob(episodeID: environment.episode.episodeID, purpose: .transcription)
         #expect(resolution == .cancelled(jobID: "job-fake-1"))
         #expect(api.cancelCalls.count == 2)
@@ -270,7 +260,6 @@ struct EpisodeRemoteTranscriptionRecoveryTests {
         #expect(!presentation.isTerminalFailure)
         #expect(environment.diagnostics.containsInOrder([.createAttached, .legFailed, .parked]))
 
-        // Resume re-attaches the same job and polls it again.
         let createsBefore = api.createCalls.count
         environment.coordinator.resume(episode: environment.episode, modelContext: environment.context)
         #expect(await waitUntil { api.createCalls.count == createsBefore + 1 && api.pollCalls.last?.jobID == "job-fake-1" })
@@ -433,7 +422,6 @@ struct EpisodeRemoteTranscriptionRecoveryTests {
 
     @Test("A bootstrap give-up on a re-run is judged by the persisted create state, so an attached job parks as connectionLost")
     func bootstrapGiveUpOnResumeParksByPersistedCreateState() async throws {
-        // Attached: park a live run, then lose the network before Resume's bootstrap.
         let attachedAPI = RemoteJobFaultInjectingAPI(
             pollScript: [OpenCastRemoteTranscriptionJobStatus(jobID: "", state: .transcribing)]
         )
@@ -581,8 +569,7 @@ struct EpisodeRemoteTranscriptionRecoveryTests {
         )
     }
 
-    /// Runs the episode until its reference is attached, then cancels the
-    /// local task (a park, never a server decision).
+    /// Cancelling the local task parks the run; it never cancels the server job.
     private func runUntilAttached(_ environment: Environment) async throws {
         let task = Task { try await run(environment) }
         #expect(await waitUntil { environment.reference()?.createState == .attached })

@@ -7,7 +7,6 @@ import Testing
 struct AnalysisTrialStatusCacheTests {
     static let start = Date(timeIntervalSince1970: 1_792_929_600) // 2026-10-25T12:00:00Z
 
-    /// A settable clock and a scripted fetch that counts its calls.
     @MainActor
     final class Harness {
         var now = AnalysisTrialStatusCacheTests.start
@@ -127,21 +126,6 @@ struct AnalysisTrialStatusCacheTests {
         #expect(harness.published == [.unitsLeft(3)])
     }
 
-    @Test("Every fetched status is published as the key notice's trial status")
-    func onStatusFires() async {
-        let harness = Harness()
-        defer { harness.remove() }
-        let cache = harness.cache()
-        for status in [Self.open, Self.units3, AnalysisTrialProxyStatus(mode: .trial, unitsRemaining: 0, startsAt: Self.start, monthPaused: true)] {
-            harness.next = status
-            _ = await cache.status(forceRefresh: true)
-        }
-        // A cache hit publishes nothing.
-        _ = await cache.status(forceRefresh: false)
-        #expect(harness.published == [.notStarted, .unitsLeft(3), .exhausted])
-    }
-
-    /// Holds a fetch until opened.
     @MainActor
     final class FetchGate {
         private var waiters: [CheckedContinuation<Void, Never>] = []

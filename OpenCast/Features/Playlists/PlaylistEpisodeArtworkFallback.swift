@@ -1,7 +1,5 @@
 import Foundation
 
-/// Playlist items keep their artwork after the show leaves the library,
-/// so an episode without its own artwork is filed with the show's.
 nonisolated enum PlaylistEpisodeArtworkFallback {
     static func episode(
         _ episode: EpisodeListItemSnapshot,

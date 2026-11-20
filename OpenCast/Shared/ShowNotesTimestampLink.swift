@@ -1,8 +1,7 @@
 import Foundation
 
-/// In-process link target for show-notes timestamps. The scheme never
-/// leaves the app: `EpisodeShowNotesView` intercepts it through
-/// `OpenURLAction` before the system URL router sees it.
+/// The scheme never leaves the app: an `OpenURLAction` intercepts it before the system URL
+/// router sees it.
 enum ShowNotesTimestampLink {
     nonisolated private static let scheme = "opencast-shownotes"
     nonisolated private static let host = "seek"

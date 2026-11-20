@@ -1,9 +1,6 @@
 import OpenCastTranscription
 import SwiftUI
 
-/// Remote transcription balance + store. The section is always discoverable;
-/// unresolved StoreKit identity provides a retry action, while actual remote
-/// and purchase actions remain gated.
 struct SettingsRemoteTranscriptionSection: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @State private var retryRequestID: UUID?

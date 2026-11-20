@@ -65,11 +65,8 @@ struct DownloadsListModel {
         )
     }
 
-    /// Item IDs are episode IDs, so every row must be unique per episode even
-    /// when persisted records violate that invariant (`DownloadStore` repairs
-    /// them at load; this is the last fence before `ForEach`/selection). The
-    /// survivor is chosen by an explicit ladder, never by fetch order, so the
-    /// same rows always render the same list.
+    /// Row IDs are episode IDs, so duplicate records collapse to one row per episode, chosen
+    /// by a fixed ladder rather than fetch order so the same records render the same list.
     private static func uniquedByEpisodeID(_ records: [EpisodeDownloadRecord]) -> [EpisodeDownloadRecord] {
         var winnersByEpisodeID: [String: EpisodeDownloadRecord] = [:]
         for record in records {

@@ -18,10 +18,8 @@ nonisolated final class SharedNowPlayingArtworkLoader: NowPlayingArtworkLoading,
     ) {
         self.artworkLoader = artworkLoader
         self.targetPixelSize = targetPixelSize
-        // The entries wrap the same UIImage instances as ArtworkLoader's
-        // capped memory cache — the cost bounded here is lifetime extension
-        // past that cache's eviction (~4 MB per 1024×1024 entry), with the
-        // count limit kept as belt.
+        // Entries share UIImage instances with ArtworkLoader's memory cache, so this bounds only
+        // how long they outlive its eviction (about 4 MB per 1024x1024 entry).
         cache.countLimit = 16
         cache.totalCostLimit = 32 * 1_024 * 1_024
 
@@ -43,9 +41,8 @@ nonisolated final class SharedNowPlayingArtworkLoader: NowPlayingArtworkLoading,
             return cachedArtwork
         }
 
-        // Only a decode that reaches the Now Playing pixel size qualifies. A
-        // thumbnail cached by a list row would otherwise pin a low-resolution
-        // bitmap to the lock screen for the rest of the session.
+        // A list row's cached thumbnail would otherwise pin a low-resolution bitmap to the lock
+        // screen for the rest of the session.
         guard let image = artworkLoader.imageMeetingSize(for: request) else {
             return nil
         }

@@ -191,9 +191,8 @@ enum AVFoundationPlaybackDiagnosticsFormatter {
         }
     }
 
-    /// Reported from the live item's asset, never episode metadata: the two
-    /// can only be proven equal by reading the item, which is the point of
-    /// this line in a source-identity report.
+    /// Read from the live item's asset, never episode metadata: only the item proves what is
+    /// loaded.
     private static func sourceModeDescription(for item: AVPlayerItem?) -> String {
         guard let asset = item?.asset as? AVURLAsset else {
             return "nil"

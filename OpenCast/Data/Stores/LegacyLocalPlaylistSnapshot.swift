@@ -1,7 +1,5 @@
 import Foundation
 
-/// The playlists an earlier build kept in the device-local store, read as
-/// plain values before the container opens.
 nonisolated struct LegacyLocalPlaylistSnapshot: Equatable, Sendable {
     nonisolated struct Playlist: Equatable, Sendable {
         var playlistID: String

@@ -1,7 +1,3 @@
-/// Body of `jobs/{id}/upload/start`: opens (or idempotently resumes) the
-/// exact-device multipart upload and returns the first bounded batch of
-/// presigned part URLs. `forBackground` requests the longer bounded URL
-/// expiry for background-enqueued parts.
 public struct OpenCastRemoteTranscriptionUploadStartRequest: Codable, Sendable, Equatable {
     public var schemaVersion: Int
     public var forBackground: Bool?

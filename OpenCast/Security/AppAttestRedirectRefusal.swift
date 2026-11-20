@@ -1,8 +1,6 @@
 import Foundation
 
-/// Refuses every redirect of a capped App Attest read, so an envelope only
-/// ever reaches the URL it was built for. (The completion-handler form of
-/// the delegate method, as the provider client uses.)
+/// An envelope must only ever reach the URL it was built for.
 nonisolated final class AppAttestRedirectRefusal: NSObject, URLSessionTaskDelegate, Sendable {
     func urlSession(
         _ session: URLSession,

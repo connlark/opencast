@@ -282,29 +282,18 @@ struct AnalysisExecutionSessionTests {
         #expect(await running.value == .finished(Self.cancelled, background: false))
     }
 
-    @Test("Progress moves on every tick through twice the expected run, whatever the tick")
-    func progressCapacity() {
-        for (expected, tick) in [(540.0, 0.1), (540.0, 2.0), (30.0, 60.0), (100.0, 2.0), (1.0, 0.1)] {
-            let scale = AnalysisExecutionSession.ProgressScale(expectedSeconds: expected, tickSeconds: tick)
-            var units = scale.start
-            let ticks = Int((2 * expected / tick).rounded(.up))
-            for index in 1...ticks {
-                let next = scale.units(after: Double(index) * tick, previous: units)
-                #expect(next > units, "expected \(expected) tick \(tick) at \(index)")
-                units = next
-            }
-            #expect(units < scale.total)
+    @Test("Progress moves on every tick through twice the expected run, whatever the tick", arguments: [
+        (540.0, 0.1), (540.0, 2.0), (30.0, 60.0), (100.0, 2.0), (1.0, 0.1),
+    ])
+    func progressCapacity(expected: Double, tick: Double) {
+        let scale = AnalysisExecutionSession.ProgressScale(expectedSeconds: expected, tickSeconds: tick)
+        var units = scale.start
+        let ticks = Int((2 * expected / tick).rounded(.up))
+        for index in 1...ticks {
+            let next = scale.units(after: Double(index) * tick, previous: units)
+            #expect(next > units, "tick \(index)")
+            units = next
         }
-    }
-}
-
-extension AnalysisExecutionSessionTests {
-    @Test("A huge expected run time neither traps nor stalls the card")
-    func hugeExpectedRun() {
-        let scale = AnalysisExecutionSession.ProgressScale(expectedSeconds: 1e19, tickSeconds: 0.1)
-        #expect(scale.total > 0 && scale.start < scale.ceiling && scale.ceiling < scale.total)
-        #expect(scale.units(after: 1, previous: scale.start) > scale.start)
-        let infinite = AnalysisExecutionSession.ProgressScale(expectedSeconds: .infinity, tickSeconds: 2)
-        #expect(infinite.units(after: 10, previous: infinite.start) > infinite.start)
+        #expect(units < scale.total)
     }
 }

@@ -1,7 +1,6 @@
 import Foundation
 
-/// Bounds XMLParser's input before it can accumulate a giant CDATA/comment or
-/// attribute token internally. Foundation still owns XML syntax and encoding.
+/// Caps token size before XMLParser can buffer a giant CDATA, comment or attribute token.
 final class FeedXMLInputStream: InputStream {
     private static let cdataOpener = Array("<![CDATA[".utf8)
     private static let commentOpener = Array("<!--".utf8)

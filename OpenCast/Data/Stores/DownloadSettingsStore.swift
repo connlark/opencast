@@ -2,22 +2,14 @@ import Foundation
 import Observation
 import SwiftData
 
-/// Device-local download preferences: each show's Download New Episodes
-/// opt-in and its watermark, each show's Detect Ads in New Episodes opt-in
-/// and the downloads it still owes a scan, each show's Keep Downloaded
-/// choice, and the default limit, the Wi-Fi rule and the Downloads list
-/// grouping. Loads and saves run in their own short-lived context, as in
-/// `LibraryDisplaySettingsStore`, and published values change only after a
-/// save succeeds. The store never trims, downloads or queues; the app model
-/// acts after a setter returns.
+/// Published values change only after their save succeeds.
 @Observable
 final class DownloadSettingsStore {
     static let autoDownloadKeyPrefix = "downloads.autoDownloadNewEpisodes."
     static let autoDownloadWatermarkKeyPrefix = "downloads.autoDownloadWatermark."
     static let keepLimitKeyPrefix = "downloads.keepLimit."
     static let detectAdsInNewEpisodesKeyPrefix = "downloads.detectAdsInNewEpisodes."
-    /// One row per episode, keyed by episode ID, valued with its show's
-    /// podcast ID.
+    /// Keyed by episode ID; the value is the show's podcast ID.
     static let detectAdsPendingKeyPrefix = "downloads.detectAdsPending."
     static let defaultKeepLimitPreferenceKey = "downloads.defaultKeepLimit"
     static let autoDownloadsWiFiOnlyPreferenceKey = "downloads.autoDownloadsWiFiOnly"
@@ -31,14 +23,11 @@ final class DownloadSettingsStore {
     private(set) var listGrouping = DownloadsListGrouping.flat
     private(set) var lastErrorMessage: String?
     private var keepLimitOverridesByPodcastID: [String: DownloadKeepLimit] = [:]
-    // Read only by the automatic download pass, never by a view.
     @ObservationIgnored private var watermarksByPodcastID: [String: Date] = [:]
-    // Read only by the new-episode ad detection trigger, never by a view.
     @ObservationIgnored private(set) var detectAdsPendingPodcastIDsByEpisodeID: [String: String] = [:]
 
     @ObservationIgnored private let save: (ModelContext) throws -> Void
 
-    /// `save` is the test seam for preference saves.
     init(save: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
         self.save = save
     }
@@ -111,14 +100,11 @@ final class DownloadSettingsStore {
         autoDownloadPodcastIDs.contains(podcastID)
     }
 
-    /// Episodes released after this instant are the show's automatic
-    /// download candidates. Nil while the show is off, or when its watermark
-    /// row is missing.
+    /// Episodes released after this instant are the show's download candidates.
     func autoDownloadWatermark(forPodcastID podcastID: String) -> Date? {
         watermarksByPodcastID[podcastID]
     }
 
-    /// The show's own Keep Downloaded choice; nil follows the default.
     func keepLimitOverride(forPodcastID podcastID: String) -> DownloadKeepLimit? {
         keepLimitOverridesByPodcastID[podcastID]
     }
@@ -131,14 +117,10 @@ final class DownloadSettingsStore {
         detectAdsPodcastIDs.contains(podcastID)
     }
 
-    /// The show of a download still owed an ad scan; nil when none is owed.
     func detectAdsPendingPodcastID(forEpisodeID episodeID: String) -> String? {
         detectAdsPendingPodcastIDsByEpisodeID[episodeID]
     }
 
-    /// Turning a show on writes its flag and, when given, its watermark in
-    /// one save; turning it off deletes both rows, and Detect Ads in New
-    /// Episodes with the downloads it still owes a scan.
     @discardableResult
     func setAutoDownloadsNewEpisodes(
         _ isEnabled: Bool,
@@ -187,9 +169,6 @@ final class DownloadSettingsStore {
         return true
     }
 
-    /// Detect Ads in New Episodes needs Download New Episodes: a show that
-    /// is off can't turn it on. Turning it off deletes the flag and the
-    /// show's pending markers in one save.
     @discardableResult
     func setDetectsAdsInNewEpisodes(
         _ isEnabled: Bool,
@@ -225,10 +204,7 @@ final class DownloadSettingsStore {
         return true
     }
 
-    /// Records downloads owed an ad scan, each with its show's podcast ID,
-    /// keyed by episode ID. A show without Detect Ads in New Episodes gets
-    /// no marker. Like a watermark, a marker is written while no one is
-    /// looking, so a success leaves any unread message alone.
+    /// Runs unattended, so a success must not clear an error the user has not read yet.
     @discardableResult
     func addDetectAdsPendingMarkers(
         _ podcastIDsByEpisodeID: [String: String],
@@ -254,7 +230,6 @@ final class DownloadSettingsStore {
         return true
     }
 
-    /// Deletes the markers of these episodes in one save.
     @discardableResult
     func removeDetectAdsPendingMarkers(
         forEpisodeIDs episodeIDs: some Sequence<String>,
@@ -279,9 +254,7 @@ final class DownloadSettingsStore {
         return true
     }
 
-    /// Advances an enabled show's watermark. A failure is reported but
-    /// leaves any user-facing message alone on success: a pass runs on its
-    /// own, and must not clear an error the user has not read yet.
+    /// Runs unattended, so a success must not clear an error the user has not read yet.
     @discardableResult
     func setAutoDownloadWatermark(
         _ watermark: Date,
@@ -381,8 +354,6 @@ final class DownloadSettingsStore {
         return true
     }
 
-    /// Deletes the show's opt-ins, watermark, Keep Downloaded and pending
-    /// marker rows.
     @discardableResult
     func removePreferences(forPodcastID podcastID: String, modelContext: ModelContext) -> Bool {
         guard persist(
@@ -416,18 +387,12 @@ final class DownloadSettingsStore {
         detectAdsPendingPodcastIDsByEpisodeID = detectAdsPendingPodcastIDsByEpisodeID.filter { $0.value != podcastID }
     }
 
-    /// The show whose markers a save should delete: only one this store
-    /// loaded a marker for, so a listener without markers pays no fetch.
+    /// Nil when no marker for the show was loaded, which skips the marker fetch. A marker
+    /// this store never loaded is left for the new-episode trigger's sweep.
     private func loadedMarkersPodcastID(_ podcastID: String) -> String? {
         detectAdsPendingPodcastIDsByEpisodeID.values.contains(podcastID) ? podcastID : nil
     }
 
-    /// Writes each value, or deletes every row for a key whose value is nil,
-    /// in one save. Given a show, its pending markers are found by their
-    /// value and go too. A marker row this store never loaded is left to the
-    /// new-episode trigger's sweep once a load reads it: the sweep drops one
-    /// whose show no longer has the setting or whose download record is
-    /// gone.
     private func persist(
         _ changes: [(key: String, value: String?)],
         deletingPendingMarkersForPodcastID markerPodcastID: String? = nil,

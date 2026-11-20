@@ -1,4 +1,3 @@
-/// Content-free failure contract shared by direct and chained ad analysis.
 public struct OpenCastAdAnalysisFailure: Codable, Sendable, Equatable {
     public enum Category: String, Codable, Sendable {
         case capacity

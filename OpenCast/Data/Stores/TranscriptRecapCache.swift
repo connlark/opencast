@@ -1,9 +1,5 @@
 import Foundation
 
-/// Device-local JSON store for completed recaps, one file per cache key under
-/// Application Support. Entries are disposable: a changed transcript simply
-/// stops matching, the data nuke removes everything, and the oldest files
-/// are pruned past the cap.
 nonisolated struct TranscriptRecapCache: Sendable {
     static let defaultDirectory = URL.applicationSupportDirectory
         .appending(path: "TranscriptRecaps", directoryHint: .isDirectory)

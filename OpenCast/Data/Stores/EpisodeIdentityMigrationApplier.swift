@@ -2,12 +2,7 @@ import Foundation
 import OpenCastCore
 import SwiftData
 
-/// The per-match episode-identity migration body, shared by refresh
-/// reconciliation and subscription migration: re-keys progress rows,
-/// device-local sidecars, ad-free-pass queue items, and playlist items onto
-/// the successor episode ID and tombstones the departed ID. Inserts into the passed
-/// context and never saves — the caller owns the save, because tombstones
-/// must land in the same save as the records they cover.
+/// Never saves: the tombstones must land in the caller's save with the records they cover.
 enum EpisodeIdentityMigrationApplier {
     static func apply(
         _ matches: [EpisodeIdentityReconciler.Match],
@@ -176,23 +171,8 @@ enum EpisodeIdentityMigrationApplier {
         }
     }
 
-    /// Unlike the ad-free queue, a playlist may hold an episode once per
-    /// playlist, so the collision rule is scoped to each playlist: a live
-    /// successor already in that playlist makes the departed rows redundant
-    /// there only (a successor an item tombstone shadows does not count).
-    /// Otherwise one departed row per playlist is re-keyed and its twins are
-    /// deleted. `itemID` and `sortKey` stay put so the item keeps its identity
-    /// and position; `addedAt` and `updatedAt` are untouched because a re-key
-    /// is not an edit.
-    ///
-    /// No item tombstone is written for the departed pair. The re-keyed row
-    /// keeps its `addedAt`, so such a tombstone would shadow the user's own
-    /// membership whenever the row comes back to that pair: a feed that moves
-    /// back to its earlier URL, a reverted GUID change, or another device's
-    /// stale copy of the same record winning the conflict. Without it, each of
-    /// those heals on the next re-key. A departed row that an existing
-    /// tombstone already shadows is a removal repair has not applied yet, so
-    /// it is deleted rather than carried out from under that tombstone.
+    /// Writes no item tombstone: the re-keyed row keeps its `addedAt`, so one would shadow the
+    /// row whenever it comes back to the departed pair.
     private static func migratePlaylistItems(
         from oldEpisodeID: String,
         to newEpisodeID: String,
@@ -235,10 +215,8 @@ enum EpisodeIdentityMigrationApplier {
                 }
             )
         )
-        // A successor an item tombstone already shadows is one the next
-        // repair deletes, so it covers nothing: deleting the departed row
-        // on its account would drop a membership the user added after
-        // that removal.
+        // A shadowed successor is deleted by the next repair, so it covers nothing; deleting the
+        // departed row for it would drop a membership added after that removal.
         let coveredPlaylistIDs = Set(
             successorItems
                 .filter { item in

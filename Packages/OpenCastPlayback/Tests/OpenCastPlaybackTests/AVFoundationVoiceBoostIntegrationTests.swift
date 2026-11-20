@@ -51,8 +51,7 @@ struct AVFoundationVoiceBoostIntegrationTests {
         #expect(snapshot.prepareCount > 0)
         #expect(snapshot.processCount > 0)
         #expect(snapshot.processedFrameCount > 0)
-        // Steady playback with no configuration updates must never lose a
-        // buffer to lock contention (I2).
+        // Without configuration updates, no buffer is lost to lock contention.
         #expect(snapshot.contentionBypassedFrameCount == 0)
         #expect(snapshot.sourceErrorCount == 0)
         #expect(snapshot.unsupportedFormatCount == 0)

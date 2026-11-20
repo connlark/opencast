@@ -2,9 +2,6 @@ import OpenCastCore
 import SwiftData
 import SwiftUI
 
-/// The playing episode's show notes as the episode page renders them
-/// (`EpisodeShowNotesView`), resolved the same way: the cached detail's notes,
-/// else the summary. A timestamp link seeks the playing episode.
 struct NowPlayingShowNotesPaneView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext

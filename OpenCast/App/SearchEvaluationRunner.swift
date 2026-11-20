@@ -2,11 +2,8 @@ import CryptoKit
 import Foundation
 import OpenCastCore
 
-/// Opt-in runner for the frozen, sanitized local-search relevance fixtures.
-///
-/// Inputs are copied into the simulator's Documents/SearchEvaluationInputs
-/// directory by the evaluation lane. Rankings are written only after every
-/// query completes, so the host never mistakes a partial artifact for a run.
+/// Rankings are written only after every query completes, so the host never
+/// mistakes a partial artifact for a run.
 nonisolated struct SearchEvaluationRunner: Sendable {
     static let requestArgument = "--opencast-run-search-evaluation"
     static let requestEnvironmentKey = "OPENCAST_RUN_SEARCH_EVALUATION"

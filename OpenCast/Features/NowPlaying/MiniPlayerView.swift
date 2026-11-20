@@ -121,8 +121,6 @@ struct MiniPlayerView: View {
         tabAccessoryPlacement == .inline
     }
 
-    /// The accessory's own measured geometry, published by the tab root;
-    /// absent outside the tab view.
     private var accessoryGeometry: TabAccessoryGeometry {
         accessoryStore?.geometry ?? .absent
     }

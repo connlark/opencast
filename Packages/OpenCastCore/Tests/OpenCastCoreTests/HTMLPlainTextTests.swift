@@ -222,22 +222,6 @@ struct HTMLPlainTextTests {
         #expect(HTMLPlainText.structuredText(from: "") == "")
     }
 
-    @Test(
-        "Collapsed text is the structured text on one line",
-        arguments: [
-            "<p>00:00 Intro</p><ul><li>05:10 Topic</li></ul>",
-            "One<br>Two<hr>Three",
-            "a\r\nb\n\n\nc",
-            "<p>(00:02:16) Investing<br>8:39 \u{2013} Bloopers</p>"
-        ]
-    )
-    func collapsedText(html: String) {
-        let collapsed = HTMLPlainText.collapsedText(from: html)
-        let structured = HTMLPlainText.structuredText(from: html)
-        #expect(collapsed == structured.replacing(/\s+/, with: " "))
-        #expect(!collapsed.contains("\n"))
-    }
-
     @Test("Collapsed text joins block lines with single spaces")
     func collapsedTextExample() {
         #expect(

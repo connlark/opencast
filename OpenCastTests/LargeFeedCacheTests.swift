@@ -353,8 +353,6 @@ struct LargeFeedCacheTests {
         await firstLibrary.refreshAllIfStale(modelContext: context, now: currentDate)
         #expect(await service.requestCount == 1)
 
-        // A new store/library instance models an app relaunch. The retry
-        // deadline is SQLite-owned and therefore remains authoritative.
         let relaunched = LibraryStore(
             feedService: service,
             localCache: SQLiteLocalLibraryCacheStore(databaseURL: url),

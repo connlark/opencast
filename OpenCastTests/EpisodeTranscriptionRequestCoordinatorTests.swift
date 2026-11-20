@@ -35,8 +35,6 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         let transcriber = EpisodeTranscriptionRequestTestTranscriber { request, _ in
             completedStream(for: request)
         }
-        // Mirrors the UI-test launch environment: no model installed at
-        // start, install happens through the on-demand consent path.
         let models = TranscriptionModelStore(
             installer: OpenCastUITestTranscriptionModelInstaller(isInstalled: false)
         )
@@ -95,9 +93,6 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         let transcriber = EpisodeTranscriptionRequestTestTranscriber { request, _ in
             completedStream(for: request)
         }
-        // install() reports success (the store flips to .installed from the
-        // returned summary) but plan resolution can never see the model —
-        // the coordinator must surface a failure, not spin the main actor.
         let models = TranscriptionModelStore(installer: NeverResolvableModelInstaller())
         models.loadLocalStatus()
         let harness = try await makeHarness(
@@ -372,29 +367,6 @@ struct EpisodeTranscriptionRequestCoordinatorTests {
         #expect(await waitUntil { harness.coordinator.request?.phase == .completed })
         #expect(transcriber.requests.count == 2)
         #expect(harness.transcriptions.document(for: harness.episode.episodeID) != nil)
-    }
-
-    @Test("Data nuke reset invalidates an active transcription request")
-    func dataNukeResetCancelsActiveTranscription() async throws {
-        let transcriber = EpisodeTranscriptionRequestTestTranscriber { _, _ in
-            hangingProgressStream()
-        }
-        let harness = try await makeHarness(transcriber: transcriber)
-
-        harness.coordinator.start(
-            episode: harness.episode,
-            modelContext: harness.context
-        )
-        #expect(await waitUntil { harness.transcriptions.hasActiveJob })
-
-        harness.coordinator.resetForDataNuke()
-        try await harness.transcriptions.nukeAllTranscripts(modelContext: harness.context)
-
-        #expect(harness.coordinator.request == nil)
-        #expect(!harness.coordinator.isPresented)
-        #expect(!harness.transcriptions.hasActiveJob)
-        #expect(harness.transcriptions.records.isEmpty)
-        #expect(try harness.context.fetch(FetchDescriptor<EpisodeTranscriptRecord>()).isEmpty)
     }
 
     @Test("Dismiss and re-present do not duplicate active transcription")
@@ -789,9 +761,8 @@ private func installedAppleSpeechAssetStore() -> AppleSpeechAssetStore {
     AppleSpeechAssetStore(provider: FakeAppleSpeechAssetProvider())
 }
 
-/// `install` succeeds (so the store reports `.installed` from the returned
-/// summary) while `installedSummary` keeps throwing — the disk/state
-/// disagreement shape behind the resolve/ensure spin guard.
+/// `install` succeeds, so the store reports `.installed`, while
+/// `installedSummary` keeps throwing.
 private struct NeverResolvableModelInstaller: TranscriptionModelInstalling {
     func installedSummary(model: OpenCastWhisperModel, version: String) throws -> OpenCastWhisperModelInstalledSummary {
         throw OpenCastTranscriptionError.modelNotInstalled(

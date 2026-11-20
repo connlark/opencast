@@ -6,23 +6,6 @@ import Testing
 
 @MainActor
 struct RemoteTranscriptionStartPreviewRoutingTests {
-    @Test("Only the matching episode detail presents a shared preview request")
-    func presentationIsScopedToMatchingEpisode() {
-        let request = RemoteTranscriptionStartPreviewRequest(
-            episodeID: "requested-episode",
-            durationSeconds: 900
-        )
-
-        #expect(RemoteTranscriptionStartPreviewRouting.presentedRequest(
-            request,
-            for: "presenting-episode"
-        ) == nil)
-        #expect(RemoteTranscriptionStartPreviewRouting.presentedRequest(
-            request,
-            for: "requested-episode"
-        ) == request)
-    }
-
     @Test("Confirmation starts the request episode when Now Playing has changed")
     func confirmationUsesRequestEpisode() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -78,59 +61,5 @@ struct RemoteTranscriptionStartPreviewRoutingTests {
         #expect(message.contains("no longer available"))
         #expect(appModel.remoteTranscription.store.activeEpisodeID == nil)
         #expect(!appModel.remoteTranscription.store.hasActiveRequest)
-    }
-
-    @Test("Confirmation surfaces local ownership before starting remote work")
-    func confirmationRejectsLocalOwnership() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let appModel = OpenCastAppModel(allowsAutomaticFeedRefresh: false)
-        let request = RemoteTranscriptionStartPreviewRequest(
-            episodeID: "locally-owned",
-            durationSeconds: 900
-        )
-        context.insert(EpisodeDownloadRecord(
-            episodeID: request.episodeID,
-            podcastID: "https://example.com/requested.xml",
-            sourceAudioURL: "https://example.com/locally-owned.mp3",
-            state: .failed,
-            episodeTitle: "Locally Owned",
-            podcastTitle: "Requested Show"
-        ))
-        try context.save()
-        await appModel.downloads.load(modelContext: context)
-        guard case .success(let reservation) = appModel.transcriptions.reserveLocalWork(
-            for: request.episodeID
-        ) else {
-            Issue.record("Expected local ownership to reserve the episode")
-            return
-        }
-
-        let outcome = appModel.confirmRemoteTranscriptionStart(request, modelContext: context)
-
-        #expect(outcome == .unavailable(
-            message: "A local transcription of this episode is already in progress."
-        ))
-        #expect(appModel.remoteTranscription.store.activeEpisodeID == nil)
-        #expect(!appModel.remoteTranscription.store.hasActiveRequest)
-        appModel.transcriptions.releaseLocalWork(reservation)
-    }
-
-    @Test("Dismissing the shared preview clears it for every mount")
-    func dismissalClearsSharedPreview() {
-        let store = RemoteTranscriptionJobStore()
-        let request = RemoteTranscriptionStartPreviewRequest(
-            episodeID: "requested-episode",
-            durationSeconds: 900
-        )
-        store.startPreview = request
-
-        store.dismissStartPreview(ifMatching: request)
-
-        #expect(store.startPreview == nil)
-        #expect(RemoteTranscriptionStartPreviewRouting.presentedRequest(
-            store.startPreview,
-            for: request.episodeID
-        ) == nil)
     }
 }

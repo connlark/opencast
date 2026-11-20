@@ -2,11 +2,6 @@ import SwiftUI
 import Testing
 @testable import OpenCast
 
-/// The writes the two-pane containers make through the bindings, scopes and
-/// close actions `TwoPaneRoot` builds (`TwoPaneRootWriter`), held and
-/// invoked after the scene moved on: a switch, a new detail root, pruning, a
-/// return to an earlier head. A host's lifetime is its token: dropping the
-/// last strong reference is what SwiftUI does when the host leaves.
 @MainActor
 @Suite("Two-pane root writers")
 struct TwoPaneRootWriterTests {
@@ -15,7 +10,6 @@ struct TwoPaneRootWriterTests {
     private static let episode = AppRoute.episodeDetail(id: "episode-1")
     private static let transcript = AppRoute.episodeTranscript(id: "episode-1")
 
-    /// The section path and the scene's container, as the tab root holds them.
     @MainActor
     private final class Scene {
         var path: [AppRoute] = []
@@ -30,13 +24,12 @@ struct TwoPaneRootWriterTests {
             Binding(get: { self.container }, set: { self.container = $0 })
         }
 
-        /// As the hosts build their writers.
         func writer(_ kind: TwoPaneRootWriter.Kind, token: TwoPaneRootWriterToken) -> TwoPaneRootWriter {
             TwoPaneRootWriter.make(kind, token: token, path: pathBinding, container: containerBinding, section: "test")
         }
     }
 
-    /// A host: the only owner of its token, as a host's state is.
+    // The only owner of its token, as a host's state is.
     @MainActor
     private final class Host {
         let token = TwoPaneRootWriterToken()

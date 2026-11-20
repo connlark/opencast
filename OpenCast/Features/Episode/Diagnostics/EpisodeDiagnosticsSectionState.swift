@@ -1,8 +1,6 @@
 import Foundation
 
-/// Per-section load state. `partial` shows the synchronously available rows
-/// while a slower enrichment (file hashing, document loads, probes) is still
-/// running; errors fold into ordinary rows so a section never goes dark.
+/// No error case: errors fold into ordinary rows, so a section never goes dark.
 nonisolated enum EpisodeDiagnosticsSectionState: Sendable, Equatable {
     case loading
     case partial(EpisodeDiagnosticsSection)

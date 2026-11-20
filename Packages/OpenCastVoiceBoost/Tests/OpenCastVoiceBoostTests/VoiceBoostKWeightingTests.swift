@@ -3,12 +3,8 @@ import Testing
 import OpenCastVoiceBoostC
 @testable import OpenCastVoiceBoost
 
-/// The K-weighting coefficients are derived analytically in C
-/// for any sample rate and are the single source of truth for the realtime
-/// engine and the Swift offline analyzer.
 struct VoiceBoostKWeightingTests {
-    /// ITU-R BS.1770 reference tables previously hardcoded in both the C DSP
-    /// core and `VoiceBoostBiquad`; kept here as the equivalence oracle.
+    // ITU-R BS.1770 reference coefficients, as b0, b1, b2, a1, a2.
     private static let referenceTables: [(stage: String, sampleRate: Double, coefficients: [Double])] = [
         ("pre", 48_000, [1.53512485958697, -2.69169618940638, 1.19839281085285, -1.69065929318241, 0.73248077421585]),
         ("pre", 44_100, [1.530841230050347, -2.650979995154729, 1.169079079921906, -1.663655113256020, 0.712595428073225]),
@@ -37,9 +33,8 @@ struct VoiceBoostKWeightingTests {
         arguments: [22_050.0, 24_000.0, 32_000.0, 44_100.0, 48_000.0, 96_000.0]
     )
     func responseIsSaneAcrossSampleRates(sampleRate: Double) {
-        // The loudness offset convention (-0.691) makes a 997 Hz tone read
-        // "level-accurate", which requires the cascade to sit at +0.691 dB
-        // there; the shelf plateau is ~+4 dB.
+        // The -0.691 loudness offset reads a 997 Hz tone level-accurate only if
+        // the cascade sits at +0.691 dB there; the shelf plateau is about +4 dB.
         let at997 = Self.cascadeResponseDB(frequency: 997, sampleRate: sampleRate)
         #expect(abs(at997 - 0.691) <= 0.05)
 

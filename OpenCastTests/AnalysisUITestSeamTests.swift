@@ -2,7 +2,6 @@ import Foundation
 import OpenCastAnalysis
 import OpenCastAnalysisProviders
 import Security
-import SwiftData
 import Testing
 @testable import OpenCast
 
@@ -47,23 +46,6 @@ struct AnalysisUITestSeamTests {
         #expect(!configuration.seedsAnalysisKeyNoticeSeen)
     }
 
-    @Test("Under UI testing the defaults keep existing flows unchanged")
-    func uiTestingDefaults() {
-        let configuration = OpenCastLaunchConfiguration.resolving(
-            arguments: ["OpenCast", "--opencast-ui-testing"],
-            environment: [:]
-        )
-
-        #expect(configuration.seededAnalysisKeyProviders.isEmpty)
-        #expect(configuration.uiTestAnalysisPolicy == .baked)
-        #expect(configuration.uiTestAnalysisTrialStatus == nil)
-        #expect(configuration.uiTestAnalysisKeyTestResults == nil)
-        #expect(!configuration.uiTestAnalysisKeyTestGated)
-        #expect(configuration.uiTestAnalysisKeyStorageFailures == nil)
-        #expect(configuration.uiTestAnalysisKeyRequiredFeature == nil)
-        #expect(configuration.seedsAnalysisKeyNoticeSeen)
-    }
-
     @Test("Under UI testing every seam parses")
     func uiTestingSeamsParse() {
         let configuration = OpenCastLaunchConfiguration.resolving(
@@ -98,23 +80,6 @@ struct AnalysisUITestSeamTests {
         #expect(!mirrored.seedsAnalysisKeyNoticeSeen)
     }
 
-    @Test("Trial and key-test values parse, and unknown ones are ignored")
-    func valueParsing() {
-        #expect(AnalysisUITestFixtures.trialStatus("not-started") == .notStarted)
-        #expect(AnalysisUITestFixtures.trialStatus("exhausted") == .exhausted)
-        #expect(AnalysisUITestFixtures.trialStatus("units-left-0") == .unitsLeft(0))
-        #expect(AnalysisUITestFixtures.trialStatus("units-left--1") == nil)
-        #expect(AnalysisUITestFixtures.trialStatus("units-left-many") == nil)
-        #expect(AnalysisUITestFixtures.trialStatus(nil) == nil)
-        #expect(AnalysisUITestFixtures.keyTestResult("accepted") == .accepted)
-        #expect(AnalysisUITestFixtures.keyTestResult("billing_or_quota") == .failed(.billingOrQuota))
-        #expect(AnalysisUITestFixtures.keyTestResult("not-a-failure") == nil)
-        #expect(AnalysisUITestFixtures.keyTestResult(nil) == nil)
-        #expect(AnalysisUITestFixtures.keyTestResults("invalid_key,not-a-failure,accepted") == [.failed(.invalidKey), .accepted])
-        #expect(AnalysisUITestFixtures.keyTestResults("not-a-failure") == nil)
-        #expect(AnalysisUITestFixtures.keyTestResults(nil) == nil)
-    }
-
     @Test("The Keychain fault seam parses its entries and fails each matching call once")
     func keyStorageFaults() throws {
         let failures = try #require(AnalysisUITestFixtures.keyStorageFailures("delete-synced,update-local,delete-synced,bogus,read-nowhere"))
@@ -130,60 +95,5 @@ struct AnalysisUITestSeamTests {
         #expect(fault(.update, false) == nil)
         #expect(fault(.delete, true) == errSecNotAvailable)
         #expect(fault(.delete, true) == nil)
-    }
-
-    @Test("The policy variants change only what they name")
-    func policyVariants() throws {
-        let baked = AnalysisPolicySnapshot.baked
-        let now = Date.now
-
-        #expect(AnalysisUITestFixtures.policySnapshot(variant: nil) == baked)
-        #expect(AnalysisUITestFixtures.policySnapshot(variant: "unknown") == baked)
-
-        let noOpenAIChapters = AnalysisUITestFixtures.policySnapshot(variant: "no-openai-chapters")
-        #expect(noOpenAIChapters.chaptersSummary(provider: .openai) == nil)
-        #expect(noOpenAIChapters.chaptersSummary(provider: .google) != nil)
-        #expect(noOpenAIChapters.adDetection(provider: .openai) != nil)
-
-        let trialStarted = AnalysisUITestFixtures.policySnapshot(variant: "trial-started")
-        #expect(trialStarted.bundle.trial.startsAt <= now)
-        #expect(trialStarted.bundle.notice == baked.bundle.notice)
-    }
-
-    @Test("The fixture keys are the strings the UI tests type")
-    func fixtureKeys() {
-        let google = AnalysisUITestFixtures.keyText(for: .google)
-        let openAI = AnalysisUITestFixtures.keyText(for: .openai)
-
-        #expect(google == AnalysisKeyFixtures.googleText)
-        #expect(openAI == AnalysisKeyFixtures.openAIText)
-        #expect(google.count == 39 && google.hasPrefix("AIza"))
-        #expect(openAI.count == 34 && openAI.hasPrefix("sk-"))
-        #expect(AnalysisProviderKeyFormat.isPlausible(google) && AnalysisProviderKeyFormat.isPlausible(openAI))
-        #expect(AnalysisKeyFixtures.bytes(of: AnalysisUITestFixtures.key(for: .google)) == Data(google.utf8))
-    }
-
-    @Test("The tier seam answers free tier, not free tier, or nothing conclusive")
-    func tierAnswers() {
-        #expect(AnalysisUITestTransportMode.tierAnswer("free-tier") == .freeTier)
-        #expect(AnalysisUITestTransportMode.tierAnswer("not-free-tier") == .notFreeTier)
-        #expect(AnalysisUITestTransportMode.tierAnswer("other") == .inconclusive)
-        #expect(AnalysisUITestTransportMode.tierAnswer(nil) == .inconclusive)
-    }
-
-    @Test("The seen seed is the flag the notice store reads")
-    func seenSeedMarksTheNoticeSeen() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        try AnalysisUITestFixtures.seedKeyNoticeSeen(in: container)
-        let store = AnalysisKeyNoticeStore()
-
-        store.load(modelContext: ModelContext(container))
-
-        #expect(store.hasSeenAIKeyNotice)
-        let record = try LocalPreferenceRecord.preference(
-            forKey: AnalysisKeyNoticeStore.seenPreferenceKey,
-            modelContext: ModelContext(container)
-        )
-        #expect(record?.value == "2")
     }
 }

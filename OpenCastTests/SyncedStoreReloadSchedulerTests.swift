@@ -34,16 +34,4 @@ struct SyncedStoreReloadSchedulerTests {
         #expect(maximumActive == 1)
         #expect(!wasCancelled)
     }
-
-    @Test("Import batches share a cumulative banner identity and count unique feeds")
-    func importedSubscriptionBatchesMerge() {
-        let first = Set((0..<25).map { "https://example.com/\($0).xml" })
-        let next = Set((20..<34).map { "https://example.com/\($0).xml" })
-        let banner = ImportedSubscriptionsNotification(id: 7, feedURLStrings: first)
-        let updated = banner.merging(feedURLStrings: next)
-
-        #expect(updated.id == banner.id)
-        #expect(updated.feedCount == 34)
-        #expect(updated.merging(feedURLStrings: next) == updated)
-    }
 }

@@ -1,11 +1,4 @@
-/// Gapped line numbers for the episode lines. An answer listing a run of
-/// matching episodes oldest first counts down through consecutive numbers,
-/// which Apple's recitation check declines; numbers that rise by 1–3 at
-/// random never form a countdown, and the answer maps back through the same
-/// table.
 nonisolated enum PlaylistOrganizerLineNumbers {
-    /// index -> line number for `indices` (any order; numbered in ascending index order): first number 1...9,
-    /// then +1...3 each, from SplitMix64(seed). Pure and deterministic for a seed.
     static func gapped(for indices: [Int], seed: UInt64) -> [Int: Int] {
         var generator = SplitMix64(seed: seed)
         var numbers: [Int: Int] = [:]
@@ -19,14 +12,12 @@ nonisolated enum PlaylistOrganizerLineNumbers {
         return numbers
     }
 
-    /// A fresh seed for a request that didn't pin one.
     static func randomSeed() -> UInt64 {
         UInt64.random(in: .min ... .max)
     }
 }
 
-/// Steele, Lea and Flood's SplitMix64: tiny, fast and fully determined by its
-/// seed, which the system generator is not.
+/// Unlike the system generator, fully determined by its seed.
 private nonisolated struct SplitMix64: RandomNumberGenerator {
     private var state: UInt64
 

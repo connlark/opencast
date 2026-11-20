@@ -17,7 +17,6 @@ struct OpenCastAppModelPlayPresentationTests {
         let silent = makeEpisode(episodeID: "play-presentation-silent")
         let presenting = makeEpisode(episodeID: "play-presentation-default")
 
-        // The CarPlay path: a car tap must never queue a phone sheet.
         try appModel.playEpisode(silent, presentsNowPlaying: false, modelContext: context)
         #expect(appModel.playback.currentEpisode?.id.rawValue == silent.episodeID)
         for _ in 0..<10 {

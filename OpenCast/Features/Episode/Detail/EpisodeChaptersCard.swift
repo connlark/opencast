@@ -1,11 +1,6 @@
 import OpenCastCore
 import SwiftUI
 
-/// Chapter list on episode detail: title + start time, tap seeks. Renders
-/// chapters embedded in the audio file, the feed's chapters document, a
-/// current generated analysis, or a timestamp list in the show notes.
-/// Publisher, generated and show-notes rows carry a tag naming their
-/// source; embedded rows, part of the audio itself, carry none.
 struct EpisodeChaptersCard: View {
     enum Source {
         case embedded

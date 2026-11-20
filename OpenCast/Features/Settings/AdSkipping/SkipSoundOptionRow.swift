@@ -1,8 +1,7 @@
 import SwiftData
 import SwiftUI
 
-/// One Skip Sound choice; nil is None. A tap chooses it, and a sound plays
-/// once, also when it is already the choice.
+/// Nil is None. A tap plays the sound even when it is already the choice.
 struct SkipSoundOptionRow: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext

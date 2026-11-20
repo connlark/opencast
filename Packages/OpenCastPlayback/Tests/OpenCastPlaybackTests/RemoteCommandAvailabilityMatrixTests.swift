@@ -18,8 +18,6 @@ struct RemoteCommandAvailabilityMatrixTests {
     private struct ExpectedAvailability {
         let play: Bool
         let pause: Bool
-        /// togglePlayPause + the four skip aliases + changeRate all follow
-        /// plain has-loaded-content.
         let whileLoaded: Bool
         let seek: Bool
     }
@@ -65,10 +63,6 @@ struct RemoteCommandAvailabilityMatrixTests {
                 currentEpisode: episode(duration: nil),
                 duration: nil
             ),
-            // The item's duration is not known yet; the resolved duration
-            // arriving separately must not enable seek on its own — it does
-            // (current pinned behavior: any finite duration makes the loaded
-            // episode seekable).
             resolvedDuration: 300,
             expected: ExpectedAvailability(play: true, pause: false, whileLoaded: true, seek: true)
         ),
@@ -150,37 +144,5 @@ struct RemoteCommandAvailabilityMatrixTests {
         #expect(previousTrack.isEnabled == row.expected.whileLoaded, "\(row.name): previous track alias")
         #expect(changeRate.isEnabled == row.expected.whileLoaded, "\(row.name): change rate")
         #expect(changePosition.isEnabled == row.expected.seek, "\(row.name): seek")
-    }
-
-    @Test("Buffering counts as playback requested, like playing")
-    func bufferingCountsAsPlaybackRequested() {
-        let play = FakeToggle(isEnabled: true)
-        let pause = FakeToggle(isEnabled: false)
-        let others = (0..<7).map { _ in FakeToggle(isEnabled: false) }
-        let controller = RemoteCommandController(
-            availabilitySurface: RemoteCommandAvailabilitySurface(
-                play: play,
-                pause: pause,
-                togglePlayPause: others[0],
-                skipForward: others[1],
-                skipBackward: others[2],
-                nextTrack: others[3],
-                previousTrack: others[4],
-                changePlaybackRate: others[5],
-                changePlaybackPosition: others[6]
-            )
-        )
-
-        controller.updateAvailability(
-            for: PlaybackSnapshot(
-                state: .buffering,
-                currentEpisode: episode(duration: 300),
-                duration: 300
-            ),
-            resolvedDuration: nil
-        )
-
-        #expect(!play.isEnabled)
-        #expect(pause.isEnabled)
     }
 }

@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// A smart playlist's glow behind the top of its detail screen: the artwork
-/// glow's recipe with a square of the playlist tint in place of the blurred
-/// artwork, so both kinds of detail glow with the same footprint.
 struct PlaylistTintGlowBackground: View {
     @Environment(\.colorScheme) private var colorScheme
 

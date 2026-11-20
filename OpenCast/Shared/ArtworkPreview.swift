@@ -2,7 +2,6 @@ import Foundation
 import OpenCastCore
 
 nonisolated struct ArtworkPreview: Codable, Equatable, Sendable {
-    // Version 3 restores a canonical source thumbnail after request-sized previews.
     static let currentVersion = 3
     static let maxPixelEdge = 8
     static let fixedPixelWidth = 8

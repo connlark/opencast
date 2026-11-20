@@ -1,9 +1,5 @@
 import SwiftUI
 
-/// The assistant side of one turn. A verified answer carries tappable
-/// citation chips; an unverifiable one shows its text with a note and no
-/// chips; an unanswerable one says the transcript does not cover it; a
-/// failed turn shows the calm per-request message.
 struct TranscriptAskAnswerView: View {
     let content: TranscriptAskMessage.Content
     let onSeek: (TranscriptAskCitation) -> Void
@@ -69,8 +65,7 @@ struct TranscriptAskAnswerView: View {
         }
     }
 
-    /// Ask wording for the shared failures: a decline is per question here,
-    /// and the conversation goes on.
+    /// In Ask a decline is per question, and the conversation goes on.
     private static func message(for failure: TranscriptIntelligenceFailure) -> String {
         switch failure {
         case .guardrailViolation, .refusal:

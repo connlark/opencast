@@ -249,8 +249,6 @@ final class SiriPlayMediaHandler: NSObject, INPlayMediaIntentHandling {
         return appModel.episodeSnapshot(for: episodeID)
     }
 
-    /// The newest episode the Inbox lists by default, so a resume with
-    /// nothing loaded never starts one archived out of it.
     private func newestInboxEpisode() -> EpisodeListItemSnapshot? {
         let archivedEpisodeIDs = appModel.library.archivedEpisodeIDs
         return appModel.library.inboxEpisodes.first { !archivedEpisodeIDs.contains($0.episodeID) }

@@ -1,8 +1,4 @@
-/// Copy a show's Playback Settings and Settings › Playback › Auto Add to Up
-/// Next share, so the two screens state the same rule.
 nonisolated enum UpNextAutoAddCopy {
-    /// What Auto Add to Up Next does under the device's limit and rule;
-    /// the limit reads as "1,000" at the top step.
     static func ruleSentence(
         limit: UpNextAutoAddLimit,
         limitReachedAction: UpNextAutoAddLimitReachedAction

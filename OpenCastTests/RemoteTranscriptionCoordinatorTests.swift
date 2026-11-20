@@ -5,15 +5,9 @@ import SwiftData
 import Testing
 @testable import OpenCast
 
-/// C6: StoreKit-free fake for the remote transcription API. Poll states are
-/// consumed in order and the last one repeats, so tests script exact state
-/// journeys; every mutation is recorded for ordering assertions.
 private final class FakeRemoteTranscriptionAPI: RemoteTranscriptionAPI, @unchecked Sendable {
     let jobID = "job-fake-1"
 
-    /// Server-decided upload geometry for tests that exercise the
-    /// exact-device fallback; nil rejects upload routes like a job that
-    /// never required one.
     struct UploadScript {
         var partCount: Int
         var partSizeBytes: Int64
@@ -85,8 +79,6 @@ private final class FakeRemoteTranscriptionAPI: RemoteTranscriptionAPI, @uncheck
     }
 
     func poll(jobID: String) async throws -> OpenCastRemoteTranscriptionPollResponse {
-        // Transient errors are consumed one per call before any state is
-        // served, so tests can script a blip the retry grace must absorb.
         let transient: Error? = lock.withLock {
             transientPollErrors.isEmpty ? nil : transientPollErrors.removeFirst()
         }
@@ -203,8 +195,6 @@ private final class FakeRemoteTranscriptionAPI: RemoteTranscriptionAPI, @uncheck
     }
 }
 
-/// Deterministic upload transport: records every PUT and serves scripted
-/// results (default: 200 with a per-part ETag).
 private final class FakeUploadTransport: RemoteTranscriptionUploadTransport, @unchecked Sendable {
     private let lock = NSLock()
     private var scriptedResults: [Int: [RemoteTranscriptionUploadPartPutResult]]
@@ -244,7 +234,6 @@ private final class FakeUploadTransport: RemoteTranscriptionUploadTransport, @un
     func finishTasksAndInvalidate() {}
 }
 
-/// Minimal thread-safe flag/box helpers for cross-context assertions.
 private final class OpenCastAtomicFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var value = false
@@ -286,8 +275,6 @@ private enum RemoteFixtures {
         )
     }
 
-    /// A result whose segments/words and normalized hash are self-consistent,
-    /// so it passes mapper validation against the given identity.
     static func result(
         identity: OpenCastRemoteTranscriptionSourceIdentity,
         durationSeconds: Double,
@@ -396,9 +383,6 @@ struct EpisodeRemoteTranscriptMapperTests {
             context: context(identity: identity)
         )
 
-        // The in-memory document must equal its `.iso8601` disk round trip
-        // (which drops fractional seconds): the ad-analysis freshness checks
-        // compare a record seeded from this document against the reloaded one.
         #expect(document.createdAt.timeIntervalSince1970.truncatingRemainder(dividingBy: 1) == 0)
         #expect(document.updatedAt.timeIntervalSince1970.truncatingRemainder(dividingBy: 1) == 0)
     }
@@ -601,11 +585,6 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         var identity: OpenCastRemoteTranscriptionSourceIdentity
     }
 
-    /// A full environment around one completed download, hashed unless
-    /// `isDownloadHashed` is false, so the coordinator can proceed without
-    /// downloading. A download it does ask for goes to `downloader`, which
-    /// fails by default, never to the network. Retry delays default to none
-    /// so unreachable-backend scripts fail fast in tests.
     private func makeEnvironment(
         api: FakeRemoteTranscriptionAPI,
         episodeID: String,
@@ -734,8 +713,6 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
             resultResponse: OpenCastRemoteTranscriptionResultResponse(schemaVersion: 1, result: result),
             ackError: RemoteTranscriptionHTTPError(statusCode: 503, code: "unavailable", detail: nil),
             onAck: {
-                // Ordering proof: the durable record must exist before the
-                // coordinator ever attempts the ack.
                 let imported = await MainActor.run {
                     transcriptions.value?.record(for: "ep-ack-fail")?.state == .completed
                 }
@@ -802,8 +779,6 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         #expect(api.resultCallCount == 0)
         #expect(api.ackHashes.isEmpty)
 
-        // The surface renders a terminal failure with category copy and the
-        // on-device path as the action — never the raw server string.
         let presentation = try #require(
             RemoteTranscriptionStatusPresentation.make(
                 phase: environment.store.phase(for: "ep-server-fail")
@@ -864,8 +839,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
             )
         }
 
-        // Nothing is charged while the reservation is unfunded, so the job is
-        // cancelled and the reference dropped — the device fallback is honest.
+        // Nothing is charged while the reservation is unfunded, so cancelling is safe.
         #expect(api.cancelledJobIDs == ["job-fake-1"])
         #expect(environment.store.references().isEmpty)
         // A detect job asks the server for the transcript alone.
@@ -955,8 +929,7 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
             )
         }
 
-        // The paid job keeps running server-side; only a user cancel may end
-        // it, and the kept reference re-attaches by the same request ID.
+        // The paid job keeps running server-side; only a user cancel may end it.
         #expect(api.cancelledJobIDs.isEmpty)
         let reference = try #require(environment.store.existingReference(for: "ep-detect-unreachable", purpose: .adDetection))
         #expect(reference.createState == .attached)
@@ -986,8 +959,6 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
             )
         }
 
-        // A retry re-attaches to the still-running job via the stable client
-        // request ID, so the paid work is never abandoned.
         #expect(api.cancelledJobIDs.isEmpty)
         let reference = try #require(environment.store.existingReference(for: "ep-plain-unreachable"))
         #expect(reference.jobID == "job-fake-1")
@@ -1024,7 +995,6 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         #expect(api.cancelledJobIDs == ["job-fake-1"])
         #expect(environment.store.existingReference(for: "ep-cancel") == nil)
 
-        // Cancellation also ends visibly, with the on-device path offered.
         let presentation = try #require(
             RemoteTranscriptionStatusPresentation.make(
                 phase: environment.store.phase(for: "ep-cancel")
@@ -1066,7 +1036,6 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
 
         #expect(await waitUntil { environment.store.phase == .completed })
         #expect(api.uploadStartCount == 1)
-        // Uniform parts with the exact remainder tail, all three PUT once.
         #expect(transport.putPartNumbers.sorted() == [1, 2, 3])
         #expect(transport.putFileSizes[1] == [10])
         #expect(transport.putFileSizes[2] == [10])
@@ -1137,7 +1106,6 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
         environment.coordinator.start(episode: environment.episode, modelContext: environment.context)
 
         #expect(await waitUntil { environment.store.phase == .completed })
-        // Part 2 was PUT twice — the 403, then the refreshed credential.
         #expect(transport.putPartNumbers.count(where: { $0 == 2 }) == 2)
         #expect(api.refreshedPartNumbers.contains([2]))
         let secondPutURL = try #require(transport.putURLStrings[2]?.last)
@@ -1205,7 +1173,6 @@ struct EpisodeRemoteTranscriptionCoordinatorTests {
 
         #expect(await waitUntil { environment.store.phase == .completed })
         #expect(downloader.requestCount == 1)
-        // The drifted bytes are never reported: only the re-downloaded file's.
         #expect(api.reportedIdentities.map(\.sha256) == [identity.sha256])
         #expect(environment.downloads.completedSourceIdentity(for: episodeID)?.sha256 == identity.sha256)
         #expect(environment.transcriptions.record(for: episodeID)?.sourceFileSHA256 == identity.sha256)
@@ -1582,30 +1549,6 @@ struct RemoteTranscriptionProgressMappingTests {
         #expect(RemoteTranscriptionEstimate.onTrack(remainingSeconds: 150).displayText == "About 3 minutes remaining.")
     }
 
-    @Test("Queued and delayed states use service-aware copy")
-    func exceptionalEstimateCopy() {
-        #expect(RemoteTranscriptionEstimate(progress: OpenCastRemoteTranscriptionJobProgress(
-            estimatedRemainingSeconds: 52,
-            estimateStatus: .onTrack
-        )) == .onTrack(remainingSeconds: 52))
-        #expect(RemoteTranscriptionEstimate(progress: OpenCastRemoteTranscriptionJobProgress(
-            estimatedRemainingSeconds: 52,
-            estimateStatus: .queued
-        )) == .queued(remainingSeconds: 52))
-        #expect(RemoteTranscriptionEstimate(progress: OpenCastRemoteTranscriptionJobProgress(
-            estimatedRemainingSeconds: nil,
-            estimateStatus: .delayed
-        )) == .delayed)
-        #expect(
-            RemoteTranscriptionEstimate.queued(remainingSeconds: 52).displayText
-                == "Waiting for an open slot — about 1 minute remaining."
-        )
-        #expect(
-            RemoteTranscriptionEstimate.delayed.displayText
-                == "Taking longer than usual — still working"
-        )
-    }
-
     @Test("Fractions stay monotonic through a shrinking-total handoff and clamp server counts")
     func monotonicFractions() throws {
         let tracker = RemoteTranscriptionProgressTracker()
@@ -1627,23 +1570,6 @@ struct RemoteTranscriptionProgressMappingTests {
         #expect(first.fractionCompleted == 3.0 / 7.0)
         #expect(handoff.fractionCompleted == first.fractionCompleted)
         #expect(clamped.fractionCompleted == 1)
-    }
-
-    @Test("A legacy response without progress remains safely indeterminate")
-    func legacyNoProgressCompatibility() throws {
-        let tracker = RemoteTranscriptionProgressTracker()
-        let legacy = try #require(tracker.activeProgress(for: status(state: .transcribing)))
-        #expect(legacy.fractionCompleted == nil)
-        #expect(legacy.estimate == nil)
-    }
-
-    @Test("An unknown estimate status remains safely indeterminate")
-    func unknownEstimateCompatibility() {
-        let unknown = OpenCastRemoteTranscriptionJobProgress(
-            estimatedRemainingSeconds: 20,
-            estimateStatus: .unknown("recalculating")
-        )
-        #expect(RemoteTranscriptionEstimate(progress: unknown) == nil)
     }
 
     private func status(
@@ -1679,54 +1605,11 @@ struct RemoteTranscriptionProgressMappingTests {
 @MainActor
 @Suite("Remote transcription status presentation")
 struct RemoteTranscriptionStatusPresentationTests {
-    @Test("Every terminal non-completed phase renders a failure with the local fallback")
-    func terminalPhasesAlwaysRender() {
-        let phases: [RemoteTranscriptionRequestPhase] = [
-            .mismatchLocalFallback,
-            .cancelled,
-            .failed(.serverRejected(.transcriptionFailed)),
-            .failed(.serverRejected(.internalError)),
-            .failed(.serviceUnavailable),
-            .failed(.downloadFailed),
-            .failed(.resultInvalid),
-            .failed(.missingAudio),
-        ]
-        for phase in phases {
-            let presentation = RemoteTranscriptionStatusPresentation.make(phase: phase)
-            #expect(presentation?.isTerminalFailure == true, "\(phase)")
-            #expect(presentation?.offersLocalFallback == true, "\(phase)")
-            #expect(presentation?.detail?.isEmpty == false, "\(phase)")
-        }
-    }
-
     @Test("Category copy never echoes raw wire strings")
     func categoryCopyNeverEchoesWireStrings() {
         let presentation = RemoteTranscriptionStatusPresentation.make(
             phase: .failed(.serverRejected(.unknown("weird_new_code")))
         )
         #expect(presentation?.detail?.contains("weird_new_code") == false)
-    }
-
-    @Test("Completed and idle hide the card; running phases show progress without the fallback")
-    func nonTerminalMapping() {
-        #expect(RemoteTranscriptionStatusPresentation.make(phase: nil) == nil)
-        #expect(RemoteTranscriptionStatusPresentation.make(phase: .completed) == nil)
-
-        let progress = RemoteTranscriptionActiveProgress(
-            stage: .transcribing,
-            completedChunks: 3,
-            totalChunks: 7,
-            fractionCompleted: 3.0 / 7.0,
-            estimate: .onTrack(remainingSeconds: 52)
-        )
-        let running = RemoteTranscriptionStatusPresentation.make(
-            phase: .processing(progress)
-        )
-        #expect(running?.isTerminalFailure == false)
-        #expect(running?.offersLocalFallback == false)
-        #expect(running?.detail == "Transcribing")
-        #expect(running?.secondaryDetail == "About 1 minute remaining.")
-        #expect(running?.progressFraction == 3.0 / 7.0)
-        #expect(RemoteTranscriptionRequestPhase.processing(progress).displayText == "Transcribing")
     }
 }

@@ -25,8 +25,7 @@ struct VoiceBoostBiquad {
         return output
     }
 
-    /// BS.1770 K-weighting stage 1, sourced from the C DSP core so the
-    /// offline analyzer and the realtime engine share one derivation.
+    /// BS.1770 K-weighting stage 1, from the C core so offline and realtime share one derivation.
     static func bs1770PreFilter(sampleRate: Double) -> VoiceBoostBiquad {
         VoiceBoostBiquad(coefficients: OCVBLoudnessPreFilterCoefficients(sampleRate))
     }

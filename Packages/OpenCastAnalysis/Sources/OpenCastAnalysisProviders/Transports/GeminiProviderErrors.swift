@@ -1,26 +1,18 @@
 import OpenCastAnalysis
 
-/// Classifies a non-2xx Gemini exchange. A 429 whose structured quota
-/// details settle the interval is read from them first (``QuotaDetails``):
-/// a per-minute limit is a rate limit to pace, a per-day limit is final and
-/// named as such. Every other exchange takes the pipeline-facing error from
-/// ``GeminiErrorClassifier`` unchanged (the analysis services' rules), and
-/// the listener-facing case from the error envelope's status, message and
-/// detail reasons. Whether the answer names the free tier is read apart from
-/// all of that (``namesFreeTier(status:body:)``).
+/// A 429 whose quota details settle the interval: per minute is a rate limit to pace, per day
+/// is final. Every other pipeline-facing error is ``GeminiErrorClassifier``'s, the analysis
+/// services' rules, unchanged.
 public enum GeminiProviderErrors {
-    /// - Parameter freeTierIsFinal: A free-tier answer ends the attempt: its
-    ///   transport error becomes `.quotaExhausted`, so it is neither retried
-    ///   nor paced. When false the transport and listener cases are exactly
-    ///   what they would be without the free-tier reading.
+    /// With `freeTierIsFinal`, a free-tier answer becomes `.quotaExhausted`: neither retried nor
+    /// paced.
     public static func classify(
         status: Int,
         retryAfter: String?,
         body: String,
         freeTierIsFinal: Bool = false
     ) -> AnalysisProviderErrorClassification {
-        // The provider bound holds for error bodies too: one nested past it
-        // is classified by its status alone.
+        // An error body past the provider bound is classified by its status alone.
         let body = ProviderJSON.refusesBody(body) ? "" : body
         var classification = classifyExchange(status: status, retryAfter: retryAfter, body: body)
         classification.freeTier = namesFreeTier(status: status, body: body)
@@ -30,18 +22,9 @@ public enum GeminiProviderErrors {
         return classification
     }
 
-    /// Whether a reply is Google saying the key is on its free tier: a 429
-    /// `RESOURCE_EXHAUSTED` whose `QuotaFailure` lists at least one violation
-    /// with a `quotaId` containing `FreeTier` or a `quotaMetric` containing
-    /// `free_tier`. Unlike ``QuotaDetails`` it does not need the interval,
-    /// the allocation or a delay: the recorded refusals say "limit: 0" and
-    /// carry no `quotaValue`. The envelope itself must be readable as
-    /// ``QuotaDetails`` reads it, because this answer can move a run off the
-    /// listener's key: the message (when present) is a string, every detail
-    /// an object with a string `@type`, and every `QuotaFailure` holds a list
-    /// of violations that are all objects. An empty list is readable and
-    /// names nothing, so it neither refuses nor makes the answer. Anything
-    /// else is not free tier.
+    /// Free-tier refusals say "limit: 0" and carry no `quotaValue`, so no interval or allocation
+    /// is needed. The envelope must still be fully readable: this answer can move a run off the
+    /// listener's key.
     public static func namesFreeTier(status: Int, body: String) -> Bool {
         guard status == 429, !ProviderJSON.refusesBody(body),
               let error = ProviderJSON.parse(body)?["error"],
@@ -71,7 +54,6 @@ public enum GeminiProviderErrors {
         if status == 429, let quota = QuotaDetails(body) {
             switch quota.interval {
             case .minute:
-                // A readable Retry-After header wins; RetryInfo otherwise.
                 let delay = retryAfter.flatMap(GeminiErrorClassifier.retryAfterSeconds) ?? quota.retryDelaySeconds
                 return AnalysisProviderErrorClassification(transport: .retryable(status: 429, retryAfterSeconds: delay), listener: .rateLimited)
             case .day:
@@ -82,19 +64,9 @@ public enum GeminiProviderErrors {
         return AnalysisProviderErrorClassification(transport: transport, listener: listener(status, transport, body))
     }
 
-    /// The quota interval a 429 names in its `google.rpc` error details, read
-    /// only when the whole envelope is readable and the interval unambiguous:
-    /// the status is `RESOURCE_EXHAUSTED`, the message (when present) is a
-    /// string, every detail is an object with a string `@type`, at least one
-    /// `QuotaFailure` lists violations, and every violation is an object whose
-    /// string `quotaId` names exactly one of `PerMinute` and `PerDay`. Any
-    /// per-day violation makes it a daily limit, whatever the others say or
-    /// `RetryInfo` suggests. A field that is present must be readable: an
-    /// unreadable `quotaValue`, `retryDelay` or `ErrorInfo.reason` is a
-    /// malformed shape, not an absent one. `nil`, leaving the services'
-    /// classification, for every shape that is not all of the above, for a
-    /// zero allocation (`quotaValue` 0, or "limit: 0" in the message: the
-    /// model needs billing), and for an `ErrorInfo` reason about billing.
+    /// Read only from a fully readable envelope: a present but unreadable field is malformed, not
+    /// absent. A zero allocation (`quotaValue` 0 or "limit: 0": the model needs billing) or a
+    /// billing reason gives `nil`, leaving the services' classification.
     struct QuotaDetails {
         enum Interval {
             case minute
@@ -102,8 +74,7 @@ public enum GeminiProviderErrors {
         }
 
         var interval: Interval
-        /// The longest `RetryInfo.retryDelay`, rounded up to whole seconds and
-        /// capped like `Retry-After`.
+        /// Whole seconds: the longest `RetryInfo.retryDelay`, capped like `Retry-After`.
         var retryDelaySeconds: Int?
 
         init?(_ body: String) {
@@ -158,11 +129,8 @@ public enum GeminiProviderErrors {
             retryDelaySeconds = delay
         }
 
-        /// A violation's `quotaValue`, an int64 sent as a string or a number:
-        /// `UInt64.max` stands in for an absent or null value (it is above
-        /// every int64, so no present value can be mistaken for it); `nil`
-        /// for a present value that is not a whole number from 0 to
-        /// `Int64.max`, which is unreadable, not absent.
+        /// `UInt64.max`, above every int64, stands in for an absent value; `nil` means present but
+        /// unreadable.
         static func allocation(_ value: JSONValue?) -> UInt64? {
             if ProviderJSON.isAbsent(value) { return .max }
             let limit = UInt64(Int64.max)
@@ -179,11 +147,8 @@ public enum GeminiProviderErrors {
             return parsed
         }
 
-        /// A protobuf duration (`"12s"`, `"7.2s"`, `"0.000340s"`) as whole
-        /// seconds rounded up and capped at
-        /// ``GeminiErrorClassifier/maxRetryAfterSeconds``; a duration too
-        /// large to read caps too. `nil` when it is not a non-negative
-        /// duration.
+        /// A protobuf duration (`"7.2s"`) in whole seconds, rounded up and capped; one too large to
+        /// read caps too.
         static func retryDelaySeconds(_ text: String) -> Int? {
             guard text.hasSuffix("s") else { return nil }
             let parts = text.dropLast().split(separator: ".", omittingEmptySubsequences: false)
@@ -231,8 +196,6 @@ public enum GeminiProviderErrors {
         }
     }
 
-    /// `{"error": {"message", "status", "details": [{"reason"}]}}`, read
-    /// leniently; the message lowercased.
     struct Envelope {
         var message = ""
         var reasons: [String] = []

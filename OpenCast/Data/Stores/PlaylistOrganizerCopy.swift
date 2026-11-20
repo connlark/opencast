@@ -1,7 +1,5 @@
 import Foundation
 
-/// Every visible string of Make a Playlist, kept together so the menu, the
-/// sheet and the tests share one wording.
 nonisolated enum PlaylistOrganizerCopy {
     static let menuSectionTitle = "Apple Intelligence · Beta"
     static let menuItemTitle = "Make a Playlist…"
@@ -43,7 +41,6 @@ nonisolated enum PlaylistOrganizerCopy {
     static let showPickerEmptyMessage = "Subscribe to a show, then make a playlist from its episodes."
     static let ineligibleShowHint = "Needs at least \(PlaylistOrganizerFeatureFlags.minimumEpisodeCount) episodes"
 
-    /// The organizer's subtitle names its show, the shape Recap and Ask use.
     static func subtitle(showTitle: String?) -> String {
         let trimmed = showTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmed.isEmpty else {

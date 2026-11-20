@@ -1,7 +1,6 @@
 struct DownloadsPodcastBreakdown: Identifiable {
     let podcastID: String
     let title: String
-    /// The newest download's artwork, for a show the library no longer has.
     let artworkURL: String?
     let episodeCount: Int
     let byteCount: Int64

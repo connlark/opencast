@@ -1,10 +1,6 @@
 import Foundation
 import Observation
 
-/// The episode detail's Chapters & Summary surface: the transcript and
-/// analysis documents behind the generated cards and the generate controls,
-/// loaded once per `loadKey` and served only while that key is still the
-/// current one.
 @Observable
 final class EpisodeChaptersSummarySectionModel {
     private static let placeholderState: EpisodeTranscriptAnalysisJobState = .unavailable("Transcript unavailable.")
@@ -16,17 +12,9 @@ final class EpisodeChaptersSummarySectionModel {
     private(set) var creatorChaptersURL: String?
     private(set) var loadedKey: String?
 
-    /// The `.task(id:)` key: per-episode transcript and analysis record
-    /// stamps plus the store's tracked running flag. isRunning is the only
-    /// Observation-tracked store read here (record lookups go through the
-    /// store's index), so run start/end are what invalidate the view —
-    /// without it the running and completed states render only after an
-    /// unrelated re-render (found on device: an explicit Generate tap showed
-    /// nothing until a scroll). The store-global changeSequence stays out:
-    /// it would re-run this load — a document read plus an off-main SHA-256
-    /// over a 100–400 KB transcript — on every OTHER episode's analysis
-    /// events, while the per-episode stamps plus this running flag already
-    /// cover every invalidation this episode needs.
+    /// Record lookups here are not Observation-tracked, so isRunning is what re-renders a run's
+    /// start and end. The store-global changeSequence stays out: it would re-run this load (a
+    /// document read and an off-main SHA-256) on every other episode's analysis events.
     func loadKey(appModel: OpenCastAppModel, episodeID: String?) -> String {
         guard let episodeID else {
             return "missing"
@@ -46,8 +34,6 @@ final class EpisodeChaptersSummarySectionModel {
         return "\(episodeID)|\(transcriptStamp)|\(analysisStamp)|\(runningStamp)"
     }
 
-    /// Whether this key's load has landed for `episodeID` with a transcript
-    /// — the gate for rendering the generate controls at all.
     func isLoaded(forKey key: String, episodeID: String) -> Bool {
         loadedKey == key && transcriptDocument?.episodeID == episodeID
     }
@@ -58,8 +44,6 @@ final class EpisodeChaptersSummarySectionModel {
             && analysisDocument?.episodeID == episodeID
     }
 
-    /// The transcript chapter seeks align against, only while it is the one
-    /// this key loaded for `episodeID`.
     func transcriptDocument(for episodeID: String) -> EpisodeTranscriptDocument? {
         guard let transcriptDocument, transcriptDocument.episodeID == episodeID else {
             return nil
@@ -87,9 +71,8 @@ final class EpisodeChaptersSummarySectionModel {
             return
         }
 
-        // Settling this key with a nil document is permanent until the user
-        // re-enters (nothing re-keys the task), so a transient read failure
-        // retries briefly before the surface is allowed to go dark.
+        // A nil document settles this key until the user re-enters (nothing re-keys the
+        // task), so a transient read failure retries briefly first.
         var loadedTranscriptDocument: EpisodeTranscriptDocument?
         for attempt in 1...3 {
             do {

@@ -1,18 +1,9 @@
 import Foundation
 import SwiftData
 
-/// The playlist half of `SyncDuplicateRepairer`'s pass: enforces playlist
-/// tombstones, merges twin rows that two devices wrote under one logical key,
-/// and collects spent playlist tombstones. A twin playlist keeps the row the
-/// other synced models keep (smallest `dedupeUUID`); a twin item keeps the
-/// newest `addedAt` (see `keptItem`). Both picks are functions of write-once
-/// fields, so every device converges without cross-deleting, and it never
-/// saves: the caller saves the whole pass once.
-///
-/// Rows with an empty key are left alone, since an unset key is not an
-/// identity two rows can share. An item is never deleted because its
-/// playlist row is missing: the playlist row may simply not have arrived
-/// from iCloud yet, and only a tombstone proves a delete.
+/// Never saves; the caller saves the whole pass once. Twin picks depend only on write-once
+/// fields, so every device converges without cross-deleting. A missing playlist row never
+/// deletes its items: it may not have synced yet, and only a tombstone proves a delete.
 enum PlaylistSyncRepairer {
     static func repair(modelContext: ModelContext, now: Date, result: inout SyncRepairResult) throws {
         let tombstones = try modelContext.fetch(FetchDescriptor<PlaylistTombstoneRecord>())
@@ -61,19 +52,13 @@ enum PlaylistSyncRepairer {
 
     // MARK: - Kept rows
 
-    /// The copy a merge keeps for twin playlists, or nil when no copy carries
-    /// an identity and the merge replaces the group with a fresh row. The
-    /// playlist store lists rows by the same pick.
+    /// nil when no copy carries an identity; the merge then replaces the group with a fresh row.
     static func keptPlaylist(in group: [PlaylistRecord]) -> PlaylistRecord? {
         SyncDuplicateRepairer.deterministicWinner(in: group)
     }
 
-    /// Unlike `keptPlaylist`, twin items keep the copy with the **newest**
-    /// `addedAt` (ties: smallest `dedupeUUID`, then `itemID`), and never one
-    /// without an identity. `addedAt` is written once at creation and gates
-    /// item tombstones, so it is as immutable as the identity; keeping the
-    /// newest copy means an add made after a removal on another offline
-    /// device is not folded into the older row that device is deleting.
+    /// The newest `addedAt` wins: it is write-once and gates item tombstones, so an add made after
+    /// a removal on another offline device must not fold into the older row that device deletes.
     static func keptItem(in group: [PlaylistItemRecord]) -> PlaylistItemRecord? {
         group
             .filter { !$0.dedupeUUID.isEmpty }
@@ -117,10 +102,9 @@ enum PlaylistSyncRepairer {
                 modelContext.delete(playlist)
             }
         } else {
-            // No copy carries an identity, so peers could keep opposite
-            // copies and cross-delete both. Replace the group with one freshly
-            // identified row; competing replacements converge on the smaller
-            // UUID in a later pass.
+            // No copy carries an identity, so peers could keep opposite copies and cross-delete
+            // both. One freshly identified row replaces the group; competing replacements
+            // converge on the smaller UUID in a later pass.
             let merged = PlaylistRecord(
                 playlistID: playlistID,
                 name: source.name,
@@ -145,9 +129,7 @@ enum PlaylistSyncRepairer {
         result.playlistRecordsDeleted += group.count - 1
     }
 
-    /// Newest `updatedAt` first, then the smaller `dedupeUUID`, then the
-    /// content itself, so the pick never depends on fetch order. The playlist
-    /// store lists rows by the same order.
+    /// Ties fall back to the content itself, so the pick never depends on fetch order.
     static func isFresherPlaylist(_ candidate: PlaylistRecord, than current: PlaylistRecord) -> Bool {
         if candidate.updatedAt != current.updatedAt {
             return candidate.updatedAt > current.updatedAt
@@ -182,11 +164,8 @@ enum PlaylistSyncRepairer {
         }
 
         if let keep = keptItem(in: group) {
-            // The kept row already carries the newest `addedAt` of the
-            // identified copies and keeps it: `addedAt` gates item tombstones,
-            // so an older twin's date must not drag a legitimate re-add behind
-            // an in-flight removal, and the pick stays a function of
-            // write-once fields on every device.
+            // `addedAt` stays the kept row's own: it gates item tombstones, and an older twin's
+            // date must not drag a legitimate re-add behind an in-flight removal.
             SyncDuplicateRepairer.setIfChanged(keep, \.podcastID, source.podcastID)
             SyncDuplicateRepairer.setIfChanged(keep, \.sortKey, source.sortKey)
             SyncDuplicateRepairer.setIfChanged(keep, \.updatedAt, source.updatedAt)
@@ -201,9 +180,7 @@ enum PlaylistSyncRepairer {
                 modelContext.delete(item)
             }
         } else {
-            // Same reasoning as the playlist branch: one freshly identified
-            // row replaces copies that carry no identity, with the group's
-            // newest `addedAt` for the same tombstone reason.
+            // The newest `addedAt`, so a re-add stays ahead of an in-flight removal.
             let addedAt = group.map(\.addedAt).max() ?? source.addedAt
             modelContext.insert(
                 PlaylistItemRecord(
@@ -232,8 +209,7 @@ enum PlaylistSyncRepairer {
         result.playlistItemRecordsDeleted += group.count - 1
     }
 
-    /// Same order as `isFresherPlaylist`; `itemID` leads the content because
-    /// the identity-less merge carries the source's `itemID`.
+    /// `itemID` leads the content because the identity-less merge carries the source's `itemID`.
     static func isFresherItem(_ candidate: PlaylistItemRecord, than current: PlaylistItemRecord) -> Bool {
         if candidate.updatedAt != current.updatedAt {
             return candidate.updatedAt > current.updatedAt
@@ -265,10 +241,6 @@ enum PlaylistSyncRepairer {
 
     // MARK: - Tombstones
 
-    /// Deletes playlist tombstones that protect nothing: malformed ones (they
-    /// index nothing), ones past the retention horizon, item tombstones a
-    /// whole-playlist tombstone already covers, and ones a newer tombstone
-    /// with the same key supersedes.
     private static func collectSpentTombstones(
         _ tombstones: [PlaylistTombstoneRecord],
         index: PlaylistTombstoneIndex,

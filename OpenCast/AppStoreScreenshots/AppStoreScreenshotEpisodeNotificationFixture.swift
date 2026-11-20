@@ -1,11 +1,6 @@
 #if DEBUG
 import UserNotifications
 
-/// Screenshot-lane-only: delivers a marketing-clean new-episode notification
-/// for the primary seed episode eight seconds after launch (time for the UI
-/// test to reach the Library) so the App Store
-/// set can capture the rich card on SpringBoard. Seed-catalog copy and the
-/// bundled cover art stand in for the real feed payload.
 enum AppStoreScreenshotEpisodeNotificationFixture {
     static func schedule() {
         Task {

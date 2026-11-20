@@ -1,11 +1,6 @@
-/// Ad-detection settings from the policy bundle. Validator logic is not here:
-/// these are the parameters it runs with, each inside the app's hard bounds
-/// (`AnalysisPolicyClamp`).
 public struct AdDetectionPolicy: Sendable, Equatable, Decodable {
     public struct Window: Sendable, Equatable, Decodable {
-        /// Segments per model request.
         public var segments: Int
-        /// Segments shared by neighbouring windows.
         public var overlap: Int
         /// Windows dispatched at once on one key.
         public var maxInFlight: Int
@@ -18,13 +13,10 @@ public struct AdDetectionPolicy: Sendable, Equatable, Decodable {
     }
 
     public struct Limits: Sendable, Equatable, Decodable {
-        /// Spans one window's answer may hold before it fails closed.
         public var spansPerWindow: Int
-        /// Longest single break accepted.
         public var maxBreakSeconds: Double
         /// Share of the runtime the episode's ad time may reach.
         public var budgetFraction: Double
-        /// Ad time always allowed regardless of runtime.
         public var budgetFloorSeconds: Double
         /// Longest evidence quote accepted, in normalized words.
         public var evidenceWords: Int
@@ -41,7 +33,6 @@ public struct AdDetectionPolicy: Sendable, Equatable, Decodable {
     public struct Repair: Sendable, Equatable, Decodable {
         /// Corrective re-requests allowed per window.
         public var attempts: Int
-        /// Largest repair feedback block, in bytes.
         public var feedbackBytes: Int
 
         enum CodingKeys: String, CodingKey {
@@ -50,18 +41,15 @@ public struct AdDetectionPolicy: Sendable, Equatable, Decodable {
         }
     }
 
-    /// Policy name rendered into the request's user JSON.
     public var policy: String
-    /// Serving revision of the prompt, validator and model settings.
     public var revision: String
     /// System instruction text, byte for byte.
     public var prompt: String
-    /// Structured-output schema sent with every request.
     public var responseSchema: AnalysisPolicyJSON
     public var window: Window
     public var limits: Limits
     public var repair: Repair
-    /// One entry per provider at most, each qualified on the golden suite.
+    /// At most one entry per provider.
     public var qualifiedModels: [AnalysisModelEntry]
 
     enum CodingKeys: String, CodingKey {

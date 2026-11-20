@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// The one-time confirmation before the first Private Cloud Compute request,
-/// rendered inline in the sheet so the whole data path is readable.
 struct TranscriptIntelligenceDisclosureView: View {
     let onContinue: () -> Void
     let onCancel: () -> Void

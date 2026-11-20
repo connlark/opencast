@@ -3,9 +3,6 @@ import OpenCastCore
 import OpenCastTranscription
 import SwiftData
 
-/// Opt-in Release harness for search work outside the warm query-engine timer.
-/// It covers the production debounce/mapping path, transactional metadata and
-/// transcript updates, and transcript-index storage density.
 nonisolated struct SearchPerformanceRunner: Sendable {
     static let requestArgument = "--opencast-run-search-performance"
     static let requestEnvironmentKey = "OPENCAST_RUN_SEARCH_PERFORMANCE"

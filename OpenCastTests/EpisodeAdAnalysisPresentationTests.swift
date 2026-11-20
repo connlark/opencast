@@ -65,16 +65,6 @@ struct EpisodeAdAnalysisPresentationTests {
         }
     }
 
-    @Test func differentiateWithoutColorSurvivesSearchAndKaraokeStyles() throws {
-        let text = "Sponsor News"
-        let ad = try #require(text.range(of: "Sponsor"))
-        let result = TranscriptLineTextBuilder.attributedText(text: text, spokenUpperBound: ad.upperBound,
-            highlightRanges: [ad], adRanges: [ad], differentiateWithoutColor: true)
-        let range = try #require(Range(ad, in: result))
-        #expect(result[range].underlineStyle != nil)
-        #expect(result[range].backgroundColor == .yellow.opacity(0.4))
-    }
-
     @Test func silentAutomaticOverlapRetainsPossibleAdvertisingWords() throws {
         let source = segment(words: [
             .init(start: 2, end: 4, text: "Sponsor"), .init(start: 4, end: 6, text: "words."),

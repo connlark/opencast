@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// The model's proposals, one section each, between a line saying what part
-/// of the show the model saw (and, after a simpler answer, a note that the
-/// app named them) and the Apple Intelligence footer.
 struct PlaylistOrganizerProposalsList: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 

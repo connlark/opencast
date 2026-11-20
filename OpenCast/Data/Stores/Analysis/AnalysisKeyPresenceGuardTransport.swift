@@ -3,25 +3,18 @@ import OpenCastAnalysis
 import OpenCastAnalysisProviders
 import Synchronization
 
-/// Stops a direct run once the listener's key for its provider is gone:
-/// before every send it reads the Keychain again (an iCloud Keychain removal
-/// counts), and a key that is absent, replaced or unreadable refuses the
-/// send without reaching the provider. The provider transport runs the same
-/// check (``dispatchCheck(provider:keyDigest:keys:onRemoval:)``) after its
-/// pacer admits the send and right before it leaves, so a send that waited
-/// for the pacer is refused too. The refusal is final, so the pipeline
-/// cancels the run's other windows; sends already out may finish.
+/// Rereads the Keychain before every send; a key that is absent, replaced or unreadable refuses
+/// the send. Provider transports repeat the check through `dispatchCheck` after their pacer admits
+/// a send, so a send that waited on the pacer is refused too.
 nonisolated struct AnalysisKeyPresenceGuardTransport: AnalysisProviderTransport {
     let inner: any AnalysisProviderTransport
     let provider: AnalysisProvider
-    /// The digest of the key the run was resolved with.
     let keyDigest: Data
     let keys: any AnalysisProviderKeyStoring
     let observer: any AnalysisProviderSendObserver
-    /// Told why the run lost its key, at the first refused send.
     let onRemoval: @Sendable (AnalysisKeyRequiredReason) -> Void
 
-    /// How a refused send fails: final, never retried, nothing sent.
+    /// Final and never retried; status 0 marks that nothing was sent.
     static let refusal = AnalysisProviderErrorClassification(transport: .rejected(status: 0), listener: .keyRequired)
 
     func send(_ request: AnalysisProviderRequest) async throws(AnalysisTransportError) -> AnalysisProviderReply {
@@ -45,8 +38,7 @@ nonisolated struct AnalysisKeyPresenceGuardTransport: AnalysisProviderTransport 
         return try await inner.send(request)
     }
 
-    /// The check a provider transport runs after its pacer admits a send;
-    /// the transport records the refused send itself.
+    /// The caller records the refused send itself.
     static func dispatchCheck(
         provider: AnalysisProvider,
         keyDigest: Data,
@@ -62,7 +54,6 @@ nonisolated struct AnalysisKeyPresenceGuardTransport: AnalysisProviderTransport 
         }
     }
 
-    /// Why the run's key no longer stands, read from the Keychain now.
     static func removal(
         provider: AnalysisProvider,
         keyDigest: Data,
@@ -78,11 +69,9 @@ nonisolated struct AnalysisKeyPresenceGuardTransport: AnalysisProviderTransport 
     }
 }
 
-/// Why each run lost its key, by run id.
 nonisolated final class AnalysisKeyRemovalLog: Sendable {
     private let removals = Mutex<[String: AnalysisKeyRequiredReason]>([:])
 
-    /// Keeps the first reason a run reported.
     func record(_ reason: AnalysisKeyRequiredReason, runID: String) {
         removals.withLock { $0[runID] = $0[runID] ?? reason }
     }

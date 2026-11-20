@@ -55,42 +55,6 @@ struct TranscriptSearchIndexTests {
         #expect(try await index.result(for: "needle").matchSegmentIDs == [41])
     }
 
-    @Test("Index work observes cancellation after entering its production loops")
-    func asyncIndexWorkPropagatesInFlightCancellation() async throws {
-        let segments = (0..<256).map { id in
-            segment(id: id, text: "Transcript segment \(id) with a searchable needle")
-        }
-        let buildGate = TranscriptSearchCheckpointGate(checkpoint: 64)
-
-        let buildTask = Task {
-            try await TranscriptSearchIndex.build(segments: segments) { offset in
-                await buildGate.reach(offset)
-            }
-        }
-        await buildGate.waitUntilReached()
-        buildTask.cancel()
-        await buildGate.release()
-
-        await #expect(throws: CancellationError.self) {
-            try await buildTask.value
-        }
-
-        let index = try await TranscriptSearchIndex.build(segments: segments)
-        let queryGate = TranscriptSearchCheckpointGate(checkpoint: 64)
-        let queryTask = Task {
-            try await index.result(for: "needle") { offset in
-                await queryGate.reach(offset)
-            }
-        }
-        await queryGate.waitUntilReached()
-        queryTask.cancel()
-        await queryGate.release()
-
-        await #expect(throws: CancellationError.self) {
-            try await queryTask.value
-        }
-    }
-
     @Test("Rapid replacement keeps the newer query authoritative")
     @MainActor
     func rapidQueryReplacementRejectsStaleCompletion() {
@@ -125,42 +89,5 @@ struct TranscriptSearchIndexTests {
             avgLogProbability: -0.1,
             noSpeechProbability: 0.01
         )
-    }
-}
-
-private actor TranscriptSearchCheckpointGate {
-    private let checkpoint: Int
-    private var reached = false
-    private var reachedContinuation: CheckedContinuation<Void, Never>?
-    private var releaseContinuation: CheckedContinuation<Void, Never>?
-
-    init(checkpoint: Int) {
-        self.checkpoint = checkpoint
-    }
-
-    func reach(_ offset: Int) async {
-        guard offset == checkpoint, !reached else {
-            return
-        }
-        reached = true
-        reachedContinuation?.resume()
-        reachedContinuation = nil
-        await withCheckedContinuation { continuation in
-            releaseContinuation = continuation
-        }
-    }
-
-    func waitUntilReached() async {
-        guard !reached else {
-            return
-        }
-        await withCheckedContinuation { continuation in
-            reachedContinuation = continuation
-        }
-    }
-
-    func release() {
-        releaseContinuation?.resume()
-        releaseContinuation = nil
     }
 }

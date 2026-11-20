@@ -4,7 +4,6 @@ nonisolated enum CarPlayListRow: Equatable, Sendable {
 
     case episode(CarPlayEpisodeRow)
     case podcast(CarPlayPodcastRow)
-    /// The glyph-and-title row that leads the Library list and pushes the playlists.
     case playlists
     case playlist(CarPlayPlaylistRow)
     case showMore

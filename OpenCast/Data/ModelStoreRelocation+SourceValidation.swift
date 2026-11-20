@@ -2,8 +2,7 @@ import Foundation
 import SQLite3
 
 nonisolated extension ModelStoreRelocation {
-    /// What step 2 learned about the group store. A deferral keeps the facts
-    /// read before it, for the log.
+    /// A deferral keeps the facts read before it, for the log.
     nonisolated struct SourceValidation {
         var storeUUID: String?
         var walSize: Int?
@@ -11,11 +10,9 @@ nonisolated extension ModelStoreRelocation {
         var deferral: Deferral?
     }
 
-    /// Step 2: establishes that the group file is a WAL-mode Core Data store
-    /// with its log folded into the main file, not its integrity. The open
-    /// is read-write without create, so a missing file is never conjured, and
-    /// the handle never outlives the call. Every failure is a deferral; a
-    /// checkpoint that advanced the main file before one is harmless.
+    /// Checks that the group file is a WAL-mode Core Data store with its log folded in, not
+    /// its integrity. Opens read-write without create and closes before returning. Every
+    /// failure defers; a checkpoint that advanced the main file before one is harmless.
     static func validateSource(
         _ group: Package,
         operations: any ModelStoreFileOperations

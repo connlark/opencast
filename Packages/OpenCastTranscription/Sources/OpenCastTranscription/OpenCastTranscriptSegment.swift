@@ -7,13 +7,11 @@ public struct OpenCastTranscriptSegment: Codable, Sendable, Identifiable, Equata
     public var text: String
     public var avgLogProbability: Double
     public var noSpeechProbability: Double
-    /// Word-level timings in absolute episode seconds, ordered, within
-    /// `[start, end]`. Non-nil only when every word in `text` is covered;
-    /// joining the word texts under Apple's join rules (space-joined except
-    /// attached punctuation `.,;:!?)]}%`) reconstructs `text`.
+    /// Absolute episode seconds, ordered, within `[start, end]`. Non-nil only when the words
+    /// cover all of `text`: joined with spaces, except before attached punctuation
+    /// (`.,;:!?)]}%`), they reconstruct it.
     public var words: [OpenCastTranscriptWord]?
-    /// Sticky provenance: repaired word times remain usable for display, not
-    /// precise ad cuts. Nil preserves compatibility with older transcripts.
+    /// Sticky: repaired word times are fine for display but not for precise ad cuts.
     public var wordTimingsAdjusted: Bool?
 
     public init(

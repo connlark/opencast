@@ -25,8 +25,6 @@ extension SHA256.Digest {
 }
 
 public extension OpenCastHTTPClient {
-    /// Compatibility for injected/materializing clients. URLSession's
-    /// production implementation writes decoded chunks directly to disk.
     func feedFile(for request: URLRequest, maximumBodyByteCount: Int) async throws -> OpenCastHTTPFileResult {
         let result = try await data(for: request)
         try Task.checkCancellation()

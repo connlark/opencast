@@ -6,9 +6,8 @@ nonisolated struct RemoteTranscriptionAppTransactionSnapshot: Sendable {
     let environment: RemoteTranscriptionStoreEnvironment
 }
 
-/// AppTransaction is shared by the lane resolver and purchase bootstrap.
-/// Coalescing it here guarantees both consumers make their decision from the
-/// same signed snapshot, even when they start concurrently during launch.
+/// Coalesced so the lane resolver and purchase bootstrap decide from the same signed snapshot,
+/// even when they start concurrently during launch.
 actor RemoteTranscriptionAppTransactionCache {
     static let shared = RemoteTranscriptionAppTransactionCache()
 
@@ -173,9 +172,7 @@ actor RemoteTranscriptionAppTransactionCache {
     }
 }
 
-/// Fetches the device's AppTransaction for lanes that key identity to it.
-/// The raw JWS goes to the server, which performs the authoritative
-/// verification with Apple's library — the app never trusts its own parse.
+/// The server verifies the raw JWS authoritatively; the app never trusts its own parse.
 nonisolated enum RemoteTranscriptionAppTransactionProvider {
     static func currentJWS() async throws -> String? {
         try await RemoteTranscriptionAppTransactionCache.shared.snapshot().jwsRepresentation

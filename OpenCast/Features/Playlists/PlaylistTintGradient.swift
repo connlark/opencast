@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// A smart playlist's tint as a soft top-to-bottom gradient: the ground of
-/// its symbol cover and of its card stack.
 struct PlaylistTintGradient: View {
     let tint: PlaylistTint
 

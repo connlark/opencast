@@ -1,16 +1,6 @@
 @preconcurrency import CoreML
 import Foundation
 
-/// Opt-in, measure-only stateful decoder probe:
-/// per-forward microbenchmark for Tiny bundle candidates.
-///
-/// Loads compiled bundles from `Documents/StatefulSpike/*.mlmodelc` in the
-/// app container (pushed via devicectl; never part of the app bundle or the
-/// model manifest), reports MLComputePlan device placement, and times
-/// forwards per schema: decoders (manual-cache or MLState) sweep width-1
-/// forwards across cache-fill levels; MelSpectrogram and AudioEncoder
-/// bundles time whole forwards. Nothing here touches the product
-/// transcription path.
 nonisolated enum StatefulSpikeDecoderProbe {
     static let requestArgument = "--opencast-stateful-spike-probe"
     static let requestEnvironmentKey = "OPENCAST_STATEFUL_SPIKE_PROBE"
@@ -198,9 +188,6 @@ nonisolated enum StatefulSpikeDecoderProbe {
         )
     }
 
-    /// Per-op preferred-device counts — the direct answer to "did the ANE
-    /// accept this graph" that host E5RT refused to give for the stateful
-    /// variants.
     private static func computePlanSummary(bundle: URL, configuration: MLModelConfiguration) async -> [String: Any] {
         do {
             let plan = try await MLComputePlan.load(contentsOf: bundle, configuration: configuration)
@@ -245,9 +232,8 @@ nonisolated enum StatefulSpikeDecoderProbe {
     }
 }
 
-/// Reusable decoder inputs. Cache arrays are allocated once and reused —
-/// the timed prediction call includes CoreML's own input transfer, which is
-/// exactly the manual-vs-stateful difference under measurement.
+/// Cache arrays are allocated once and reused: the timed call then includes
+/// only CoreML's input transfer, the manual-vs-stateful difference measured.
 private nonisolated final class SpikeDecoderInputs {
     private let keyCache: MLMultiArray
     private let valueCache: MLMultiArray

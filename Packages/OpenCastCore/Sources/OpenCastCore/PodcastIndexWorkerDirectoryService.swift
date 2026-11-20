@@ -1,11 +1,7 @@
 import Foundation
 
-/// Client for OpenCast's Podcast Index directory Worker. The app never
-/// contacts Podcast Index directly; the Worker normalizes and bounds
-/// everything upstream.
 public struct PodcastIndexWorkerDirectoryService: PodcastDirectoryService {
-    /// Worker-side and client-side request budget; the Worker aborts
-    /// upstream calls at five seconds, so this bounds the round trip.
+    /// The Worker aborts upstream calls at five seconds; this bounds the whole round trip.
     static let requestTimeout: TimeInterval = 10
 
     let baseURL: URL

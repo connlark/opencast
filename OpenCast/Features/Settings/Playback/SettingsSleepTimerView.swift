@@ -1,8 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// The six sleep timer presets, reached from Settings › Playback and from
-/// the sleep timer sheet's pencil.
 struct SettingsSleepTimerView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
@@ -34,8 +32,7 @@ struct SettingsSleepTimerView: View {
         .settingsSubscreen(title: "Sleep Timer")
     }
 
-    /// Every duration except those the other five slots hold, so the six
-    /// stay distinct.
+    /// Excludes what the other five slots hold, so the six stay distinct.
     private func choices(
         for index: Int,
         in presets: [SleepTimerPresetDuration]

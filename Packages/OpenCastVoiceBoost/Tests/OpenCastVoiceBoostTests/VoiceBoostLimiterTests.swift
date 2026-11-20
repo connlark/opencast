@@ -2,11 +2,6 @@ import Foundation
 import Testing
 @testable import OpenCastVoiceBoost
 
-/// Requirements for the true-peak lookahead limiter: exact ceiling
-/// compliance with no hidden headroom, null transparency below threshold,
-/// latency == lookahead, sliding-minimum attack that never overshoots,
-/// smooth exponential release, clean reset, and a stable interplay with the
-/// loudness engine's chain-loss makeup.
 struct VoiceBoostLimiterTests {
     @Test(
         "Below the ceiling the limiterOnly chain is a pure delay",
@@ -100,8 +95,6 @@ struct VoiceBoostLimiterTests {
             channelCount: 2,
             sampleRate: sampleRate
         )
-        // The old chain parked hot tones ~1.4 dB under the ceiling (the
-        // 0.85x fudge); the limiter must land at the ceiling itself.
         #expect(truePeak <= ceilingDBTP + 0.1)
         #expect(truePeak >= ceilingDBTP - 0.1)
         #expect(processor.metrics.maximumLimiterReductionDB > 2)
@@ -160,9 +153,8 @@ struct VoiceBoostLimiterTests {
         #expect(processor.metrics.maximumLimiterReductionDB > 1.5)
         #expect(processor.metrics.safetyClampCount == 0)
 
-        // Steady-state tail: project onto the fundamental; anything the
-        // projection cannot explain is waveshaping (the old copysign clamp
-        // squared this fixture off).
+        // Project the steady-state tail onto the fundamental; the residual is
+        // waveshaping.
         let tailStart = Int(sampleRate * 1.0)
         let tail = buffer[tailStart...].map(Double.init)
         var sinSum = 0.0
@@ -260,9 +252,8 @@ struct VoiceBoostLimiterTests {
             offsetFrames += frameCount
         }
 
-        // Within each burst-to-burst gap the reduction must decay
-        // monotonically (no pumping) and recover most of the way before the
-        // next hit (100 ms release inside a 110 ms gap).
+        // Each gap must decay monotonically and recover most of the way
+        // before the next burst: a 100 ms release inside a 110 ms gap.
         let periodBlocks = (burstFrames + gapFrames) / blockFrames
         var recoveryChecked = 0
         for period in 1..<5 {
@@ -314,8 +305,6 @@ struct VoiceBoostLimiterTests {
         #expect(afterReset.safetyClampCount == 0)
         #expect(afterReset.latencyFrames == 240)
 
-        // The first lookahead window after a reset must be zero-primed
-        // (no stale tone), then bit-identical delayed passthrough.
         var speech = VoiceBoostFixtureGenerator.speechLike(
             amplitude: 0.2,
             sampleRate: sampleRate,
@@ -433,9 +422,8 @@ struct VoiceBoostLimiterTests {
         #expect(truePeak <= -1.0 + 0.1)
         #expect(clampCount == 0)
 
-        // Deadband + chain-loss clamp must hold the fixed point steady: no
-        // gain oscillation, and the transient convergence-ramp limiting has
-        // subsided rather than settled into a makeup-versus-limiter fight.
+        // The deadband and chain-loss clamp hold the fixed point: no gain
+        // oscillation, and no lasting makeup-versus-limiter fight.
         let minimumGain = try #require(tailGains.min())
         let maximumGain = try #require(tailGains.max())
         #expect(maximumGain - minimumGain < 1.0)

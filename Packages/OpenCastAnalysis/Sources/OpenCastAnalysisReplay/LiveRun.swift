@@ -2,8 +2,6 @@ import Foundation
 import OpenCastAnalysis
 import OpenCastAnalysisProviders
 
-/// `live` and `key-test`: one real run (or key test) against a provider
-/// with a key read from a file, recorded under `--out`.
 struct LiveRun {
     let arguments: Arguments
 
@@ -17,9 +15,6 @@ struct LiveRun {
         }
     }
 
-    /// The model entry: the baked bundle's entry for the provider and model
-    /// when it has one, else the service entry with the provider, model and
-    /// thinking level replaced.
     func entry(feature: AnalysisFeature) throws(AnalysisReplay.InputError) -> AnalysisModelEntry {
         let provider = try provider
         let modelID = try arguments.required("model")
@@ -186,9 +181,7 @@ struct LiveRun {
         return .object(members)
     }
 
-    /// Writes one artifact through the recorder sink (redacted by structure,
-    /// verified for every fragment of the key, or a placeholder) and returns
-    /// what was written, which is also all the tool prints.
+    /// Returns the redacted value as written, which is safe to print; `value` is not.
     @discardableResult
     static func write(_ value: JSONValue, to url: URL, key: AnalysisProviderKey) throws -> JSONValue {
         let recording = key.safeRecording(value)

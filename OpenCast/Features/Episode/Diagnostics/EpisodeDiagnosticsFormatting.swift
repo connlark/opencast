@@ -1,9 +1,7 @@
 import Foundation
 import OpenCastPlayback
 
-/// Shared row-value formatting: raw seconds with millisecond precision (so
-/// boundary clamping is visible), ISO-8601 dates, and explicit sentinels
-/// instead of empty strings.
+/// Seconds keep millisecond precision so boundary clamping stays visible.
 nonisolated enum EpisodeDiagnosticsFormatting {
     static func value(_ value: String?) -> String {
         guard let value, !value.isEmpty else {

@@ -4,7 +4,6 @@ nonisolated enum OpenCastAppVersion {
     static let shortVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
     static let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
 
-    /// `CFBundleVersion` as an integer for remote-content build gates.
     static var buildNumber: Int? {
         build.flatMap(Int.init)
     }

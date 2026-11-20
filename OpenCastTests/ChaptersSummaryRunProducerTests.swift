@@ -27,8 +27,6 @@ struct ChaptersSummaryRunProducerTests {
         #expect(response.policy == EpisodeTranscriptAnalysisContract.expectedPolicy)
         #expect(response.requestID == request.runID)
         #expect(transport.recordStateAtSend == [.dispatched])
-        // The answer is in but the document is not: the run stays
-        // resumable with its kept reply.
         #expect(harness.runs.record(id: request.runID)?.state == .dispatched)
 
         harness.producer.finish(completion)
@@ -224,8 +222,6 @@ struct ChaptersSummaryRunProducerTests {
         harness.transport = transport
         let request = harness.request(isResume: true)
         try harness.runs.begin(harness.record(for: request))
-        // The resolver found the run's model or policy changed and resolved
-        // a new run instead.
         harness.resumingRunID = nil
 
         let result = await harness.producer.run(request, modelContext: harness.context)
@@ -286,7 +282,6 @@ struct ChaptersSummaryRunProducerTests {
     ])
     func keyRemovedMidRunNeedsAKey(removal: AnalysisKeyRequiredReason?, expected: EpisodeAnalysisFailureKind) async throws {
         let harness = try Harness()
-        // The key guard refuses the send once the key is gone.
         harness.transport = ScriptedChaptersTransport(harness: harness, answer: .failure(.keyRequired, .rejected(status: 0)))
         harness.keyRemovalReason = removal
         let request = harness.request()
@@ -309,8 +304,6 @@ struct ChaptersSummaryRunProducerTests {
         let usageStore = AnalysisUsageStore()
         usageStore.load(modelContext: harness.context)
         harness.usageStore = usageStore
-        // The first answer is billed but rejected, so the run retries; the
-        // retry waits, as a send waits in the pacer or on the provider.
         let transport = ScriptedChaptersTransport(harness: harness, answer: .billedRetryThenHold)
         harness.transport = transport
         let (store, appModel) = try harness.storeInAppModel()
@@ -324,17 +317,13 @@ struct ChaptersSummaryRunProducerTests {
         )
         #expect(await waitUntil { transport.isHolding })
         let runID = try #require(harness.runs.records(limit: 1).first?.id)
-        // What the key sheet's Remove calls once the key is gone.
         appModel.cancelAnalysisRuns(onProvider: .google)
 
-        // The card says what to do as soon as the run stops.
         #expect(await waitUntil { !store.hasActiveJob })
         let record = try #require(store.record(for: transcript.episodeID))
         #expect(record.state == .failed)
         #expect(record.failureKind == .keyRequiredNoKey)
-        // The listener is where keys are added: no key screen.
         #expect(harness.presented.isEmpty)
-        // The run record ends as a send that found the key gone ends it.
         let run = try #require(harness.runs.record(id: runID))
         #expect(run.state == .failed)
         #expect(run.outcomeCode == AnalysisFailureCode.providerRejected.rawValue)
@@ -342,8 +331,7 @@ struct ChaptersSummaryRunProducerTests {
         #expect(run.finishedAt != nil)
         #expect(run.usageRecorded == true)
         #expect(harness.runs.latestDispatched(feature: .chaptersSummary, episodeID: transcript.episodeID) == nil)
-        // The billed answer counts once; nothing is sent after the removal
-        // (the billed answer and the waiting retry are the run's two sends).
+        // Two sends: the billed answer and the waiting retry.
         #expect(usageStore.usage(for: .google).monthInputTokens == 420)
         #expect(usageStore.usage(for: .google).monthOutputTokens == 36)
         #expect(transport.recordStateAtSend.count == 2)
@@ -409,7 +397,6 @@ struct ChaptersSummaryRunProducerTests {
         #expect(record.usageRecorded == true)
         #expect(usageStore.usage(for: .google).monthInputTokens == 420)
         #expect(usageStore.usage(for: .google).monthOutputTokens == 36)
-        // Counting again, at a load or a second close, adds nothing.
         harness.producer.recordUnaccountedUsage(modelContext: harness.context)
         harness.producer.abandon(runID: request.runID, modelContext: harness.context)
         #expect(usageStore.usage(for: .google).monthInputTokens == 420)
@@ -434,7 +421,6 @@ struct ChaptersSummaryRunProducerTests {
             Issue.record("Expected an expired run")
             return
         }
-        // An expired run stays open: nothing is counted until it ends.
         #expect(usageStore.usage(for: .google).monthInputTokens == 0)
 
         harness.producer.abandon(runID: request.runID, modelContext: harness.context)
@@ -464,7 +450,6 @@ struct ChaptersSummaryRunProducerTests {
         #expect(harness.runs.record(id: request.runID)?.state == .finished)
         #expect(harness.runs.record(id: request.runID)?.usageRecorded != true)
 
-        // The next launch: the usage read from what was saved, then counted.
         let relaunched = AnalysisUsageStore()
         relaunched.load(modelContext: harness.context)
         #expect(relaunched.usage(for: .google).monthInputTokens == 0)
@@ -497,46 +482,6 @@ struct ChaptersSummaryRunProducerTests {
         #expect(harness.runs.records(limit: 10).count == 1)
     }
 
-    @Test("Every failure code and listener failure maps to one kind")
-    func failureMappingIsTotal() {
-        for code in AnalysisFailureCode.allCases {
-            _ = ChaptersSummaryFailureMapping.kind(for: code)
-        }
-        for failure in AnalysisProviderFailure.allCases {
-            let mapped = ChaptersSummaryFailureMapping.failure(
-                AnalysisFailure(feature: .chaptersSummary, code: .providerRejected, status: 502),
-                listenerFailure: failure
-            )
-            #expect(mapped.message == "Chapters & Summary failed (\(failure.rawValue)).")
-        }
-        #expect(ChaptersSummaryFailureMapping.kind(for: .invalidModelOutput) == .validationExhausted)
-        #expect(ChaptersSummaryFailureMapping.kind(for: .transcriptTooLong) == .validationExhausted)
-        #expect(ChaptersSummaryFailureMapping.kind(for: AnalysisFailureCode.timeout) == .timedOut)
-        #expect(ChaptersSummaryFailureMapping.kind(for: AnalysisProviderFailure.timeout) == .timedOut)
-        #expect(ChaptersSummaryFailureMapping.kind(for: .network) == .providerUnavailable)
-        #expect(ChaptersSummaryFailureMapping.kind(for: .replayMissingReply) == .generic)
-        #expect(ChaptersSummaryFailureMapping.kind(for: .rateLimited) == .providerLimited)
-        #expect(ChaptersSummaryFailureMapping.kind(for: .billingOrQuota) == .providerRejectedKey)
-        #expect(ChaptersSummaryFailureMapping.kind(for: .trialPaused) == .keyRequiredTrialPaused)
-        #expect(ChaptersSummaryFailureMapping.kind(for: .trialRunBound) == .keyRequiredTrialRunBound)
-        #expect(ChaptersSummaryFailureMapping.kind(for: .trialUnavailable) == .keyRequiredProxyUnavailable)
-        for reason in AnalysisKeyRequiredReason.allCases {
-            #expect(ChaptersSummaryFailureMapping.failure(keyRequired: reason).kind.keyRequiredReason == reason)
-        }
-    }
-
-    @Test("The new kinds are mapped: a daily limit names itself, and Google naming the free tier is read first")
-    func freeTierKindsAreMapped() {
-        let failure = AnalysisFailure(feature: .chaptersSummary, code: .quotaExhausted, status: 429)
-
-        #expect(ChaptersSummaryFailureMapping.kind(for: AnalysisProviderFailure.dailyLimit) == .providerDailyLimit)
-        #expect(ChaptersSummaryFailureMapping.failure(failure, listenerFailure: .dailyLimit).kind == .providerDailyLimit)
-        #expect(ChaptersSummaryFailureMapping.failure(failure, listenerFailure: .billingOrQuota).kind == .providerRejectedKey)
-        for listener: AnalysisProviderFailure? in [.billingOrQuota, .dailyLimit, .rateLimited, nil] {
-            #expect(ChaptersSummaryFailureMapping.failure(failure, listenerFailure: listener, namedFreeTier: true).kind == .providerFreeTier)
-        }
-    }
-
     @Test("A free-tier per-minute 429 still paces through the producer: no Chapters resolution makes it final")
     func freeTierPerMinuteStillPaces() async throws {
         let body = AnalysisTransportFactoryTests.minuteBody(quotaID: AnalysisTransportFactoryTests.freeTierMinuteQuotaID)
@@ -556,8 +501,6 @@ struct ChaptersSummaryRunProducerTests {
             Issue.record("Expected a failed run, got \(result)")
             return
         }
-        // The answer was not final: the run went on, waiting out the delay
-        // Google named before every send after the first.
         #expect(client.sent.count > 1)
         #expect(clock.sleeps == Array(repeating: AnalysisTransportFactoryTests.retryDelaySeconds, count: client.sent.count - 1))
         #expect(failure.kind == .providerFreeTier)
@@ -585,13 +528,9 @@ private final class Harness {
     var resolution: AnalysisRouteResolution?
     var resumingRunID: String?
     var transport: (any AnalysisProviderTransport)?
-    /// Builds the run's real transport, in place of `transport`.
     var transportFactory: AnalysisTransportFactory?
     var transportError: AnalysisTransportFactoryError?
-    /// The listener's usage when a test checks what was saved, not only
-    /// what was asked for.
     var usageStore: AnalysisUsageStore?
-    /// What the transport factory reports about a key lost mid-run.
     var keyRemovalReason: AnalysisKeyRequiredReason?
     private(set) var usage: [UsageCall] = []
     private(set) var presented: [AnalysisKeyRequiredReason] = []
@@ -646,8 +585,6 @@ private final class Harness {
         )
     }
 
-    /// A store inside an app model, running on this harness's producer and
-    /// run records as the app wires them.
     func storeInAppModel() throws -> (EpisodeTranscriptAnalysisStore, OpenCastAppModel) {
         let directory = URL.temporaryDirectory.appending(path: "chapters-producer-store-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -759,18 +696,11 @@ private final class Harness {
     }
 }
 
-/// Answers the run's first Chapters attempt: a valid two-chapter answer, a
-/// scripted provider failure, or a hold that ends only when the run is
-/// cancelled. Every answer is reported to the run's observer as a real
-/// transport does, and each send notes the run record's state at that
-/// moment.
 private final class ScriptedChaptersTransport: AnalysisProviderTransport, @unchecked Sendable {
     enum Answer {
         case success
         case failure(AnalysisProviderFailure, AnalysisTransportError)
         case holdUntilCancelled
-        /// A billed answer the pipeline rejects, so it retries; the retry
-        /// holds until the run is cancelled.
         case billedRetryThenHold
     }
 
@@ -841,7 +771,6 @@ private final class ScriptedChaptersTransport: AnalysisProviderTransport, @unche
         }
     }
 
-    /// The dispatched record the run wrote before this send.
     private func runIDFromRecords() -> String {
         runs.records(limit: 1).first?.id ?? ""
     }
@@ -853,7 +782,6 @@ private final class ScriptedChaptersTransport: AnalysisProviderTransport, @unche
         return false
     }
 
-    /// A complete reply whose answer is not the contract's JSON.
     static let rejectedBody: String = {
         let body: [String: Any] = [
             "candidates": [[

@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// A show in the storage legend: its swatch, size, episode count and Keep
-/// Downloaded limit. A subscribed show opens its download settings; one
-/// that left the library stays a plain row, still deletable by swipe.
 struct DownloadsStorageLegendRow: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -32,8 +29,7 @@ struct DownloadsStorageLegendRow: View {
         }
     }
 
-    /// Accessibility sizes stack the row, so the title keeps the full width
-    /// instead of breaking a letter at a time beside the swatch and chip.
+    /// Accessibility sizes stack the row, or the title breaks a letter at a time beside the chip.
     private var content: some View {
         let layout = dynamicTypeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))

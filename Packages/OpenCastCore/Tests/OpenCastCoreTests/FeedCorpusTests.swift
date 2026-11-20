@@ -4,7 +4,6 @@ import Testing
 
 @Suite("Feed corpus")
 struct FeedCorpusTests {
-    /// What `RSSFeedParser` returns for each file; `Corpus/PROVENANCE.md` counts its `<item` elements.
     private static let episodeCounts: [String: Int] = [
         "audacitytopodcast": 452,
         "backupwrapup": 370,
@@ -104,8 +103,6 @@ struct FeedCorpusTests {
         }
     }
 
-    /// The field with its markup removed and its entities left as written, which is how the
-    /// pinned lines were copied out of the raw descriptions.
     private static func text(of field: String?) -> String {
         (field ?? "").replacing(/<[^>]+>/, with: "")
     }

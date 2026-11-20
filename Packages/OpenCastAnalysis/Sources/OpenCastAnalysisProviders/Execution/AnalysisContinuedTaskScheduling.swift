@@ -1,7 +1,5 @@
 import Foundation
 
-/// A running continued-processing task: the system card a run holds so it
-/// can finish after the app leaves the foreground.
 @MainActor
 public protocol AnalysisContinuedTaskHandle: AnyObject {
     var progress: Progress { get }
@@ -11,7 +9,6 @@ public protocol AnalysisContinuedTaskHandle: AnyObject {
     func setExpirationHandler(_ handler: @escaping @Sendable () -> Void)
 }
 
-/// Registers, submits and cancels continued-processing task requests.
 @MainActor
 public protocol AnalysisContinuedTaskScheduling {
     func registerLaunchHandler(
@@ -25,7 +22,5 @@ public protocol AnalysisContinuedTaskScheduling {
 /// The app's one-card rule: at most one continued-processing card at a time.
 @MainActor
 public protocol AnalysisContinuedTaskArbiter: AnyObject {
-    /// Whether the session named `identifier` may submit its card now. A
-    /// refused session runs its work in the foreground only.
     func mayArm(identifier: String) -> Bool
 }

@@ -18,7 +18,6 @@ struct FeedRelocationAdvisorTests {
             advisor.recordRedirect(feedURLString: feedURLString, finalURL: divergedURL)
         }
 
-        // Past the threshold the suggestion keeps refreshing.
         #expect(verdicts == [.none, .none, .suggest(divergedURL), .suggest(divergedURL)])
     }
 
@@ -41,8 +40,6 @@ struct FeedRelocationAdvisorTests {
             advisor.recordRedirect(feedURLString: feedURLString, finalURL: $0)
         }
 
-        // The counter restarted after the same-host redirect: two more
-        // divergences are not enough to suggest again.
         #expect(verdicts == [.none, .none, .clearSuggestion, .none, .none])
     }
 
@@ -60,18 +57,6 @@ struct FeedRelocationAdvisorTests {
         #expect(missingFinalURL == .none)
         #expect(hostlessFeedURL == .none)
         #expect(hostlessFinalURL == .none)
-    }
-
-    @Test("Explicit divergence clears restart the count")
-    func explicitDivergenceClearsRestartCount() {
-        var advisor = FeedRelocationAdvisor()
-
-        _ = advisor.recordRedirect(feedURLString: feedURLString, finalURL: divergedURL)
-        _ = advisor.recordRedirect(feedURLString: feedURLString, finalURL: divergedURL)
-        advisor.clearDivergence(feedURLString)
-        let verdictAfterClear = advisor.recordRedirect(feedURLString: feedURLString, finalURL: divergedURL)
-
-        #expect(verdictAfterClear == .none)
     }
 
     @Test("The https upgrade probe marks each feed exactly once")

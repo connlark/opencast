@@ -1,10 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// Recap of the transcript window ending at the playhead captured when the
-/// menu entry was tapped. Runs the eligibility gate, the one-time
-/// disclosure, and one recap request; a tapped timestamp seeks playback and
-/// dismisses.
 struct TranscriptRecapSheet: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
@@ -118,9 +114,8 @@ struct TranscriptRecapSheet: View {
             guard failure != .cancelled, !Task.isCancelled else {
                 return
             }
-            // Rate limits and entitlement failures move the store into a
-            // persistent state; the calm state view explains those better
-            // than a per-request message.
+            // Rate limits and entitlement failures leave the store in a persistent state, which
+            // the unavailable view explains better than a per-request message.
             phase = store.availability == .available ? .failed(failure) : .unavailable(store.availability)
         } catch {
             guard !Task.isCancelled else {
@@ -152,8 +147,7 @@ struct TranscriptRecapSheet: View {
         appModel.transcriptIntelligence.showQuotaLimitIncreaseSuggestion()
     }
 
-    /// Guardrail and refusal outcomes never retry: the same window gets the
-    /// same answer, and the plan's response is a different window.
+    /// Guardrail and refusal outcomes never retry: the same window gets the same answer.
     private static func allowsRetry(after failure: TranscriptIntelligenceFailure) -> Bool {
         switch failure {
         case .guardrailViolation, .refusal, .unsupportedLanguage, .notEntitled, .cancelled:

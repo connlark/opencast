@@ -2,10 +2,6 @@ import OSLog
 import SwiftData
 import SwiftUI
 
-/// Make a Playlist for one show. The listener types a playlist idea or asks
-/// for suggested groups; Apple's Private Cloud Compute answers over the
-/// show's episode list; the proposals are renamed, trimmed, reordered and
-/// sorted here, then saved as ordinary manual playlists.
 struct PlaylistOrganizerSheet: View {
     private static let logger = Logger(subsystem: "com.connor.opencast", category: "playlist-organizer")
 
@@ -18,7 +14,6 @@ struct PlaylistOrganizerSheet: View {
     @State private var phase = PlaylistOrganizerSheetPhase.request
     @State private var requestGeneration = 0
     @State private var requestText = ""
-    /// The path the listener last chose; Try Again resends it.
     @State private var activeMode = PlaylistOrganizerMode.prompted
     // The simpler answer belongs to one request text and mode: a new
     // request, the other mode or an edit returns to the standard answer.
@@ -161,8 +156,6 @@ struct PlaylistOrganizerSheet: View {
         }
     }
 
-    /// The captured show's title once it is prepared, so the library is
-    /// read only until then.
     private var showTitle: String? {
         if let show {
             return show.title
@@ -310,7 +303,6 @@ struct PlaylistOrganizerSheet: View {
         requestGeneration += 1
     }
 
-    /// Resends the request as it last went out, simpler answer included.
     private func tryAgain() {
         requestGeneration += 1
     }
@@ -357,7 +349,6 @@ struct PlaylistOrganizerSheet: View {
         }
     }
 
-    /// Removing the last proposal leaves nothing to save or edit.
     private func returnToRequestIfEmptied(_ isEmpty: Bool) {
         if isEmpty, phase == .proposals {
             returnToForm()
@@ -404,8 +395,6 @@ struct PlaylistOrganizerSheet: View {
 
     // MARK: - Save
 
-    /// Saves every saveable proposal in order. A failure stops the loop,
-    /// keeps the unsaved proposals on screen and explains on this sheet.
     private func save() {
         _ = appModel.playlists.consumeLastErrorMessage()
         var savedIDs = Set<UUID>()
@@ -420,9 +409,8 @@ struct PlaylistOrganizerSheet: View {
         dismiss()
     }
 
-    /// Creates one playlist and fills it; returns the failure to show. A
-    /// playlist whose episodes could not be added is deleted again through
-    /// the store, so no rollback failure reaches the root alert.
+    /// Returns the failure to show; a rollback's failure is consumed here too, so none reaches the
+    /// root alert.
     private func file(_ draft: PlaylistProposalDraft) -> String? {
         let name = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let created = appModel.playlists.create(

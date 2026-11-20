@@ -1,10 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// Question-and-answer over one episode's transcript. Runs the eligibility
-/// gate, the one-time disclosure, builds the passage index, then keeps one
-/// in-memory conversation for the sheet's lifetime; a tapped citation seeks
-/// playback and dismisses.
 struct TranscriptAskSheet: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss

@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Shared purchase outcome and recovery rows for every surface that sells
-/// transcription hours.
 struct RemoteTranscriptionPurchaseStatusView: View {
     @Environment(OpenCastAppModel.self) private var appModel
 

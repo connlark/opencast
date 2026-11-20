@@ -150,16 +150,8 @@ struct AddPodcastView: View {
             return
         }
 
-        // Only the UI-testing seam prefills without a gesture; a production
-        // pasteboard read here would pop the system paste-permission alert on
-        // every sheet open. Pattern detection is prompt-free and just decides
-        // whether to offer the system paste button.
-        if let seededFeedURLString = AddPodcastClipboardReader.seededTestFeedURLString() {
-            feedURLString = seededFeedURLString
-            clipboardErrorMessage = nil
-            return
-        }
-
+        // No pasteboard read here: without a user gesture it pops the system
+        // paste-permission alert on every sheet open.
         clipboardHasProbableFeedURL = await AddPodcastClipboardReader.clipboardProbablyHasWebURL()
     }
 

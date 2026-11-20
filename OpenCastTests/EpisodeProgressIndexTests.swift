@@ -36,9 +36,6 @@ struct EpisodeProgressIndexTests {
         let fetched = try context.fetch(EpisodeProgressIndex.allRecordsDescriptor())
         #expect(fetched.count == fixtures.count)
 
-        // Applying the same instances one at a time, in an order the store
-        // would never hand back, must converge on the descriptor's order —
-        // the comparator and the descriptor share sort keys by contract.
         var incremental = EpisodeProgressIndex()
         for record in fetched.reversed() {
             _ = incremental.apply(record)
@@ -47,9 +44,7 @@ struct EpisodeProgressIndexTests {
         var refetched = EpisodeProgressIndex()
         _ = refetched.replaceAll(fetched)
 
-        // Array order only: apply's latest-per-episode indexing assumes each
-        // applied record is its episode's newest write, which a reversed
-        // replay deliberately violates.
+        // Array order only: a reversed replay breaks apply's assumption that each record is its episode's newest write.
         #expect(incremental.records.elementsEqual(fetched, by: ===))
         #expect(incremental.records.elementsEqual(refetched.records, by: ===))
     }
@@ -98,13 +93,11 @@ struct EpisodeProgressIndexTests {
         let initialReplaceChanged = index.replaceAll(firstFetch)
         #expect(initialReplaceChanged)
 
-        // A refetch from the same context hands back the same registered
-        // instances: no identity change, no revision owed.
+        // A refetch from the same context returns the same registered instances.
         let secondFetch = try context.fetch(EpisodeProgressIndex.allRecordsDescriptor())
         let sameInstanceReplaceChanged = index.replaceAll(secondFetch)
         #expect(!sameInstanceReplaceChanged)
 
-        // A fresh instance for an already-indexed episode changes identity.
         let replacement = EpisodeProgressRecord(
             episodeID: "member-1",
             podcastID: podcastID,
@@ -116,7 +109,6 @@ struct EpisodeProgressIndexTests {
         #expect(replacementApplyChanged)
         #expect(index.latest(for: "member-1") === replacement)
 
-        // A brand-new episode changes membership.
         let newcomer = EpisodeProgressRecord(
             episodeID: "member-3",
             podcastID: podcastID,
@@ -126,14 +118,10 @@ struct EpisodeProgressIndexTests {
         let newcomerApplyChanged = index.apply(newcomer)
         #expect(newcomerApplyChanged)
 
-        // Dropping an episode changes membership.
         let droppingReplaceChanged = index.replaceAll(secondFetch)
         #expect(droppingReplaceChanged)
     }
 
-    /// Copies stamped at one instant that agree on every listening field
-    /// must index the same copy whatever order the store hands them back
-    /// in, or two peers could disagree on whether the episode is archived.
     @Test("Same-instant copies that differ only in their archive index the same copy in either order")
     func fullTiesIndexTheSameCopyInEitherOrder() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -172,9 +160,6 @@ struct EpisodeProgressIndexTests {
         #expect(EpisodeProgressIndex.archivedEpisodeIDs(in: [unarchived, archived]) == ["tied"])
     }
 
-    /// A missing duration and a zero duration say the same thing, as repair
-    /// reads them. Compared as optionals they differ while neither orders
-    /// first, so without that reading fetch order picks the copy.
     @Test("Same-instant copies whose durations are nil and zero reach the final tie-break in either order")
     func nilAndZeroDurationsReachTheFinalTieBreak() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

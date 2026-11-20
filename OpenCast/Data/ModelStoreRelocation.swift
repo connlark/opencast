@@ -1,20 +1,9 @@
 import Foundation
 
-/// Moves each SwiftData store out of the App Group container into the app's
-/// data container before any `ModelContainer` opens: RunningBoard kills a
-/// process suspended while it holds a lock on a file outside its own data
-/// container (`0xdead10cc`), and Core Data takes such locks on its own queues.
-///
-/// While a group `.store` exists it is the only writable location, whatever
-/// its state, so a failed check never hands authority to the stale app-side
-/// copy. The rename of the main file is the commit: everything before it
-/// repeats on the next launch, everything after it is cleanup that the next
-/// launch's branch 1 finishes.
 nonisolated enum ModelStoreRelocation {
     typealias Deferral = ModelStoreRelocationResult.Deferral
 
-    /// One store, the plan's branches in order. Never throws and never traps:
-    /// every failure is a deferral or a note.
+    /// Never traps: every failure is a deferral or a note.
     static func relocate(
         _ store: ModelStoreLocation,
         operations: any ModelStoreFileOperations = DefaultModelStoreFileOperations()
@@ -37,8 +26,7 @@ nonisolated enum ModelStoreRelocation {
         return move(store, group: group, app: app, operations: operations)
     }
 
-    /// Both stores, synced then local, each independent. Returns the layout
-    /// with both `resolvedURL`s set and the two results in that order.
+    /// Synced then local, each independent; the results come back in that order.
     static func relocate(
         _ layout: ModelStoreLayout,
         operations: any ModelStoreFileOperations = DefaultModelStoreFileOperations()
@@ -189,10 +177,9 @@ nonisolated enum ModelStoreRelocation {
         return result(store, resolvedURL: store.appURL, outcome: .moved, source: source, notes: notes)
     }
 
-    /// Step 3. Nothing writes at the app URL while a group store exists, so
-    /// what sits there is the stale copy from 2026-09-13 or a partial earlier
-    /// attempt. Its sidecars go whatever their type: a stale log or journal
-    /// beside the moved file would be replayed into it.
+    /// Step 3. Nothing writes at the app URL while a group store exists, so what sits there is
+    /// stale. Its sidecars go whatever their type: a stale log or journal beside the moved file
+    /// would be replayed into it.
     private static func clearDestination(
         _ app: Package,
         notes: inout [String],

@@ -15,8 +15,6 @@ struct SyncStatusStoreAccountPatienceTests {
 
         let statusAtTimeout = await store.refreshAccountStatusWithinPatience(force: true)
 
-        // The caller moves on with what is known; the check itself is still
-        // running and publishes its answer when it arrives.
         #expect(statusAtTimeout == .checking)
         #expect(store.accountStatus == .checking)
 

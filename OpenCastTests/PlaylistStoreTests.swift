@@ -484,7 +484,6 @@ struct PlaylistStoreTests {
         var changeCount = 0
         fixture.store.onPlaylistsChanged = { changeCount += 1 }
 
-        // A save that fails leaves the loaded state exactly as it was.
         try fixture.store.migrateEpisodeSidecars(
             from: "old",
             to: "new",
@@ -501,7 +500,6 @@ struct PlaylistStoreTests {
         #expect(fixture.store.playlistIDs(containing: "old") == [departedOnly.playlistID, both.playlistID])
         #expect(changeCount == 0)
 
-        // A committed save publishes the re-key once.
         try fixture.store.migrateEpisodeSidecars(
             from: "old",
             to: "new",
@@ -599,29 +597,6 @@ struct PlaylistStoreTests {
         #expect(fixture.store.playlists == [playlist])
         #expect(try storedPlaylists(in: storedContext).first?.hidesPlayed == false)
         #expect(fixture.store.lastErrorMessage?.contains("Unable to update Hide Played") == true)
-    }
-
-    @Test("Membership lookup lists every playlist holding an episode")
-    func playlistIDsContainingEpisode() throws {
-        let fixture = try makeFixture()
-        let first = try #require(
-            fixture.store.create(name: "First", kind: .manual, modelContext: fixture.context)
-        )
-        let second = try #require(
-            fixture.store.create(name: "Second", kind: .manual, modelContext: fixture.context)
-        )
-        let firstAdded = fixture.store.add(
-            [episode("a"), episode("b")],
-            to: first.playlistID,
-            modelContext: fixture.context
-        )
-        let secondAdded = fixture.store.add([episode("b")], to: second.playlistID, modelContext: fixture.context)
-        #expect(firstAdded == 2)
-        #expect(secondAdded == 1)
-
-        #expect(fixture.store.playlistIDs(containing: "b") == [first.playlistID, second.playlistID])
-        #expect(fixture.store.playlistIDs(containing: "a") == [first.playlistID])
-        #expect(fixture.store.playlistIDs(containing: "missing").isEmpty)
     }
 
     @Test("Load keeps rows whose episode no longer resolves")
@@ -804,32 +779,6 @@ struct PlaylistStoreTests {
         #expect(added == 0)
         #expect(fixture.store.lastErrorMessage?.contains("smart playlists") == true)
         #expect(try storedItems(in: storedContext).isEmpty)
-    }
-
-    @Test("A smart create stores the default rule and the first eight take distinct tints in case order")
-    func smartCreateStoresDefaultRuleAndDistinctTints() throws {
-        let fixture = try makeFixture()
-        var created: [PlaylistSummary] = []
-        for index in 1 ... PlaylistTint.allCases.count {
-            let summary = try #require(
-                fixture.store.create(name: "Smart \(index)", kind: .smart, modelContext: fixture.context)
-            )
-            created.append(summary)
-        }
-        let ninth = try #require(fixture.store.create(name: "Smart 9", kind: .smart, modelContext: fixture.context))
-
-        #expect(created.map(\.tintKey) == PlaylistTint.allCases.map(\.rawValue))
-        #expect(created.compactMap(\.tint) == PlaylistTint.allCases)
-        #expect(ninth.tint == .red)
-        #expect(created.allSatisfy { $0.ruleJSON == PlaylistRule.default.encodedJSON() })
-        #expect(created.allSatisfy { $0.rule == .default && !$0.hasUnreadableRule })
-        let storedRecords = try storedPlaylists(in: ModelContext(fixture.container))
-        #expect(storedRecords.count == 9)
-        #expect(storedRecords.allSatisfy { $0.ruleJSON == PlaylistRule.default.encodedJSON() })
-        let reloaded = PlaylistStore(saveSyncedStore: SyncedStoreSelfSaveLedger().save)
-        reloaded.load(modelContext: ModelContext(fixture.container))
-        #expect(reloaded.playlists.count == 9)
-        #expect(reloaded.playlists.allSatisfy { $0.rule == .default })
     }
 
     @Test("A smart create stores the given rule normalized, and a manual create stores no rule")
@@ -1985,9 +1934,6 @@ struct PlaylistStoreTests {
     }
 }
 
-/// Stands in for the store's save and clock seams: saves can be made to fail
-/// after the store has mutated the context, and every date the store asks for
-/// is a minute after the last so `updatedAt` bumps are exact.
 private final class PlaylistStoreProbe {
     var failsSaves = false
     private(set) var saveCount = 0

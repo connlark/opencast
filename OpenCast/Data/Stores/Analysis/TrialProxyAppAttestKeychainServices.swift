@@ -1,8 +1,6 @@
 import Foundation
 
-/// One App Attest slot (install id and attested key) per trial service
-/// deployment, so a key registered with another service or deployment is
-/// never sent to this one.
+/// One slot per deployment, so a key registered with another deployment is never sent here.
 nonisolated enum TrialProxyAppAttestKeychainServices {
     static let development = "com.connor.opencast.trial-proxy-security.development"
     static let prodStaging = "com.connor.opencast.trial-proxy-security.prod-staging"

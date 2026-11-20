@@ -8,11 +8,8 @@ enum EpisodeAdAnalysisError: LocalizedError, Sendable, Equatable {
     case anotherJobActive
     case analysisTimedOut
     case unrecognizedSpanKind
-    /// No route reaches a model: the run needs the listener's own key.
     case keyRequired(AnalysisKeyRequiredReason)
-    /// A run that did not survive the last process could not resume.
     case runInterrupted
-    /// Google named the key free tier and the run ended; the kind says how.
     case freeTierFailure(EpisodeAnalysisFailureKind)
 
     var errorDescription: String? {

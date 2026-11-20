@@ -1,23 +1,16 @@
 import SwiftUI
 
-/// Where the Sound Lab opens. The panel takes the artwork's square unless a
-/// wider rectangle over the same centre gets its rows their titles: first
-/// with the heading, rising from the square's bottom edge; then, if the
-/// square itself holds the rows, without it. Everything is in the card's
-/// leading-relative coordinates, so a right-to-left card resolves the same.
+/// Card-local and leading-relative throughout, so a right-to-left card resolves the same.
 nonisolated struct NowPlayingSoundLabOpenPanel: Equatable {
     enum Mode: Equatable {
-        /// The square, laid out by `rowMetrics` and `collapsesToIconOnly`.
         case legacy
         case headed
         case headingless
     }
 
     struct Inputs {
-        /// The artwork's square, card-local.
         let square: CGRect
         let contentSpan: ClosedRange<CGFloat>
-        /// The viewport clipping the square, card-local.
         let viewport: CGRect
         let safeTop: CGFloat
         let moreFrame: CGRect
@@ -27,13 +20,10 @@ nonisolated struct NowPlayingSoundLabOpenPanel: Equatable {
         let pixelGridOrigin: CGPoint
         let rowCount: Int
         let isAccessibilitySize: Bool
-        /// The whole rendered heading with its bottom padding.
         let paddedHeadingHeight: CGFloat
     }
 
-    /// What the player knows of the card around the square, handed to the
-    /// artwork unchanged by anything it does. The square itself is measured
-    /// there, in the coordinate space named here.
+    /// Nothing the artwork does may change this. The square is measured in `coordinateSpaceName`.
     struct CardContext: Equatable {
         static let coordinateSpaceName = "NowPlayingSoundLabCard"
 
@@ -85,8 +75,7 @@ nonisolated struct NowPlayingSoundLabOpenPanel: Equatable {
             )
         }
 
-        /// The stack is centred on the square, so its span is too. Nil for a
-        /// square or a width no span can be built from.
+        /// The stack is centred on the square, so its span is too.
         func inputs(
             square: CGRect,
             displayScale: CGFloat,
@@ -113,14 +102,11 @@ nonisolated struct NowPlayingSoundLabOpenPanel: Equatable {
         }
     }
 
-    /// The rows of a titled panel.
     struct TitledRows: Equatable {
         let rowHeight: CGFloat
-        /// Below the heading; nil without one.
         let headingGap: CGFloat?
         let rowGap: CGFloat
-        /// What the heading, the rows and both insets leave of the height,
-        /// split equally above and below them.
+        /// Split equally above and below the heading and the rows.
         let verticalRemainder: CGFloat
 
         var rowMetrics: NowPlayingSoundLabLayout.RowMetrics {
@@ -132,12 +118,9 @@ nonisolated struct NowPlayingSoundLabOpenPanel: Equatable {
         }
     }
 
-    /// What a panel's shape was resolved from. The square's position and the
-    /// pixel grid's origin are left out, so a panel moves with its square
-    /// without being resolved again; that is why this is a projection and
-    /// never `CardContext` itself.
+    /// Leaves out the square's position and the pixel grid's origin, so a panel moves with its
+    /// square without being resolved again; never use `CardContext` itself.
     struct ShapeKey: Equatable {
-        /// The card's part of the key; absent with no card around the square.
         struct Card: Equatable {
             var cardWidth: CGFloat
             var contentWidth: CGFloat
@@ -156,8 +139,7 @@ nonisolated struct NowPlayingSoundLabOpenPanel: Equatable {
         var layoutDirection: LayoutDirection
         var card: Card?
 
-        /// The kept key still describes this one: exact, but for the side and
-        /// the heading, which may differ from the kept values by a pixel.
+        /// Exact, but the side and the heading may differ from the kept values by a pixel.
         func holds(for current: ShapeKey) -> Bool {
             let pixel = (1 + pixelTolerance) / displayScale
             let sameHeading = switch (paddedHeadingHeight, current.paddedHeadingHeight) {
@@ -179,10 +161,8 @@ nonisolated struct NowPlayingSoundLabOpenPanel: Equatable {
         }
     }
 
-    /// What an open panel does with the current key.
     enum Disposition: Equatable {
         case keep
-        /// A panel that opened as the square stays the square, at today's side.
         case followAsLegacy
         case invalidate
     }
@@ -197,14 +177,9 @@ nonisolated struct NowPlayingSoundLabOpenPanel: Equatable {
     }
 
     let mode: Mode
-    /// Card-local; the square itself in the legacy mode.
     let frame: CGRect
-    /// Nil in the legacy mode, whose rows are `rowMetrics`' for the square.
     let titledRows: TitledRows?
 
-    /// Whether a square can open beyond itself at all. Accessibility sizes
-    /// keep the square, a square below the floor keeps the sheet, and a
-    /// square whose own rows reach the title threshold already has its titles.
     static func isEligible(side: CGFloat, isAccessibilitySize: Bool) -> Bool {
         !isAccessibilitySize
             && NowPlayingSoundLabLayout.showsInline(panelSide: side)
@@ -214,14 +189,11 @@ nonisolated struct NowPlayingSoundLabOpenPanel: Equatable {
             )
     }
 
-    /// The square, for an artwork with no card around it to resolve against.
     static func legacy(side: CGFloat) -> Self {
         Self(mode: .legacy, frame: CGRect(x: 0, y: 0, width: side, height: side), titledRows: nil)
     }
 
-    /// The artwork's tap-and-drag target, in the square's own coordinates of
-    /// `side`. Settled open it is the layout's span from the open rectangle's
-    /// leading edge, over the rectangle's height; otherwise the whole square.
+    /// In the square's own coordinates.
     func artworkHitFrame(side: CGFloat, isSettledOpen: Bool) -> CGRect {
         guard isSettledOpen else {
             return CGRect(x: 0, y: 0, width: side, height: side)
@@ -288,12 +260,6 @@ nonisolated struct NowPlayingSoundLabOpenPanel: Equatable {
         return frame.map { Self(mode: .headed, frame: $0, titledRows: fit(width: $0.width).rows) }
     }
 
-    /// The height of a headed panel and its rows, with `heading` G, `rowCount`
-    /// n, and n equal gaps: one below the heading and n − 1 between the rows.
-    /// Below `compactPanelHeight` the rows are compact and the height is the
-    /// square or the rows at their tightest; it is never raised to widen a
-    /// gap. From there up the rows and gaps are `rowMetrics`', at the smallest
-    /// height that holds them.
     private static func headedFit(
         inset: CGFloat,
         side: CGFloat,
@@ -374,8 +340,6 @@ nonisolated struct NowPlayingSoundLabOpenPanel: Equatable {
         )
     }
 
-    /// Gaps open from `titledRowSpacing` toward the compact maximum as `room`
-    /// allows.
     private static func openedGap(room: CGFloat, gaps: Int) -> CGFloat {
         typealias Layout = NowPlayingSoundLabLayout
         guard gaps > 0 else {
@@ -384,10 +348,6 @@ nonisolated struct NowPlayingSoundLabOpenPanel: Equatable {
         return min(Layout.maximumCompactRowSpacing, max(Layout.titledRowSpacing, room / CGFloat(gaps)))
     }
 
-    /// The widest frame on the display's grid of widths, from the reference
-    /// width rounded up to the grid down to the narrowest that holds the
-    /// titles, whose outward pixel coverage is clear and whose placed width
-    /// still reaches the title threshold.
     private static func widestClearFrame(_ inputs: Inputs, frame: (CGFloat) -> CGRect) -> CGRect? {
         typealias Layout = NowPlayingSoundLabLayout
         let scale = inputs.displayScale
@@ -411,9 +371,6 @@ nonisolated struct NowPlayingSoundLabOpenPanel: Equatable {
         return nil
     }
 
-    /// The frame's covered pixels stay in the content span, in the viewport,
-    /// the clearance below the safe top, and off every inflated obstacle,
-    /// which they may touch.
     private static func isClear(_ frame: CGRect, _ inputs: Inputs) -> Bool {
         guard hasFiniteBounds(frame) else {
             return false
@@ -441,11 +398,8 @@ nonisolated struct NowPlayingSoundLabOpenPanel: Equatable {
             ].allSatisfy { $0.isFinite }
     }
 
-    /// An edge within this many pixels of a pixel boundary counts as on it,
-    /// so floating-point noise in a measured coordinate (92⅓ × 3 landing at
-    /// 276.99999999999994) cannot cost the panel a pixel pair. It permits an
-    /// overhang of at most 0.001 px, a third of a thousandth of a point at
-    /// 3x; anything past it rounds outward.
+    /// An edge this close to a pixel boundary counts as on it, so floating-point noise
+    /// (92⅓ × 3 = 276.99999999999994) cannot cost the panel a pixel pair.
     fileprivate static let pixelTolerance: CGFloat = 0.001
 
     private static func pixelsCovered(by frame: CGRect, scale: CGFloat, gridOrigin: CGPoint) -> CGRect {

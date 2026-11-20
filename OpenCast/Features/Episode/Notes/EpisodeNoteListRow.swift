@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// One note as a `List` row, with swipe actions and a context menu to edit
-/// and delete it; the Now Playing notes sheet and the Notes library share it.
 struct EpisodeNoteListRow: View {
     let note: EpisodeNoteRecord
     let onSeek: (TimeInterval) -> Void

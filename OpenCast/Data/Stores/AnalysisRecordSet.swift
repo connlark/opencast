@@ -2,13 +2,9 @@ import Foundation
 import Observation
 import SwiftData
 
-/// One analysis store's loaded records, the O(1) episode index over them,
-/// and the fetch/commit machinery that keeps both in step with SwiftData.
 @Observable
 final class AnalysisRecordSet<Record: TranscriptDerivedAnalysisRecord> {
-    // The index rebuilds on every mutation (didSet), so per-row lookups stay
-    // O(1) and can never go stale; keep-first mirrors the replaced
-    // `records.first` lookup (house precedent: LibraryStore.episodeIndexByID).
+    // Keep-first matches what `records.first(where:)` returns for duplicate episode ids.
     private(set) var records: [Record] = [] {
         didSet {
             recordsRevision &+= 1
@@ -19,10 +15,8 @@ final class AnalysisRecordSet<Record: TranscriptDerivedAnalysisRecord> {
         }
     }
     @ObservationIgnored private var recordsByEpisodeID: [String: Record] = [:]
-    // Pairs the ignored index with a tracked revision so `record(for:)`
-    // registers a dependency even when it returns nil — a body that saw no
-    // record must still invalidate when one appears (house pattern:
-    // LibraryStore.progressIndexRevision).
+    // Tracked so `record(for:)` registers a dependency even when it returns nil: a body that saw
+    // no record must still invalidate when one appears.
     private var recordsRevision = 0
     @ObservationIgnored private let descriptors: AnalysisRecordFetchDescriptors<Record>
 
@@ -43,8 +37,6 @@ final class AnalysisRecordSet<Record: TranscriptDerivedAnalysisRecord> {
         records.removeAll()
     }
 
-    /// Saves, then republishes the episode's stored row — or drops the
-    /// loaded one when the save left nothing behind.
     func commit(episodeID: String, modelContext: ModelContext, resort: Bool = false) throws {
         try modelContext.save()
         if let record = try fetchStoredRecord(episodeID: episodeID, modelContext: modelContext) {

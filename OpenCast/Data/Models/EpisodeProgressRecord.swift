@@ -8,16 +8,9 @@ final class EpisodeProgressRecord {
     var position: Double = 0
     var duration: Double?
     var isPlayed: Bool = false
-    /// When the episode was archived out of the Inbox; nil while it is not.
-    /// Archiving leaves the listening fields alone, and duplicate repair
-    /// takes it from the copy with the newest `updatedAt`, as it does
-    /// `isPlayed`.
     var archivedAt: Date?
     var updatedAt: Date = Date()
-    /// Stable per-record identity so duplicate repair picks the same winner on
-    /// every device (smallest UUID wins); peers that chose opposite winners
-    /// used to cross-delete both copies. Records imported from builds that
-    /// predate the field carry "".
+    /// Never reassigned: duplicate repair keeps the smallest non-empty UUID on every device.
     var dedupeUUID: String = ""
 
     init(

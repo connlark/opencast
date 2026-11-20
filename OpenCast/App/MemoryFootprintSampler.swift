@@ -2,10 +2,8 @@ import Darwin
 import Foundation
 import Synchronization
 
-/// Samples the process physical footprint (the jetsam-relevant ledger) on a
-/// 50 ms cadence so benchmark runs can report a per-run peak alongside
-/// start/end values. Sub-50 ms transients can slip between samples; report
-/// consumers treat the peak as a floor, not an exact maximum.
+/// The peak is a floor, not an exact maximum: transients shorter than the
+/// 50 ms cadence slip between samples.
 nonisolated final class MemoryFootprintSampler: Sendable {
     private let peakBytes = Mutex<Int64>(0)
     private let samplingTask = Mutex<Task<Void, Never>?>(nil)
@@ -32,7 +30,6 @@ nonisolated final class MemoryFootprintSampler: Sendable {
         }
     }
 
-    /// Final sample is taken at stop so short runs still record an end state.
     func stop() -> Int64 {
         samplingTask.withLock { task in
             task?.cancel()

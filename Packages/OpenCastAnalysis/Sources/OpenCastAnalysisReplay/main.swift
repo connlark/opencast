@@ -2,10 +2,6 @@ import Foundation
 import OpenCastAnalysis
 import OpenCastAnalysisProviders
 
-// Replays recorded model answers through the on-device analysis pipeline
-// and prints what it built and decided, as JSON on stdout. Network-free,
-// except `live` and `key-test`, which call a provider with a key.
-
 let usage = """
 usage: OpenCastAnalysisReplay <command> [options]
 
@@ -97,13 +93,11 @@ struct Arguments {
         guard name == "reference" else { throw AnalysisReplay.InputError(description: "unknown policy \(name)") }
     }
 
-    /// The canonical thinking level for ads: `--thinking none` omits it.
     var canonicalThinking: String? {
         guard let value = options["thinking"] else { return AnalysisModelEntry.serviceAdDetection.thinking }
         return value == "none" || value == "null" ? nil : value
     }
 
-    /// The ad-analysis service's policy, with --model and --in-flight applied.
     var adPolicy: AdDetectionAnalysisPolicy {
         let service = AdDetectionAnalysisPolicy.service
         var settings = service.settings
@@ -114,7 +108,6 @@ struct Arguments {
         return service.with(settings: settings, model: model)
     }
 
-    /// The Chapters & Summary service's policy, with --model and --thinking applied.
     var chaptersPolicy: ChaptersSummaryAnalysisPolicy {
         let service = ChaptersSummaryAnalysisPolicy.service
         var model = service.model

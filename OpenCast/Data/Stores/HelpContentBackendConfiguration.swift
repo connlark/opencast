@@ -1,9 +1,5 @@
 import Foundation
 
-/// Where the remotely updatable help document comes from. Release builds
-/// read the public support host; DEBUG builds honor an http(s) override for
-/// `yarn preview`, a kill switch, and stay offline under UI testing unless a
-/// run opts in with an explicit URL.
 struct HelpContentBackendConfiguration: Sendable {
     let documentURL: URL
     let isEnabled: Bool

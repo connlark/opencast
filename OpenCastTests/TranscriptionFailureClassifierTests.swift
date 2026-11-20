@@ -60,9 +60,8 @@ struct TranscriptionFailureClassifierTests {
             isProtectedDataAvailable: true
         )
 
-        // The spill's FileHandle.write throws NSFileWriteOutOfSpaceError with
-        // an underlying POSIX ENOSPC; both shapes must classify, and the
-        // classification must not depend on a constrained environment.
+        // FileHandle.write throws NSFileWriteOutOfSpaceError wrapping a POSIX
+        // ENOSPC, so both shapes must classify.
         let outOfSpace = NSError(
             domain: NSCocoaErrorDomain,
             code: CocoaError.Code.fileWriteOutOfSpace.rawValue

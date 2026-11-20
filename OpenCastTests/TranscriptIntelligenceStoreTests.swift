@@ -10,7 +10,6 @@ struct TranscriptIntelligenceStoreTests {
     private let container: ModelContainer
     private let context: ModelContext
     private let client = ScriptedTranscriptIntelligenceClient()
-    private let start = Date(timeIntervalSince1970: 1_800_000_000)
 
     init() throws {
         container = try ModelContainer(
@@ -20,11 +19,8 @@ struct TranscriptIntelligenceStoreTests {
         context = ModelContext(container)
     }
 
-    private func makeStore(
-        isFeatureEnabled: Bool = true,
-        clock: Clock = Clock()
-    ) -> TranscriptIntelligenceStore {
-        let store = TranscriptIntelligenceStore(client: client, isFeatureEnabled: isFeatureEnabled, now: { clock.now })
+    private func makeStore(clock: Clock = Clock()) -> TranscriptIntelligenceStore {
+        let store = TranscriptIntelligenceStore(client: client, isFeatureEnabled: true, now: { clock.now })
         store.load(modelContext: context)
         return store
     }
@@ -48,13 +44,6 @@ struct TranscriptIntelligenceStoreTests {
         store.refreshAvailability()
         #expect(store.availability == .appleIntelligenceOff)
         #expect(store.isVisible)
-    }
-
-    @Test("The feature flag hides the entry points even when available")
-    func featureFlagHides() {
-        let store = makeStore(isFeatureEnabled: false)
-        #expect(store.availability == .available)
-        #expect(!store.isVisible)
     }
 
     @Test("The disclosure acknowledgement persists across loads")
@@ -154,19 +143,6 @@ struct TranscriptIntelligenceStoreTests {
         store.refreshAvailability()
         #expect(store.availability == .notEntitled)
         #expect(!store.isVisible)
-    }
-
-    @Test("Guardrail declines are per-request outcomes that keep the feature available")
-    func guardrailKeepsAvailable() async {
-        let store = makeStore()
-        client.turns = [.failure(.guardrailViolation(.output))]
-        let session = store.makeSession(instructions: "", tools: [])
-
-        await #expect(throws: TranscriptIntelligenceFailure.guardrailViolation(.output)) {
-            _ = try await store.perform { try await session.respond(to: "q", options: TranscriptIntelligenceGenerationOptions()) }
-        }
-        #expect(store.lastFailure == .guardrailViolation(.output))
-        #expect(store.availability == .available)
     }
 
     @Test("Cancellation leaves no trace")

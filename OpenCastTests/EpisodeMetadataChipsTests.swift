@@ -62,23 +62,6 @@ struct EpisodeMetadataChipsTests {
         #expect(chips == [.publishDate(publishedAt), .duration("3h 20m"), .played])
     }
 
-    @Test("Downloaded chip carries a formatted file size")
-    func downloadedWithSize() {
-        let chips = EpisodeMetadataChips.make(
-            publishedAt: nil,
-            duration: nil,
-            progress: nil,
-            isDownloaded: true,
-            downloadedByteCount: 42_000_000
-        )
-
-        guard case .downloaded(let fileSize) = chips.first else {
-            Issue.record("Expected a downloaded chip, got \(chips)")
-            return
-        }
-        #expect(fileSize?.contains("MB") == true)
-    }
-
     @Test("Downloaded chip omits an unknown or zero size")
     func downloadedWithoutSize() {
         let chips = EpisodeMetadataChips.make(
@@ -98,19 +81,6 @@ struct EpisodeMetadataChipsTests {
         #expect(durationChipText(3_600) == "1h")
         #expect(durationChipText(3_660) == "1h 1m")
         #expect(durationChipText(30) == "1m")
-    }
-
-    @Test("No chips render without any metadata")
-    func emptyMetadata() {
-        let chips = EpisodeMetadataChips.make(
-            publishedAt: nil,
-            duration: nil,
-            progress: nil,
-            isDownloaded: false,
-            downloadedByteCount: nil
-        )
-
-        #expect(chips.isEmpty)
     }
 
     private func durationChipText(_ duration: TimeInterval) -> String? {

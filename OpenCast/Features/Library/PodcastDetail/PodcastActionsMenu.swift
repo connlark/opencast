@@ -14,8 +14,7 @@ struct PodcastActionsMenu: View {
     let onSearch: () -> Void
     let onPlaybackSettings: () -> Void
     let onDownloadSettings: () -> Void
-    /// Nil hides Make a Playlist (hidden, never disabled): Apple Intelligence
-    /// can never work here, the flag is off, or the show has too few episodes.
+    /// Nil hides Make a Playlist; it is never shown disabled.
     let onMakePlaylist: (() -> Void)?
     let adAutoDetectBinding: Binding<Bool>
     @Binding var isConfirmingAdAutoDetect: Bool

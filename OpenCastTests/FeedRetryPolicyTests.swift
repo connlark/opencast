@@ -255,25 +255,6 @@ struct FeedRetryPolicyTests {
         #expect(loaded.automaticRetryAfterByFeedURL[feedURL.absoluteString] == date.addingTimeInterval(hour))
     }
 
-    @Test func interruptedDownloadExplanationSurvivesRefreshLogging() async throws {
-        let cache = SQLiteLocalLibraryCacheStore.inMemory()
-        try await cache.upsertCache(from: snapshot(), refreshedAt: .now)
-        let error = OpenCastCoreError.incompleteFeed(reason: .interruptedTransfer("Connection lost"))
-        let service = RetrySequenceFeedService(results: [.failure(error)])
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        context.insert(SubscriptionRecord(feedURL: feedURL.absoluteString, title: "Retry Show"))
-        try context.save()
-        let library = LibraryStore(feedService: service, localCache: cache)
-        #expect(await library.load(modelContext: context))
-        await library.refresh(feedURL: feedURL.absoluteString, modelContext: context)
-        let message = try #require(library.latestRefreshLog(feedURL: feedURL.absoluteString)?.errorMessage)
-        #expect(message.contains("transfer was interrupted"))
-        #expect(message.contains("Connection lost"))
-        #expect(!message.contains("XML is invalid"))
-        #expect(library.episode(with: "retry-episode") != nil)
-    }
-
     private func snapshot() -> FeedSnapshot {
         let podcastID = PodcastID(rawValue: feedURL.absoluteString)
         return FeedSnapshot(

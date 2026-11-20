@@ -4,8 +4,6 @@ public enum OpenCastAdBoundaryResolver {
     public static let revision = "word-boundaries-v2"
 
     /// Unicode scalar rules mirror Rust's `char::is_alphanumeric` and lowercase.
-    /// Keeping the owner of each normalized token avoids interpolating inside
-    /// contractions, URLs, or other indivisible ASR words.
     public static func normalizedTokens(_ text: String) -> [String] {
         text.unicodeScalars.split {
             !$0.properties.isAlphabetic && $0.properties.numericType == nil

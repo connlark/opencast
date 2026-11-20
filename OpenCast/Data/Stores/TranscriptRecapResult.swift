@@ -1,8 +1,7 @@
 import Foundation
 
-/// A validated recap ready to render and cache. `isFromCache`, `usage`,
-/// `latency`, and `attempts` describe how this instance was obtained and are
-/// not part of the cached value.
+/// `isFromCache`, `usage`, `latency` and `attempts` describe how this instance was obtained, so
+/// they stay out of the cached value.
 nonisolated struct TranscriptRecapResult: Codable, Equatable, Sendable {
     var kind: TranscriptRecapWindowKind
     var playhead: TimeInterval

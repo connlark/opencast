@@ -1,8 +1,4 @@
-/// Stable machine error codes shared by every remote transcription route.
-/// Localized copy stays app-side; unknown future codes are preserved.
 public enum OpenCastRemoteTranscriptionErrorCode: Sendable, Equatable, Hashable {
-    /// Server and device bytes differ (DAI variant or changed file). This is
-    /// terminal and the app falls back to local transcription.
     case sourceMismatch
     case unsupportedMediaType
     case sourceTooLarge
@@ -13,11 +9,7 @@ public enum OpenCastRemoteTranscriptionErrorCode: Sendable, Equatable, Hashable 
     case jobNotFound
     case accountMismatch
     case featureDisabled
-    /// Purchase-backend lanes: job and purchase routes require a verified
-    /// bootstrap before any account exists.
     case bootstrapRequired
-    /// The purchase kill switch is on: store surfaces are hidden while
-    /// balances, jobs, and results stay untouched.
     case purchasesDisabled
     case unauthorized
     case rateLimited
@@ -25,11 +17,7 @@ public enum OpenCastRemoteTranscriptionErrorCode: Sendable, Equatable, Hashable 
     case transcriptionFailed
     case cancelled
     case internalError
-    /// The lane's upload routes exist but its R2 signing credential is not
-    /// provisioned yet; the server failed closed.
     case uploadUnavailable
-    /// The completed exact-device upload's recomputed identity did not equal
-    /// the authenticated device report. Terminal, nothing spent.
     case uploadIdentityMismatch
     case unknown(String)
 

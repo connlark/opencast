@@ -9,9 +9,8 @@ struct AudioMetrics: Codable {
     var ungatedIntegratedLUFS: Double?
     var momentaryLUFS: Summary
     var shortTermLUFS: Summary
-    /// Integrated LUFS over the trailing window only (up to 15 s, at most
-    /// half the fixture), so short fixtures can be read past the
-    /// convergence ramp instead of chasing whole-file numbers.
+    /// Integrated LUFS over the trailing window only (up to 15 s, at most half the fixture),
+    /// past the convergence ramp.
     var steadyStateTailLUFS: Double?
     var steadyStateTailSeconds: Double?
     var truePeakDBTP: Double?

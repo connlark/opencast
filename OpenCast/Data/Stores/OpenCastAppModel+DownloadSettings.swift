@@ -1,10 +1,7 @@
 import Foundation
 import SwiftData
 
-/// Download settings changes, each saved first and acted on after: turning
-/// a show on downloads its newest episode, and a lower limit trims at once.
 extension OpenCastAppModel {
-    /// Off also turns Detect Ads in New Episodes off, in the same save.
     @discardableResult
     func setAutoDownloadsNewEpisodes(
         _ isEnabled: Bool,
@@ -21,9 +18,6 @@ extension OpenCastAppModel {
         return autoDownloads.enableAutoDownload(forPodcastID: podcastID, modelContext: modelContext)
     }
 
-    /// On turns Download New Episodes on first, with its own watermark and
-    /// pass, then marks the show's newest release for a scan if it is
-    /// already downloaded; a failed save at either step stops there.
     @discardableResult
     func setDetectsAdsInNewEpisodes(
         _ isEnabled: Bool,
@@ -71,7 +65,6 @@ extension OpenCastAppModel {
         return true
     }
 
-    /// Turning Wi-Fi Only off starts any downloads it was holding back.
     @discardableResult
     func setAutoDownloadsRequireWiFi(_ requiresWiFi: Bool, modelContext: ModelContext) -> Bool {
         guard downloadSettings.setAutoDownloadsRequireWiFi(requiresWiFi, modelContext: modelContext) else {
@@ -96,9 +89,6 @@ extension OpenCastAppModel {
         await autoDownloads.runPass(modelContext: modelContext)
     }
 
-    /// Each root scene's lifecycle reports its phase here, from its first
-    /// appearance to its removal. It gates every automatic pass: downloads
-    /// and Auto Add to Up Next.
     func setAutoDownloadsScene(_ sceneID: UUID, isActive: Bool) {
         autoDownloads.setScene(sceneID, isActive: isActive)
         upNextAutoAdd.setScene(sceneID, isActive: isActive)

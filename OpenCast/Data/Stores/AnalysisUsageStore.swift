@@ -3,14 +3,8 @@ import Observation
 import OpenCastAnalysis
 import SwiftData
 
-/// Tokens each provider reported for the analyses run with the listener's
-/// key, counted on this device: one device-local record per provider holding
-/// the last run and the current UTC month's totals. The analysis runs call
-/// `record` once per finished run with the run's totals.
-///
-/// A month rollover is a read projection against `currentMonth`: the stored
-/// bucket is never rewritten on read, and the screen re-renders when
-/// `refreshCurrentMonth()` moves `currentMonth` (on appear and foreground).
+/// A month rollover is a read projection against `currentMonth`: the stored bucket is never
+/// rewritten on read.
 @Observable
 final class AnalysisUsageStore {
     private(set) var currentMonth: String
@@ -20,7 +14,6 @@ final class AnalysisUsageStore {
     @ObservationIgnored private let save: (ModelContext) throws -> Void
     @ObservationIgnored private let now: () -> Date
 
-    /// `save` and `now` are the test seams for preference saves and the clock.
     init(
         save: @escaping (ModelContext) throws -> Void = { try $0.save() },
         now: @escaping () -> Date = { Date.now }
@@ -34,8 +27,6 @@ final class AnalysisUsageStore {
         "aiServices.usage.\(provider.rawValue)"
     }
 
-    /// The Gregorian year and month of `date` in UTC, as `"yyyy-MM"`, whatever
-    /// the device's calendar and time zone.
     nonisolated static func month(of date: Date) -> String {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .gmt
@@ -50,8 +41,7 @@ final class AnalysisUsageStore {
         var loaded: [AnalysisProvider: AnalysisProviderUsage] = [:]
         do {
             for provider in AnalysisProvider.allCases {
-                // A record that no longer decodes is dropped; the next run
-                // writes a fresh one.
+                // A record that no longer decodes is dropped; the next run writes a fresh one.
                 guard let value = try LocalPreferenceRecord.preference(
                     forKey: Self.preferenceKey(for: provider),
                     modelContext: context
@@ -78,8 +68,6 @@ final class AnalysisUsageStore {
         currentMonth = month
     }
 
-    /// The last run, and this month's totals: zero when the stored bucket is
-    /// not `currentMonth`'s.
     func usage(for provider: AnalysisProvider) -> AnalysisProviderUsage {
         guard var usage = stored[provider] else {
             return AnalysisProviderUsage(lastRun: nil, month: currentMonth, monthInputTokens: 0, monthOutputTokens: 0)
@@ -92,16 +80,9 @@ final class AnalysisUsageStore {
         return usage
     }
 
-    /// Adds one finished run. `at` is clamped to now, so a skewed future
-    /// stamp never moves the bucket ahead of the clock, and a bucket or last
-    /// run already ahead of the clock (recorded while the clock ran fast) is
-    /// replaced rather than kept. A run in the stored month adds to its
-    /// totals; a later month replaces them with this run's; an earlier month
-    /// adds nothing. Negative counts read as zero and sums saturate.
-    /// `lastRun` moves only to a later run. With a `runID` the counts are
-    /// the run's totals so far: a run already among the newest recorded runs
-    /// adds only the part of its totals not counted before (nothing when
-    /// they did not grow).
+    /// With a `runID` the counts are the run's totals so far, and only the part not counted before
+    /// is added. `at` is clamped to now, and a bucket or last run already ahead of the clock is
+    /// replaced, so a skewed clock never pins the bucket in the future.
     @discardableResult
     func record(
         provider: AnalysisProvider,
@@ -141,8 +122,7 @@ final class AnalysisUsageStore {
             usage.monthInputTokens = input
             usage.monthOutputTokens = output
         }
-        // A run recorded again under its id may restate its own totals at
-        // the same instant.
+        // A run recorded again under its id may restate its own totals at the same instant.
         if usage.lastRun.map({ stamp > $0.at || (counted != nil && stamp.timeIntervalSinceReferenceDate >= $0.at.timeIntervalSinceReferenceDate) }) ?? true {
             usage.lastRun = AnalysisProviderUsage.Run(
                 feature: feature.rawValue,

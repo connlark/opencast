@@ -1,7 +1,4 @@
-/// A completed remote transcription result as served by the job `result`
-/// route. The app validates this against the local file identity and builds
-/// its own persisted document from it; the wire type is never persisted
-/// directly.
+/// A wire type: validate it against the local file identity and never persist it directly.
 public struct OpenCastRemoteTranscriptionResult: Codable, Sendable, Equatable {
     public var schemaVersion: Int
     public var sourceIdentity: OpenCastRemoteTranscriptionSourceIdentity

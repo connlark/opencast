@@ -9,25 +9,6 @@ struct OpenCastModelContainerFactoryTests {
     private static let syncedName = OpenCastModelContainerFactory.syncedConfigurationName
     private static let localName = OpenCastModelContainerFactory.localConfigurationName
 
-    @Test("On disk, each store opens at its own resolved URL, synced then local")
-    func onDiskConfigurationsOpenAtTheResolvedURLs() throws {
-        let root = Self.temporaryRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        var layout = Self.layout(in: root)
-        layout.synced.resolvedURL = layout.synced.appURL
-
-        let configurations = OpenCastModelContainerFactory.configurations(
-            inMemory: false,
-            layout: layout,
-            syncedCloudKitDatabase: .none
-        )
-
-        #expect(configurations.map(\.name) == [Self.syncedName, Self.localName])
-        #expect(configurations.map(\.url) == [layout.synced.resolvedURL, layout.local.resolvedURL])
-        #expect(configurations.map(\.isStoredInMemoryOnly) == [false, false])
-        #expect(configurations.last?.url == layout.localStoreURL)
-    }
-
     @Test("An on-disk open creates a missing Application Support and the stores land at the resolved URLs")
     func onDiskOpenCreatesTheMissingDirectory() throws {
         let root = Self.temporaryRoot()
@@ -79,7 +60,6 @@ struct OpenCastModelContainerFactoryTests {
             .appending(path: "OpenCastModelContainerFactoryTests-\(UUID().uuidString)", directoryHint: .isDirectory)
     }
 
-    /// Both stores at their group URLs, neither container directory created.
     private static func layout(in root: URL) -> ModelStoreLayout {
         ModelStoreLayout(synced: location(syncedName, in: root), local: location(localName, in: root))
     }

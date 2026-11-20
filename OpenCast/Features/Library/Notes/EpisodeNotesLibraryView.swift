@@ -1,19 +1,14 @@
 import SwiftData
 import SwiftUI
 
-/// Every Private Note, one section per episode under a header that opens the
-/// episode, with a search over note text and titles and a sort. The notes are
-/// fetched again only when a note changes; search and sort regroup the
-/// fetched notes.
 struct EpisodeNotesLibraryView: View {
     /// Above this many notes the search field stays in view.
     private static let searchThreshold = 10
 
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
-    /// Inside a two-pane root, the visit ledger above its containers: it
-    /// keeps the search query through a fold or rotation that rebuilds this
-    /// page, as the show page's search.
+    /// Inside a two-pane root, keeps the search query through a fold or rotation that rebuilds
+    /// this page.
     @Environment(\.twoPaneRootVisit) private var rootVisit
     @State private var actions = EpisodeNotesActions()
     @State private var notes: [EpisodeNoteRecord] = []
@@ -62,9 +57,8 @@ struct EpisodeNotesLibraryView: View {
             emptyState
         }
         .navigationTitle("Notes")
-        // Always attached: removing a conditional `.searchable` mid-update
-        // can strand the system's search dismissal. A short list only tucks
-        // the field away until the listener pulls down.
+        // Always attached: removing a conditional `.searchable` mid-update can strand the
+        // system's search dismissal.
         .searchable(
             text: searchTextBinding,
             placement: .navigationBarDrawer(
@@ -166,14 +160,12 @@ struct EpisodeNotesLibraryView: View {
         do {
             fetched = try modelContext.fetch(EpisodeNoteStore.allNotes())
         } catch {
-            // The notes from the last fetch that worked stay on screen, with
-            // the alert; with none to keep, the empty state shows the error.
+            // With no notes on screen the empty state shows the error, not the alert.
             loadError = error.localizedDescription
             loadErrorMessage = notes.isEmpty ? nil : loadError
             return
         }
-        // A failed backfill puts the notes back as they were: the headers
-        // fall back to the resolved episode and the next load tries again.
+        // A failed backfill leaves the notes as they were; the next load tries again.
         try? EpisodeNoteStore.backfillEpisodeInfo(fetched, resolve: appModel.episodeSnapshot(for:), in: modelContext)
         notes = fetched
         regroup()

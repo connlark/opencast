@@ -1,10 +1,8 @@
 import Foundation
 import OpenCastCore
 
-/// Renders podcast show-notes HTML as an `AttributedString` using only
-/// presentation intents and links, so Dynamic Type and both color schemes
-/// style the result. Handles the same tag set as `HTMLPlainText`; anything
-/// unknown is stripped and malformed input degrades to the plain-text path.
+/// Only presentation intents and links, so Dynamic Type and both color schemes style the
+/// result. The tag set matches `HTMLPlainText`'s.
 enum HTMLAttributedText {
     nonisolated static func attributedString(from html: String) -> AttributedString {
         let rendered = render(preprocess(html))
@@ -12,9 +10,8 @@ enum HTMLAttributedText {
         return detectingLinks(in: isBlank ? AttributedString(HTMLPlainText.structuredText(from: html)) : rendered)
     }
 
-    /// The rendered text split at paragraph breaks. Views render each block
-    /// as its own `Text` inside a lazy stack — a single `Text` holding very
-    /// long show notes stops painting past the renderer's tile limits.
+    /// Split at paragraph breaks: a single `Text` holding very long show notes stops painting
+    /// past the renderer's tile limits.
     nonisolated static func attributedBlocks(from html: String) -> [AttributedString] {
         let rendered = attributedString(from: html)
         let plain = String(rendered.characters)

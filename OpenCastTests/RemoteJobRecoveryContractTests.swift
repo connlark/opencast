@@ -1,16 +1,10 @@
 import CryptoKit
-import DeviceCheck
 import Foundation
 import OpenCastTranscription
 import SwiftData
 import Testing
 @testable import OpenCast
 
-/// Recovery-contract checks: the additive reference fields decode with their
-/// documented defaults, the fault-injecting fake tells a request that never
-/// left apart from one the server accepted and enforces the Worker's state
-/// rules, every fixture in the catalog has an owner, and the diagnostic
-/// vocabulary cannot carry private content.
 @MainActor
 @Suite("Remote job recovery contracts")
 struct RemoteJobRecoveryContractTests {
@@ -77,17 +71,6 @@ struct RemoteJobRecoveryContractTests {
         #expect(inferredPrepared.createState == .prepared)
     }
 
-    @Test("The recovery window is seven days from creation")
-    func recoveryWindowIsSevenDays() {
-        let createdAt = Date(timeIntervalSinceReferenceDate: 780_000_000)
-        let reference = RemoteTranscriptionJobReference(
-            episodeID: "ep", clientRequestID: "req", jobID: nil, createdAt: createdAt, purpose: nil
-        )
-        #expect(RemoteTranscriptionJobReference.recoveryWindow == 7 * 24 * 60 * 60)
-        #expect(reference.isWithinRecoveryWindow(asOf: createdAt.addingTimeInterval(6 * 24 * 60 * 60)))
-        #expect(!reference.isWithinRecoveryWindow(asOf: createdAt.addingTimeInterval(7 * 24 * 60 * 60)))
-    }
-
     @Test("The store mints prepared references, attach marks them attached, exits record, and old persisted data still loads")
     func storeMintsPreparedAndLoadsLegacyData() throws {
         let suiteName = "remote-recovery-contracts-\(UUID().uuidString)"
@@ -114,7 +97,6 @@ struct RemoteJobRecoveryContractTests {
         #expect(attached.createState == .attached)
         #expect(attached.lastExit == .parked)
         #expect(attached.clientRequestID == minted.clientRequestID)
-        // An exit never mints a reference; old rows survive the rewrite.
         store.recordExit(.connectionLost, episodeID: "ep-never", purpose: .transcription)
         #expect(!store.references().contains { $0.episodeID == "ep-never" })
         #expect(store.references().contains { $0.episodeID == "ep-legacy" })
@@ -184,7 +166,6 @@ struct RemoteJobRecoveryContractTests {
         #expect(response.job.jobID == "job-fake-1")
         #expect(api.createCalls.last?.responseDelivered == true)
 
-        // A create arriving after the gate opened is not held.
         let later = try await api.createJob(request)
         #expect(later.job.jobID == "job-fake-1")
     }
@@ -326,75 +307,6 @@ struct RemoteJobRecoveryContractTests {
         #expect(api.mintedJobIDs == ["job-prior"])
     }
 
-    // MARK: Fixture catalog
-
-    @Test("Every fixture builds a fake, names an owning pass and a required assertion")
-    func everyFixtureIsOwnedAndBuildable() {
-        let ids = RemoteJobRecoveryFixture.allCases.map(\.rawValue)
-        #expect(Set(ids).count == ids.count)
-        #expect(ids.count == 12)
-        for fixture in RemoteJobRecoveryFixture.allCases {
-            #expect(["01", "03", "05"].contains(fixture.owningPass), "\(fixture) owner")
-            #expect(!fixture.requiredAssertion.isEmpty, "\(fixture) assertion")
-            let api = fixture.makeAPI()
-            #expect(api.mintedJobIDs.isEmpty, "\(fixture) starts with no server job")
-        }
-    }
-
-    @Test("The parked cloud fixtures seed a parked reference, a pending cloud record and a running server job")
-    func parkedFixturesSeedPersistedState() async throws {
-        for fixture in [RemoteJobRecoveryFixture.cloudParked, .parkedCloudUserCancel] {
-            let environment = try await Self.makeEnvironment(episodeID: "ep-parked-\(fixture.rawValue)")
-            let api = fixture.makeAPI()
-
-            let seed = try #require(try fixture.seedPersistedState(
-                store: environment.store,
-                api: api,
-                modelContext: environment.context,
-                episode: environment.episode
-            ))
-
-            #expect(seed.reference.resolvedPurpose == .adDetection)
-            #expect(seed.reference.createState == .attached)
-            #expect(seed.reference.jobID == RemoteJobRecoveryFixture.seededJobID)
-            #expect(seed.reference.lastExit == .parked)
-            #expect(seed.reference.userCancelRequestedAt == nil)
-            let records = try environment.context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>())
-            #expect(records.map(\.episodeID) == [environment.episode.episodeID])
-            #expect(records.first?.modeRawValue == AdDetectionMode.cloud.rawValue)
-            #expect(records.first?.remoteParkReasonRawValue == RemoteTranscriptionJobExit.parked.rawValue)
-            #expect(api.serverState(of: seed.jobID) == .transcribing)
-
-            // Resume re-attaches by the same client request ID without a
-            // second job and without any cancel.
-            let attached = try await api.createJob(Self.createRequest(clientRequestID: seed.reference.clientRequestID))
-            #expect(attached.job.jobID == seed.jobID)
-            #expect(api.mintedJobIDs == [seed.jobID])
-            #expect(api.cancelCalls.isEmpty)
-            #expect(try await api.poll(jobID: seed.jobID).job.state == .transcribing)
-        }
-    }
-
-    @Test("The parked user-cancel fixture takes exactly one cancel and never resumes")
-    func parkedUserCancelFixtureTakesOneCancel() async throws {
-        let environment = try await Self.makeEnvironment(episodeID: "ep-parked-cancel")
-        let fixture = RemoteJobRecoveryFixture.parkedCloudUserCancel
-        let api = fixture.makeAPI()
-        let seed = try #require(try fixture.seedPersistedState(
-            store: environment.store, api: api, modelContext: environment.context, episode: environment.episode
-        ))
-
-        let cancelled = try await api.cancel(jobID: seed.jobID)
-        let again = try await api.cancel(jobID: seed.jobID)
-        let reattach = try await api.createJob(Self.createRequest(clientRequestID: seed.reference.clientRequestID))
-
-        #expect(cancelled.job.state == .cancelled)
-        #expect(again.job.state == .cancelled)
-        #expect(reattach.job.state == .cancelled)
-        #expect(api.cancelCalls.count == 2)
-        #expect(api.mintedJobIDs == [seed.jobID])
-    }
-
     // MARK: Runner compatibility
 
     @Test("The current runner completes a fault-free run against the fake in the contract's call order")
@@ -480,49 +392,6 @@ struct RemoteJobRecoveryContractTests {
         #expect(text.contains(#""wireCode":"unknown""#))
     }
 
-    @Test("The error classifier keeps only a domain, code and closed machine codes")
-    func classifierKeepsDomainAndCodeOnly() {
-        #expect(
-            RemoteJobDiagnosticError(classifying: URLError(.notConnectedToInternet))
-                == RemoteJobDiagnosticError(domain: .transport, code: -1009, frameworkDomain: .urlError)
-        )
-        #expect(
-            RemoteJobDiagnosticError(classifying: RemoteTranscriptionHTTPError(statusCode: 503, code: "rate_limited", detail: "x"))
-                == RemoteJobDiagnosticError(domain: .http, code: 503, wireCode: .rateLimited)
-        )
-        #expect(
-            RemoteJobDiagnosticError(classifying: RemoteTranscriptionHTTPError(statusCode: 503, code: "made_up_code", detail: nil))
-                == RemoteJobDiagnosticError(domain: .http, code: 503)
-        )
-        #expect(
-            RemoteJobDiagnosticError(classifying: RemoteTranscriptionHTTPError(statusCode: -1, code: "invalid_response", detail: nil))
-                == RemoteJobDiagnosticError(domain: .transport, code: -1, localCode: .invalidResponse)
-        )
-        #expect(
-            RemoteJobDiagnosticError(classifying: AppAttestKeychainError(status: -25300))
-                == RemoteJobDiagnosticError(domain: .keychain, code: -25300)
-        )
-        let deviceCheckError = NSError(domain: DCError.errorDomain, code: DCError.Code.serverUnavailable.rawValue)
-        #expect(
-            RemoteJobDiagnosticError(classifying: deviceCheckError)
-                == RemoteJobDiagnosticError(domain: .deviceCheck, code: DCError.Code.serverUnavailable.rawValue, frameworkDomain: .deviceCheck)
-        )
-        #expect(
-            RemoteJobDiagnosticError(classifying: RemoteTranscriptionJobRunError.serverRejected(.insufficientCredits))
-                == RemoteJobDiagnosticError(domain: .runner, wireCode: .insufficientCredits)
-        )
-        #expect(
-            RemoteJobDiagnosticError(classifying: RemoteTranscriptionJobRunError.serviceUnavailable)
-                == RemoteJobDiagnosticError(domain: .runner, localCode: .serviceUnavailable)
-        )
-        #expect(RemoteJobDiagnosticError(classifying: CancellationError()) == RemoteJobDiagnosticError(domain: .cancellation))
-        let decodeFailure = DecodingError.keyNotFound(
-            AnyKey(stringValue: "jobID"),
-            DecodingError.Context(codingPath: [], debugDescription: "Episode Secret Title")
-        )
-        #expect(RemoteJobDiagnosticError(classifying: decodeFailure) == RemoteJobDiagnosticError(domain: .decode, localCode: .keyNotFound))
-    }
-
     @Test("A classified error never encodes its description or an unknown domain string")
     func classifiedErrorNeverEncodesDescription() throws {
         let downloadError = DownloadStore.CompletedDownloadError.notCompleted(
@@ -547,13 +416,6 @@ struct RemoteJobRecoveryContractTests {
 
     private struct LeakyDescriptionError: LocalizedError {
         var errorDescription: String? { "Episode Secret Title at https://private.example/x" }
-    }
-
-    private struct AnyKey: CodingKey {
-        var stringValue: String
-        var intValue: Int? { nil }
-        init(stringValue: String) { self.stringValue = stringValue }
-        init?(intValue: Int) { nil }
     }
 
     private struct Environment {

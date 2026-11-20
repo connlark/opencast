@@ -1,10 +1,5 @@
 import Foundation
 
-/// The eight fields a shared episode's web page needs, sanitised to the
-/// version `1` wire rules the ShareWorker decodes (`Server/ShareWorker`).
-/// Nothing about the sharer. The web decoder rejects a missing audio URL or
-/// an empty title, so the failable initialisers return nil for those; the
-/// encoder refuses the rare tuple too large for the decoder.
 public struct EpisodeSharePayload: Hashable, Sendable {
     public let audioURL: String
     public let title: String
@@ -63,20 +58,15 @@ public struct EpisodeSharePayload: Hashable, Sendable {
         )
     }
 
-    /// The latest start the page honours: it treats a `?t=` past this as 0.
-    /// A day, whatever the feed's duration says. Dynamic ad insertion makes
-    /// the served file longer or shorter than the RSS figure on every request
-    /// (This American Life 897 is listed at 4052 s and has served 3946 s and
-    /// 4173 s), so a position in the tail of a longer file is real and stays
-    /// shareable; the page drops a resume the actual file cannot hold once
-    /// its metadata arrives.
+    /// A day, not the feed's duration: dynamic ad insertion makes the served file longer or
+    /// shorter than the RSS figure, so a start past the listed duration can be real.
     public var maximumStartSeconds: Int {
         Self.maximumStartWithoutDuration
     }
 
     static let maximumStartWithoutDuration = 86_400
 
-    /// The tuple in wire order; the encoder joins it with `\n`.
+    /// Wire order; any change needs a new token version.
     public var tupleFields: [String] {
         [
             audioURL,
@@ -90,11 +80,9 @@ public struct EpisodeSharePayload: Hashable, Sendable {
         ]
     }
 
-    /// The trimmed string itself, never a re-encoded `URL.absoluteString`, so
-    /// the recipient fetches exactly what the app plays. A newline or control
-    /// character would split the tuple, so such a string is refused rather
-    /// than repaired. The host and port checks cover what Foundation accepts
-    /// but the worker's WHATWG parser rejects.
+    /// Returns the trimmed string, not `URL.absoluteString`, so the recipient fetches what the
+    /// app plays. A control character would split the tuple, so it is refused. The host and port
+    /// checks reject what Foundation accepts but the worker's WHATWG parser does not.
     private static func webURL(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !trimmed.isEmpty,
@@ -137,11 +125,8 @@ public struct EpisodeSharePayload: Hashable, Sendable {
         return !label.isEmpty && label.allSatisfy { $0.isASCII && $0.isNumber }
     }
 
-    /// Newlines and other control characters become single spaces: the web
-    /// decoder strips control characters, so leaving any in would make a
-    /// decoded payload differ from the one the app encoded. The cap counts
-    /// UTF-16 units, the unit of the worker's own limits, and never splits a
-    /// Character.
+    /// Control characters become spaces because the web decoder strips them. The cap counts
+    /// UTF-16 units, as the worker's limits do, and never splits a Character.
     private static func singleLine(_ value: String, limit: Int) -> String {
         let flattened = String(value.map { isLineBreakOrControl($0) ? " " : $0 })
             .trimmingCharacters(in: .whitespacesAndNewlines)

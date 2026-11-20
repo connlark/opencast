@@ -1,7 +1,4 @@
-/// The Chapters & Summary prompt and canonical payload: one request per
-/// episode, the transcript as `[id | start-end] text` lines.
 public enum ChaptersCanonicalPayload {
-    /// An absent or empty title falls back to the id.
     static func titleOrID(_ title: String?, _ id: String) -> String {
         if let title, !title.isEmpty { return title }
         return id
@@ -46,8 +43,6 @@ public enum ChaptersCanonicalPayload {
         ]).sortedKeys()
     }
 
-    /// The first request's thinking level: the base level up to the
-    /// escalation threshold of model-facing ids, the escalated level above.
     public static func baseThinking(
         modelSegmentCount: Int,
         model: AnalysisModelEntry,

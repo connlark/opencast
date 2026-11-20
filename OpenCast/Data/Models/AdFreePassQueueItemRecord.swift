@@ -1,8 +1,7 @@
 import Foundation
 import SwiftData
 
-/// Device-local persistence for pending ad-free pass queue items. Never
-/// synced; registered only in the local SwiftData configuration.
+/// Device-local: registered only in the local SwiftData configuration, never synced.
 @Model
 final class AdFreePassQueueItemRecord {
     var episodeID: String = ""
@@ -10,10 +9,10 @@ final class AdFreePassQueueItemRecord {
     var originRawValue: String = ""
     var enqueuedAt: Date = Date()
     var sequence: Int = 0
-    /// Empty on records persisted before cloud detect existed ⇒ on-device.
+    /// Empty reads as on-device; older records carry no mode.
     var modeRawValue: String = ""
-    /// Why a cloud item stopped polling while its server job kept running
-    /// (`RemoteTranscriptionJobExit` raw value). Empty ⇒ not parked.
+    /// A `RemoteTranscriptionJobExit` raw value: why a cloud item stopped polling while its
+    /// server job kept running. Empty means not parked.
     var remoteParkReasonRawValue: String = ""
 
     init(

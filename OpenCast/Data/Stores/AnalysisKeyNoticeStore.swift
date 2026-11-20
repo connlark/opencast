@@ -3,24 +3,18 @@ import Observation
 import OpenCastAnalysis
 import SwiftData
 
-/// The one-time notice that ad detection and Chapters & Summary are included
-/// until the trial date, and the trial facts the AI Services screens show.
-/// The seen flag lives in `LocalPreferenceRecord` with the rest of the
-/// wipeable local state: a data nuke deletes it and the notice shows again.
+/// The seen flag lives in `LocalPreferenceRecord`, so a data nuke shows the notice again.
 @Observable
 final class AnalysisKeyNoticeStore {
     static let seenPreferenceKey = "aiServices.keyNoticeSeen"
-    /// 2026.11.1 stored `true` for a sheet that pushed a key early; the calm
-    /// sheet corrects it, so that value reads as unseen.
+    /// Not `true`: an earlier build stored `true`, and that value must read as unseen.
     static let seenPreferenceValue = "2"
 
     private(set) var hasSeenAIKeyNotice = false
-    /// A display fact: the trial status cache sets it; UI tests seed it.
     var trialStatus: AnalysisTrialStatus?
 
     @ObservationIgnored private let save: (ModelContext) throws -> Void
 
-    /// `save` is the test seam for the seen flag's save.
     init(
         trialStatus: AnalysisTrialStatus? = nil,
         save: @escaping (ModelContext) throws -> Void = { try $0.save() }
@@ -50,30 +44,22 @@ final class AnalysisKeyNoticeStore {
             )
             try save(context)
         } catch {
-            // The listener's answer stands for this session; a failed
-            // persist only shows the notice again on a later launch.
+            // A failed persist only shows the notice again on a later launch.
         }
     }
 
-    /// Before the first analysis without a key: unseen, no key saved, and the
-    /// trial service reachable, so "included until the date" is true here.
     func isNoticeDue(hasSavedKey: Bool, reachability: AnalysisTrialReachability.State) -> Bool {
         !hasSeenAIKeyNotice && showsSettingsNoticeRow(hasSavedKey: hasSavedKey, reachability: reachability)
     }
 
-    /// A tap that must wait for reachability before the gate can answer.
     func isAwaitingReachability(hasSavedKey: Bool, reachability: AnalysisTrialReachability.State) -> Bool {
         !hasSeenAIKeyNotice && !hasSavedKey && reachability == .unknown
     }
 
-    /// The AI Services row stays after the notice was seen, until a key is
-    /// saved.
     func showsSettingsNoticeRow(hasSavedKey: Bool, reachability: AnalysisTrialReachability.State) -> Bool {
         !hasSavedKey && reachability == .available
     }
 
-    /// The count the service reported for this install; `nil` when it has
-    /// reported none, which does not justify "this install has N left".
     var knownRemainingUnits: Int? {
         switch trialStatus {
         case .unitsLeft(let units): max(units, 0)

@@ -1,6 +1,4 @@
-/// How many completed downloads a show keeps. The raw value is a stored
-/// preference value, so case raw values are durable storage keys. A show's
-/// own choice is a `DownloadKeepLimit?`, where nil follows the default.
+/// Raw values are stored preference values; never change them.
 nonisolated enum DownloadKeepLimit: String, CaseIterable, Identifiable, Sendable {
     case noLimit
     case one = "1"
@@ -30,7 +28,6 @@ nonisolated enum DownloadKeepLimit: String, CaseIterable, Identifiable, Sendable
         }
     }
 
-    /// "No Limit", "1 Episode", "3 Episodes".
     var title: String {
         guard let maximumCount else {
             return "No Limit"
@@ -38,7 +35,6 @@ nonisolated enum DownloadKeepLimit: String, CaseIterable, Identifiable, Sendable
         return maximumCount == 1 ? "1 Episode" : "\(maximumCount) Episodes"
     }
 
-    /// "No limit", "Keep 3".
     var shortTitle: String {
         guard let maximumCount else {
             return "No limit"

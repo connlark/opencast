@@ -287,7 +287,6 @@ struct OpenCastHTTPClientTests {
         #expect(outcome.validators?.bodyHash != "stale-hash")
     }
 
-    /// Mirrors the service's body hashing.
     private func sha256Hex(_ data: Data) -> String {
         SHA256.hash(data: data).map { byte in
             let hex = String(byte, radix: 16)
@@ -392,8 +391,6 @@ struct OpenCastHTTPClientTests {
         #expect(OpenCastURLSessionFactory.generalUserAgent(version: "2026.9.3") == "OpenCast/2026.9.3")
         #expect(OpenCastURLSessionFactory.userAgent == OpenCastURLSessionFactory.generalUserAgent(version: "1.0"))
         #expect(!OpenCastURLSessionFactory.userAgent.contains("://"))
-        // Downloads override this per request with the media profile; the
-        // session default underneath stays the general identity.
         for configuration in [
             OpenCastURLSessionFactory.sharedConfiguration(),
             OpenCastURLSessionFactory.feedConfiguration(),
@@ -437,9 +434,7 @@ struct OpenCastHTTPClientTests {
 
     @Test("Capped fetch stops a chunked body that exceeds the cap mid-stream")
     func cappedFetchStopsOversizedChunkedBodyMidStream() async throws {
-        // No Content-Length: expectedContentLength is -1, so only the running
-        // count can enforce the cap. Four 64 KiB chunks against a 100 KiB cap
-        // trip the check at the second chunk flush.
+        // No Content-Length, so only the running count can enforce the cap.
         let url = URL(string: "https://example.com/chunked-oversized.xml")!
         let chunk = Data(repeating: 0x41, count: 64 * 1_024)
         let client = streamingStubClient(

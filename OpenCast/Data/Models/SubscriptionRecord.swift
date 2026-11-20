@@ -12,25 +12,16 @@ final class SubscriptionRecord {
     var isArchived: Bool = false
     var isVoiceBoostEnabled: Bool = true
     var isAdAutoDetectEnabled: Bool = false
-    /// Retired Chapters & Summary per-show opt-in. Generation is a manual
-    /// per-episode action now, so nothing reads this — but the field stays:
-    /// `CD_isTranscriptAnalysisEnabled` is deployed in production CloudKit
-    /// (prod fields can't be dropped) and older builds still sync it.
+    /// Unread, but production CloudKit fields can't be dropped and older builds still sync it.
     var isTranscriptAnalysisEnabled: Bool = false
     var skipIntroSeconds: Double = 0
     var skipOutroSeconds: Double = 0
-    /// The show's own playback speed (CloudKit `CD_playbackRate`). 0 follows
-    /// the global speed; read it through `PodcastPlaybackRateOverride`, which
-    /// treats anything not finite and positive the same way.
+    /// 0 follows the global speed. Read it through `PodcastPlaybackRateOverride`.
     var playbackRate: Double = 0
-    /// Auto Add to Up Next for the show (CloudKit `CD_autoAddToUpNext`) in
     /// Pocket Casts' raw values: 0 off, 1 bottom, 2 top. Read it through
-    /// `UpNextAutoAddPosition(stored:)`, which treats any other value as off.
+    /// `UpNextAutoAddPosition(stored:)`.
     var autoAddToUpNext: Int = 0
-    /// Stable per-record identity so duplicate repair picks the same winner on
-    /// every device (smallest UUID wins); peers that chose opposite winners
-    /// used to cross-delete both copies. Records imported from builds that
-    /// predate the field carry "".
+    /// Never reassigned: duplicate repair keeps the smallest non-empty UUID on every device.
     var dedupeUUID: String = ""
 
     init(

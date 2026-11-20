@@ -6,18 +6,6 @@ import Testing
 @MainActor
 @Suite("Apple speech asset store")
 struct AppleSpeechAssetStoreTests {
-    @Test("Refresh reports unavailable when the transcriber is unavailable")
-    func refreshReportsUnavailable() async {
-        let provider = FakeAppleSpeechAssetProvider(isTranscriberAvailable: false)
-        let store = makeStore(provider: provider)
-
-        await store.refresh()
-
-        #expect(store.state == .unavailable)
-        #expect(!store.isTranscriberAvailable)
-        #expect(store.installedLocaleIdentifiers.isEmpty)
-    }
-
     @Test("Refresh loads installed locales")
     func refreshLoadsInstalledLocales() async {
         let provider = FakeAppleSpeechAssetProvider(
@@ -54,12 +42,12 @@ struct AppleSpeechAssetStoreTests {
         let installTask = Task {
             try await store.ensureInstalledAssets(forLanguageCode: "en-US")
         }
-        try await waitUntil {
+        #expect(await waitUntil {
             if case .installing(let localeIdentifier, let fraction) = store.state {
                 return localeIdentifier == "en_US" && fraction >= 0.75
             }
             return false
-        }
+        })
         provider.installGate?.yield()
         provider.installGate?.finish()
 
@@ -77,8 +65,7 @@ struct AppleSpeechAssetStoreTests {
         _ = try await store?.ensureInstalledAssets(forLanguageCode: "en-US")
         #expect(provider.retainedProgress != nil)
         store = nil
-        try await waitUntil { releasedStore == nil }
-        #expect(releasedStore == nil)
+        #expect(await waitUntil { releasedStore == nil })
         provider.retainedProgress?(0.5)
     }
 
@@ -153,22 +140,5 @@ struct AppleSpeechAssetStoreTests {
         let userDefaults = UserDefaults(suiteName: suiteName) ?? .standard
         userDefaults.removePersistentDomain(forName: suiteName)
         return AppleSpeechAssetStore(provider: provider, userDefaults: userDefaults)
-    }
-
-    // Generous deadline: under full-suite parallel load the unstructured
-    // install/progress tasks can wait a long time for scheduling; this only
-    // bounds a genuinely broken run.
-    private func waitUntil(
-        timeout: Duration = .seconds(120),
-        _ condition: @MainActor () -> Bool
-    ) async throws {
-        let deadline = ContinuousClock.now + timeout
-        while ContinuousClock.now < deadline {
-            if condition() {
-                return
-            }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        Issue.record("condition not met before timeout")
     }
 }

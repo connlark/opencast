@@ -1,10 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// A show in the Group by Podcast Inbox, around a row or a tile. It opens the
-/// show under the Inbox's settings, so the show lists the episodes the count
-/// stood for, and a long press acts on those episodes. Unlike a Library cell
-/// it offers no removal: the Inbox is not where shows are managed.
 struct InboxPodcastGroupLink<Content: View>: View {
     let group: InboxPodcastGroup
     let episodeListOverride: PodcastEpisodeListOverride

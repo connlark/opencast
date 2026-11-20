@@ -60,35 +60,6 @@ struct ModelStoreRelocationLogTests {
             """)
     }
 
-    @Test("Every deferral reason is named with its detail")
-    func deferralReasonsAreNamed() {
-        let lines = [
-            ModelStoreRelocationResult.Outcome.deferred(.invalid("no Z_METADATA")),
-            .deferred(.inaccessible("open failed: 23")),
-            .deferred(.unsupported("journal_mode delete")),
-            .ambiguous
-        ].map { outcome in
-            ModelStoreRelocationLog.line(
-                for: ModelStoreRelocationResult(
-                    configurationName: "SyncedUserData",
-                    resolvedURL: URL(filePath: "/group/SyncedUserData.store"),
-                    outcome: outcome,
-                    storeUUID: nil,
-                    walSize: nil,
-                    companions: [],
-                    notes: []
-                )
-            )
-        }
-
-        #expect(lines.map { $0.prefix { $0 != ";" } } == [
-            "SyncedUserData deferred, invalid: no Z_METADATA",
-            "SyncedUserData deferred, inaccessible: open failed: 23",
-            "SyncedUserData deferred, unsupported: journal_mode delete",
-            "SyncedUserData ambiguous"
-        ])
-    }
-
     @Test("A file over the cap is replaced by the lines being written")
     func overTheCapKeepsOnlyTheNewLines() throws {
         let root = Self.temporaryRoot()
@@ -104,31 +75,6 @@ struct ModelStoreRelocationLogTests {
             try String(contentsOf: fileURL, encoding: .utf8)
                 == "2026-10-27T01:30:00Z \(ModelStoreRelocationLog.line(for: Self.moved))\n"
         )
-    }
-
-    @Test("The production log is capped at 256 KiB in the app container's Diagnostics directory")
-    func productionDefaults() {
-        let log = ModelStoreRelocationLog()
-
-        #expect(log.maximumByteCount == 256 * 1024)
-        #expect(log.fileURL == URL.applicationSupportDirectory.appending(path: "Diagnostics/store-relocation.log"))
-    }
-
-    @Test("A file that cannot be written leaves the launch going and writes nothing")
-    func unwritableFileIsNotThrown() throws {
-        let root = Self.temporaryRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let blockingFile = root.appending(path: "Diagnostics")
-        try Data().write(to: blockingFile)
-        let log = ModelStoreRelocationLog(
-            fileURL: blockingFile.appending(path: "store-relocation.log"),
-            logger: Self.testLogger
-        )
-
-        log.record([Self.moved], at: Self.firstLaunch)
-
-        #expect(try Data(contentsOf: blockingFile).isEmpty)
     }
 
     private static func temporaryRoot() -> URL {

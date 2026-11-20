@@ -22,32 +22,26 @@ struct NowPlayingView: View {
     @State private var noticeGate = AnalysisKeyNoticeGate()
     @State private var naturalContentHeight: CGFloat?
     @State private var contentMeasurements = NowPlayingContentMeasurements()
-    /// Laptop's controls below the band, without an expanded pane.
+    /// Measured without an expanded pane.
     @State private var foldedControlsHeight: CGFloat?
-    /// The visible toast's height, so its occlusion check uses its real
-    /// bounds; both toasts are at least this tall before the first reading.
+    /// Both toasts are at least this tall before the first reading.
     @State private var toastHeight: CGFloat = 60
     @State private var scrollPosition = ScrollPosition(edge: .top)
-    /// Laptop's controls scroll on their own below the band.
     @State private var controlsScrollPosition = ScrollPosition(edge: .top)
     @State private var scrolledAwayAreas: Set<ScrollArea> = []
     @State private var secondaryPaneFrames: [SecondaryPaneSlot: CGRect] = [:]
     @State private var isSecondaryPaneExpanded = false
-    /// The arrangement's pane style as it stands now, for work that finishes
-    /// after an await (a captured view value would be the old arrangement).
+    /// For work that finishes after an await: a captured view value would be the old arrangement.
     @State private var livePaneStyle = NowPlayingSecondaryPaneStyle.entryPointsOnly
     @SceneStorage(NowPlayingSecondaryPane.sceneStorageKey) private var storedSecondaryPane: String?
     @ScaledMetric(relativeTo: .body) private var playButtonScaledDiameter = NowPlayingTransportControls.playButtonBaseDiameter
 
-    /// Today's card, or the player across a foldable scene's window-sized
-    /// surface; a split places each half from its own allocation instead.
     let cardGeometry: NowPlayingCardGeometry
     let arrangement: NowPlayingArrangement
     let surface: NowPlayingSurface
     @Binding var isSoundLabInteractionActive: Bool
     @Binding var isContentScrolledToTop: Bool
-    /// Global frames where a drag belongs to the secondary pane, never to
-    /// the card's dismiss drag.
+    /// In global coordinates.
     @Binding var dismissDragExcludedFrames: [CGRect]
     let isTrackingDismissDrag: Bool
     let onDismiss: () -> Void
@@ -203,10 +197,8 @@ struct NowPlayingView: View {
         }
     }
 
-    /// Laptop's stack split around its band, or one container for the card,
-    /// the split and the tall open display: the player is its first child in
-    /// all three, so a change between them moves the player without
-    /// rebuilding it.
+    /// The player stays the container's first child, so a change of arrangement moves it
+    /// without rebuilding it.
     @ViewBuilder
     private func arrangedContent(size: CGSize) -> some View {
         if isFoldedLayout,
@@ -235,15 +227,10 @@ struct NowPlayingView: View {
         }
     }
 
-    /// Today's card where the arrangement is the card; on a window-sized
-    /// surface, the player placed from its allocation.
     private func playerGeometry(in allocation: CGRect) -> NowPlayingCardGeometry {
         arrangement.usesWindowSizedSurface ? surface.playerGeometry(allocation: allocation) : cardGeometry
     }
 
-    /// The whole stack in one scroll view: today's card, the player beside
-    /// the pane, and the tall open display with the pane's row below the
-    /// controls.
     @ViewBuilder
     private func playerColumn(geometry: NowPlayingCardGeometry, size: CGSize) -> some View {
         let metrics = NowPlayingContentMetrics(
@@ -258,7 +245,6 @@ struct NowPlayingView: View {
             viewportHeight: size.height - geometry.contentInsets.top - geometry.contentInsets.bottom
         )
         let paneAllowance = presentation.isExpanded ? paneHeight + metrics.contentSpacing : 0
-        // Everything in the stack that is not a measured row.
         let unmeasuredStackHeight = metrics.artworkSize
             + metrics.titleBlockTopSpacer
             + metrics.progressSectionTopSpacer
@@ -357,9 +343,6 @@ struct NowPlayingView: View {
         )
     }
 
-    /// Laptop: one card across the band, the media in the viewport above it
-    /// and the controls in the viewport below it. Each scrolls on its own and
-    /// is clipped at the band.
     @ViewBuilder
     private func foldedPlayer(episode: Episode, fold: ClosedRange<CGFloat>, size: CGSize) -> some View {
         let metrics = NowPlayingContentMetrics(
@@ -612,8 +595,6 @@ struct NowPlayingView: View {
         .layoutPriority(1)
     }
 
-    /// The pane collapsed to its row below the controls, and the same pane
-    /// inline in a bounded area once expanded.
     @ViewBuilder
     private func secondaryDisclosure(
         _ presentation: NowPlayingSecondaryPanePresentation,
@@ -740,7 +721,6 @@ struct NowPlayingView: View {
         NowPlayingSecondaryPane(storedValue: storedSecondaryPane)
     }
 
-    /// The picker's selection, stored as scene state.
     private var secondaryPaneSelection: Binding<NowPlayingSecondaryPane> {
         Binding(
             get: { NowPlayingSecondaryPane(storedValue: storedSecondaryPane) },
@@ -786,8 +766,6 @@ struct NowPlayingView: View {
         }
     }
 
-    /// The row's expansion grows the stack; under Reduce Motion it appears
-    /// without the animation. Expanding scrolls the pane into view.
     private func toggleSecondaryPane() {
         withAnimation(accessibilityReduceMotion ? nil : .easeOut(duration: 0.2)) {
             isSecondaryPaneExpanded.toggle()
@@ -801,7 +779,6 @@ struct NowPlayingView: View {
         }
     }
 
-    /// Laptop: the stack split around a horizontal band across the card.
     private var isFoldedLayout: Bool {
         if case .single(let band) = arrangement, band != nil, cardGeometry.horizontalFold != nil {
             true
@@ -831,7 +808,7 @@ struct NowPlayingView: View {
         foldedControlsHeight = height
     }
 
-    /// Nil hides the Now Playing note circle (the Playback setting is off).
+    /// Nil hides the note circle.
     private var addNoteAction: (() -> Void)? {
         guard appModel.playbackSettings.showsPrivateNoteButtons else { return nil }
         return addTimestampedNote
@@ -906,10 +883,6 @@ struct NowPlayingView: View {
         return appModel.library.isActivelySubscribed(to: currentPodcastID)
     }
 
-    /// The source pill is extra information, so it only takes room the
-    /// controls leave free below the utility row. Otherwise, and always at
-    /// accessibility sizes and in compact height, the More menu's
-    /// "Show <playlist>" item is the route back to the source.
     private func showsSourcePill(spareHeight: CGFloat?) -> Bool {
         guard !dynamicTypeSize.isAccessibilitySize,
               verticalSizeClass != .compact,
@@ -920,9 +893,7 @@ struct NowPlayingView: View {
         return spareHeight >= NowPlayingSourcePill.minimumSpareHeight
     }
 
-    /// The first measurement lands while the card is still presenting; later
-    /// changes (Dynamic Type, a failure message, another episode's titles)
-    /// animate the artwork to the size the fit rule gives it.
+    /// The first measurement lands while the card is still presenting, so only later ones animate.
     private func updateMeasurement(
         _ keyPath: WritableKeyPath<NowPlayingContentMeasurements, CGFloat?>,
         to height: CGFloat,
@@ -948,9 +919,7 @@ struct NowPlayingView: View {
         )
     }
 
-    /// The first measurement lands while the card is still presenting, so the
-    /// pill arrives with it; later changes (Dynamic Type, rotation, a failure
-    /// message) fade it in or out.
+    /// The first measurement lands while the card is still presenting, so only later ones fade.
     private func updateNaturalContentHeight(_ height: CGFloat) {
         guard naturalContentHeight != nil else {
             naturalContentHeight = height
@@ -1013,9 +982,6 @@ struct NowPlayingView: View {
         return RemoteTranscriptionStatusPresentation.make(phase: phase)
     }
 
-    /// A completed transcript opens where this arrangement shows it (the
-    /// pane beside the player, else its sheet) once its document loads; a
-    /// missing one keeps the request flow.
     private func performTranscriptAction() {
         guard let currentEpisodeID else {
             return
@@ -1189,9 +1155,8 @@ struct NowPlayingView: View {
         handOffFromSoundLabSheet(.transcriptAction)
     }
 
-    /// A Sound Lab sheet action dismisses the sheet first; the flow it opens
-    /// starts in `completeSoundLabHandoff` once the sheet is gone, so the
-    /// other presenters and the transcript's completion guard see no sheet.
+    /// The sheet goes first; its flow starts in `completeSoundLabHandoff` once the sheet is gone,
+    /// so the other presenters and the transcript's completion guard see no sheet.
     private func handOffFromSoundLabSheet(_ action: PlayerUtilitySheet.Handoff.Action) {
         soundLabHandoff = PlayerUtilitySheet.Handoff(action: action, episodeID: currentEpisodeID)
         utilitySheet = nil
@@ -1253,9 +1218,8 @@ struct NowPlayingView: View {
         appModel.requestAddToPlaylist(episodeID: currentEpisodeID)
     }
 
-    /// The unload, and so the audio stop, lands in the exit animation's
-    /// completion. Pausing on the tap held the first frame of the exit for
-    /// well over 100 ms, so audio trails the tap by the animation instead.
+    /// Audio stops in the exit animation's completion: pausing on the tap held the exit's first
+    /// frame for well over 100 ms.
     private func stopPlayback() {
         onStopPlayback()
     }
@@ -1289,9 +1253,8 @@ struct NowPlayingView: View {
 }
 
 private extension View {
-    /// Reports whether this scroll view rests at its top, and that it does
-    /// once it leaves the hierarchy, so the card's dismiss drag starts only
-    /// when every visible scroll area is at its top.
+    /// A scroll view leaving the hierarchy reports itself at its top, so only visible areas can
+    /// block the card's dismiss drag.
     func tracksScrolledToTop(
         area: NowPlayingView.ScrollArea,
         update: @escaping @MainActor (Bool, NowPlayingView.ScrollArea) -> Void
@@ -1307,8 +1270,6 @@ private extension View {
         }
     }
 
-    /// Reports the pane's global frame while it is shown, so a drag that
-    /// starts in it scrolls the pane instead of dismissing the card.
     func reportsSecondaryPaneFrame(
         slot: NowPlayingView.SecondaryPaneSlot,
         update: @escaping @MainActor (CGRect?, NowPlayingView.SecondaryPaneSlot) -> Void

@@ -13,8 +13,6 @@ struct NotificationAuthorizationService {
         return await authorizationStatus()
     }
 
-    /// Quiet (never prompts): requested only at the first
-    /// background arm of an ad-free pass, never at launch or play.
     @discardableResult
     func requestProvisionalAuthorization() async throws -> UNAuthorizationStatus {
         _ = try await UNUserNotificationCenter.current().requestAuthorization(

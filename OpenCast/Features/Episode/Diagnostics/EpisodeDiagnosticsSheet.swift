@@ -1,9 +1,7 @@
 import SwiftData
 import SwiftUI
 
-/// Copyable snapshot of everything relevant to an ad-skip investigation for
-/// one episode. All loading starts here — never from the episode screen or
-/// its menu — and cancels on dismissal.
+/// All loading starts here, never from the episode screen or its menu, and cancels on dismissal.
 struct EpisodeDiagnosticsSheet: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss

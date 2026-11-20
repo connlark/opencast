@@ -1,4 +1,3 @@
-/// Optional progress detail for states that process chunks.
 public struct OpenCastRemoteTranscriptionJobProgress: Codable, Sendable, Equatable {
     public var chunksCompleted: Int?
     public var chunksTotal: Int?

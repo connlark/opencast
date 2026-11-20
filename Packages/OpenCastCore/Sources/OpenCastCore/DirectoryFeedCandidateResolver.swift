@@ -1,14 +1,8 @@
 import Foundation
 
-/// Fetches and parses a merged result's candidate feeds and decides
-/// whether to subscribe directly or present a choice. Parsed catalogs
-/// drive every decision; provider counts and timestamps are hints only.
 public struct DirectoryFeedCandidateResolver: Sendable {
-    /// Any parsed episode-count difference is material. Even one
-    /// additional RSS item can expose a truncated directory feed.
+    /// One extra parsed item is material: it can expose a truncated directory feed.
     public static let materialEpisodeGap = 1
-    /// A fuller feed is promoted only when its newest parsed episode is
-    /// no more than this much older than the other candidate's newest.
     public static let stalenessTolerance: TimeInterval = 30 * 24 * 60 * 60
 
     let feedService: any FeedService
@@ -30,7 +24,6 @@ public struct DirectoryFeedCandidateResolver: Sendable {
             try? outcome.get()
         }
         guard let primary = resolved.first else {
-            // Every candidate failed: surface the primary candidate's error.
             throw firstError(in: outcomes) ?? OpenCastCoreError.invalidHTTPResponse
         }
 
@@ -68,9 +61,6 @@ public struct DirectoryFeedCandidateResolver: Sendable {
         return gap >= materialEpisodeGap
     }
 
-    /// The staleness guard: an alternate with no parsed dates never
-    /// promotes; otherwise its newest episode must be within tolerance
-    /// of the primary's newest.
     static func isCurrent(
         _ alternate: ResolvedFeedCandidate,
         relativeTo primary: ResolvedFeedCandidate

@@ -2,14 +2,6 @@ import Foundation
 import OpenCastAnalysis
 import OpenCastAnalysisProviders
 
-/// UI tests: how the fixture transport answers every analysis send.
-/// `OPENCAST_UI_TEST_ANALYSIS_TRANSPORT` picks the answer
-/// (`fixture`, `invalid-key`, `rate-limited`, `trial-exhausted`,
-/// `trial-paused`, `direct-overloaded`);
-/// `--opencast-ui-test-analysis-transport-hold` keeps every send waiting
-/// until its run is cancelled, and `--opencast-ui-test-analysis-tier` answers
-/// every tier check (`free-tier` or `not-free-tier`; anything else is
-/// inconclusive).
 nonisolated struct AnalysisUITestTransportMode: Sendable, Hashable {
     enum Answer: String, Sendable, Hashable {
         case fixture
@@ -17,7 +9,6 @@ nonisolated struct AnalysisUITestTransportMode: Sendable, Hashable {
         case rateLimited = "rate-limited"
         case trialExhausted = "trial-exhausted"
         case trialPaused = "trial-paused"
-        /// Google turns every direct send away; the trial answers.
         case directOverloaded = "direct-overloaded"
     }
 
@@ -34,10 +25,6 @@ nonisolated struct AnalysisUITestTransportMode: Sendable, Hashable {
     }
 }
 
-/// Answers the pipeline from a synthetic reply built from the request's
-/// own segments (the seeded transcript's sponsor read becomes one host-read
-/// span), or with the scripted failure, and reports a send record for each
-/// answer as a real transport does. Never reaches the network.
 nonisolated struct AnalysisUITestFixtureTransport: AnalysisProviderTransport {
     let mode: AnalysisUITestTransportMode
     let route: AnalysisRoute
@@ -105,8 +92,6 @@ nonisolated struct AnalysisUITestFixtureTransport: AnalysisProviderTransport {
         ))
     }
 
-    /// A Gemini body whose answer names the window's first segment that
-    /// reads "brought to you" as a host-read ad, or no spans.
     static func adBody(for request: AnalysisProviderRequest) -> String {
         var spans: [JSONValue] = []
         if let text = request.payload["contents"]?.arrayValue?.first?["parts"]?.arrayValue?.first?["text"]?.stringValue,

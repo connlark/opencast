@@ -1,13 +1,8 @@
 import Foundation
 
-/// Serializes App Attest assertion issuance → server response per key ID.
-///
-/// `DCAppAttestService` increments the assertion counter at issuance and the
-/// worker rejects any envelope whose counter is not strictly higher than the
-/// last one it verified. Five services send through independently
-/// constructed secure clients, so without a process-wide gate two in-flight
-/// sends can issue counters N and N+1 but arrive reversed — logged live as a
-/// transient `invalid_counter` 401 in the 2026-07-31 dev traversal.
+/// The worker rejects a counter not above the last one it verified, and `DCAppAttestService`
+/// increments it at issuance, so two in-flight sends on one key can arrive reversed. One
+/// process-wide gate keeps each key's issuance-to-response turns serial.
 actor AppAttestAssertionGate {
     nonisolated static let shared = AppAttestAssertionGate()
 
@@ -22,10 +17,8 @@ actor AppAttestAssertionGate {
 
     var enqueuedSendCount: UInt64 { nextTailID }
 
-    /// Runs `operation` after every previously enqueued send for `keyID`
-    /// has delivered its response (or failed). Distinct keys never wait on
-    /// each other. Caller cancellation cancels this turn's operation but
-    /// leaves the chain intact for the sends queued behind it.
+    /// Distinct keys never wait on each other. Caller cancellation cancels this turn's operation
+    /// but leaves the chain intact for the sends queued behind it.
     func withSerializedSend<T: Sendable>(
         keyID: String,
         exemptFromSuspension: Bool = false,

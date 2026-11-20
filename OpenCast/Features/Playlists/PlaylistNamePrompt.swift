@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// The one alert that names playlists, for both creating and renaming. The
-/// confirm button stays disabled until the trimmed name has a character, and
-/// `onCommit` receives the trimmed name.
 struct PlaylistNamePrompt: ViewModifier {
     @Binding var request: PlaylistNamePromptRequest?
     let onCommit: (PlaylistNamePromptRequest, String) -> Void

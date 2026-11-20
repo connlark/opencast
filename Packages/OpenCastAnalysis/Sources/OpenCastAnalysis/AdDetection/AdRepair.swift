@@ -1,21 +1,13 @@
-/// The one bounded corrective request per window and the checks that stop
-/// a repair from passing validation by erasing what it was asked to fix.
 public enum AdRepair {
-    /// The error code when the corrective request cannot be bounded.
     public static let feedbackExceeded = "repair_feedback_exceeded"
     static let maxContextEntries = 8
     static let maxContextTextBytes = 2048
     static let maxContextBytes = 16_384
 
-    /// The previous answer as the corrective request quotes it.
     public static func previousAnswer(_ output: AdModelOutput?) -> JSONValue {
         output?.jsonValue ?? .object(["unusable_previous_output": .bool(true)])
     }
 
-    /// Appends the previous answer and the feedback to the window's payload.
-    /// Feedback is source data, never trusted instructions: it lists the
-    /// issues and quotes the actual text of each failing boundary segment,
-    /// and asks for the full answer again rather than a patch.
     public static func payload(
         _ payload: JSONValue,
         previous: JSONValue,
@@ -97,8 +89,8 @@ public enum AdRepair {
         return .success(.object(members))
     }
 
-    /// A corrective answer may not pass by erasing an already verified break
-    /// or lowering its automatic-skip confidence.
+    /// A repair may not drop a verified break or lower its confidence below the old value or 0.8,
+    /// the automatic-skip threshold, whichever is lower.
     public static func preservesVerifiedBreaks(_ before: AdValidation, _ after: AdValidation) -> Bool {
         before.spans.allSatisfy { old in
             after.spans.contains { new in
@@ -109,10 +101,7 @@ public enum AdRepair {
         }
     }
 
-    /// Every rejected candidate's evidence must survive the repair where it
-    /// can be located: inside a repaired break overlapping the original span,
-    /// or, for an invented quote, a separately verified original boundary
-    /// inside a repaired break. Requires `after` to have validated.
+    /// Requires `after` to have passed validation.
     public static func preservesCandidateEvidence(
         _ request: AdAnalysisRequest,
         before: AdModelOutput,
@@ -129,9 +118,8 @@ public enum AdRepair {
             }
             let source = bounds.map { segments[$0.start...$0.end] } ?? segments[...]
             let sourceWords = RustText.normalizedReceiptTokens(AdValidator.joinedText(source))
-            // Locatability is the services' fixed contract, not the policy's
-            // evidence cap: a tightened cap applies to the replacement spans
-            // (validation), never to how much of the original must survive.
+            // The fixed service limit, not the policy's evidence cap: a tightened cap applies only
+            // to the replacement spans, never to how much of the original must survive.
             let locatableCue = (2...AdPipelineConstants.maxPreservedEvidenceWords).contains(cue.count)
                 && sourceWords.containsRun(cue)
             let anchors: [Int] = [
@@ -157,7 +145,6 @@ public enum AdRepair {
     }
 }
 
-/// A failure named by its service error code.
 public struct AnalysisCodeError: Error, Sendable, Hashable {
     public let code: String
 

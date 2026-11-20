@@ -1,51 +1,34 @@
-/// Which analysis a run performs.
 public enum AnalysisFeature: String, Sendable, Hashable, CaseIterable, Codable {
     case adDetection = "ad_detection"
     case chaptersSummary = "chapters_summary"
 }
 
-/// Ad-detection numbers the policy bundle does not carry. Each equals the
-/// ad-analysis service's constant (`ReferencePolicyTests` reads the source).
+/// Each value must equal the ad-analysis service's constant of the same meaning.
 enum AdPipelineConstants {
-    /// Transport attempts for a window's first request.
     static let initialAttempts = 2
-    /// Transport attempts for the one corrective request.
     static let repairTransportAttempts = 1
-    /// Longest pause between transport attempts.
     static let maxBackoffSeconds = 10
     /// Longest boundary receipt, in normalized words.
     static let maxReceiptWords = 32
-    /// The services' window geometry and per-window span cap, which bound
-    /// the whole-episode span ceiling whatever a policy configures.
     static let serviceWindowSegments = 800
     static let serviceWindowOverlapSegments = 120
     static let serviceSpansPerWindow = 32
-    /// Longest original evidence quote a repair must still contain, in
-    /// normalized words (the services' `MAX_EVIDENCE_WORDS`).
+    /// In normalized words; the services' `MAX_EVIDENCE_WORDS`.
     static let maxPreservedEvidenceWords = 32
 }
 
-/// The trial route's ad-detection budget (``AnalysisExecutionBudget/trial``).
-/// Trial-only client numbers with no service counterpart, so nothing here
-/// is pinned to the services' source.
 enum AdTrialRunConstants {
-    /// The analysis execution budget, counted from when the run's budget is
-    /// made: twelve 120-second first sends with 300 seconds to spare.
-    /// Retries, repairs and waits draw on the same deadline, so it does not
-    /// reserve every window's worst case. It bounds neither preparation nor
-    /// finalization; the service's own limits (twelve windows, cumulative
-    /// input) are separate and are not a run timer.
+    /// Twelve 120-second first sends plus 300 s to spare, counted from when the run's budget is
+    /// made. Retries, repairs and waits draw on the same deadline.
     static let runBudgetSeconds = 1_740
     /// No send starts with less than this left, and no pause leaves less.
     static let sendFloorSeconds = 30
 }
 
-/// Chapters & Summary numbers the policy bundle does not carry. Each equals
-/// the service's constant.
+/// Each value must equal the Chapters & Summary service's constant of the same meaning.
 enum ChaptersPipelineConstants {
     /// Model-facing id counts above this start at the escalated level.
     static let escalationSegmentCount = 1_399
-    /// The level every retry and every long transcript uses.
     static let escalatedThinking = "high"
     static let escalatedCallTimeoutSeconds = 300
     /// Whole model requests before the run fails.
@@ -59,8 +42,7 @@ enum ChaptersPipelineConstants {
 }
 
 extension JSONValue {
-    /// A policy bundle JSON value. Bundle numbers are binary64; the schemas
-    /// a bundle carries hold none.
+    /// Every number becomes a binary64, which is safe because a bundle's schemas hold no numbers.
     public init(_ value: AnalysisPolicyJSON) {
         switch value {
         case .null: self = .null
@@ -75,7 +57,6 @@ extension JSONValue {
 }
 
 extension AnalysisModelEntry {
-    /// The model the ad-analysis service runs, as the baked bundle lists it.
     public static var serviceAdDetection: AnalysisModelEntry {
         AnalysisPolicyBundle.baked.features.adDetection.qualifiedModels.first {
             $0.provider == .google && $0.modelID == "gemini-3.8-flash"
@@ -90,9 +71,7 @@ extension AnalysisModelEntry {
         )
     }
 
-    /// The model the Chapters & Summary service runs. The bundle lists only
-    /// the models qualified for on-device runs, and the service's model is not
-    /// among them, so this is the service's own entry.
+    /// Not looked up: the bundle lists only on-device models, and the service's model is not one.
     public static var serviceChaptersSummary: AnalysisModelEntry {
         AnalysisModelEntry(
             provider: .google,
@@ -107,7 +86,6 @@ extension AnalysisModelEntry {
 }
 
 extension AnalysisPolicy where Settings == AdDetectionPolicy {
-    /// What the ad-analysis service runs: the baked settings and its model.
     public static var service: AdDetectionAnalysisPolicy {
         AnalysisPolicy(
             bundleVersion: AnalysisPolicyBundle.baked.bundleVersion,
@@ -117,8 +95,6 @@ extension AnalysisPolicy where Settings == AdDetectionPolicy {
         )
     }
 
-    /// The same policy with other settings, another model or another
-    /// execution budget.
     public func with(
         settings: AdDetectionPolicy? = nil,
         model: AnalysisModelEntry? = nil,
@@ -135,7 +111,6 @@ extension AnalysisPolicy where Settings == AdDetectionPolicy {
 }
 
 extension AnalysisPolicy where Settings == ChaptersSummaryPolicy {
-    /// What the Chapters & Summary service runs: the baked settings and its model.
     public static var service: ChaptersSummaryAnalysisPolicy {
         AnalysisPolicy(
             bundleVersion: AnalysisPolicyBundle.baked.bundleVersion,

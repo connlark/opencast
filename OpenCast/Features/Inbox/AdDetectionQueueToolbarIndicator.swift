@@ -1,9 +1,5 @@
 import SwiftUI
 
-/// Compact determinate progress indicator for the Inbox toolbar. Visible
-/// whenever the ad-detection queue is non-idle; after a drain finishes it
-/// shows a brief completion state, then hides. State changes use gentle
-/// fades without attention-seeking motion.
 struct AdDetectionQueueToolbarIndicator: View {
     static let accessibilityIdentifier = "Ad Detection Queue Indicator"
 
@@ -37,8 +33,6 @@ struct AdDetectionQueueToolbarIndicator: View {
 
                 do {
                     try await Task.sleep(for: .seconds(4))
-                } catch is CancellationError {
-                    return
                 } catch {
                     return
                 }

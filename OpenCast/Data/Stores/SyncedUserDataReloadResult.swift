@@ -5,11 +5,8 @@ struct SyncedUserDataReloadResult: Equatable, Sendable {
     let activeSubscriptionRecordsChanged: Bool
     let progressRecordsChanged: Bool
 
-    // Progress-only imports count: a genuinely-remote progress change can
-    // introduce duplicates that should repair mid-session rather than on the
-    // next foreground activation. Requires the self-save filter
-    // (SyncedStoreRemoteChangeArbiter) so the app's own periodic progress
-    // flushes never reach this path.
+    // Progress-only imports count, so remote duplicates repair mid-session; this relies on the
+    // self-save filter keeping the app's own progress flushes off this path.
     var shouldProcessImportedSubscriptions: Bool {
         activePodcastIDsChanged || activeSubscriptionRecordsChanged || progressRecordsChanged
     }

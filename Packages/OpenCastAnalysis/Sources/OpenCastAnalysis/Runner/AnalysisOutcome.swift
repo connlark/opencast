@@ -1,25 +1,16 @@
-/// How a run ended.
 public enum AnalysisOutcome: Sendable, Hashable {
     case adDetection(AdAnalysisResponse)
     case chaptersSummary(TranscriptAnalysisResponse)
     case failed(AnalysisFailure)
 }
 
-/// The failure codes a run can end with, named as the analysis services
-/// name them so diagnostics and the app's retry policy read the same.
+/// Raw values must match the analysis services' error codes.
 public enum AnalysisFailureCode: String, Sendable, Hashable, CaseIterable {
-    /// An ad-detection window (or the whole episode) failed validation after
-    /// its one repair.
     case adAnalysisIncomplete = "ad_analysis_incomplete"
-    /// The corrective request could not be bounded.
     case repairFeedbackExceeded = "repair_feedback_exceeded"
-    /// The run budget ran out.
     case analysisDeadlineExhausted = "analysis_deadline_exhausted"
-    /// Every Chapters & Summary attempt broke a hard rule or did not parse.
     case invalidModelOutput = "invalid_model_output"
-    /// The last Chapters & Summary attempt hit the output cap.
     case modelOutputTruncated = "model_output_truncated"
-    /// Too many units even after coalescing.
     case transcriptTooLong = "transcript_too_long"
     case quotaExhausted = "gemini_quota_exhausted"
     case providerRejected = "gemini_http_error"
@@ -45,22 +36,17 @@ public enum AnalysisFailureCode: String, Sendable, Hashable, CaseIterable {
     case nonMonotonicSegments = "non_monotonic_segments"
     case transcriptTextTooLarge = "transcript_text_too_large"
     case estimatedInputTooLarge = "estimated_input_too_large"
-    /// A replay asked for an answer its archive does not hold.
     case replayMissingReply = "replay_missing_reply"
-    /// The caller cancelled the run.
     case cancelled
 }
 
-/// Why a run produced no result. Carries ids and codes only, never
-/// transcript text or provider bodies.
+/// Holds ids and codes only, never transcript text or provider bodies.
 public struct AnalysisFailure: Error, Sendable, Hashable {
     public var feature: AnalysisFeature
     public var code: AnalysisFailureCode
-    /// The HTTP status the service answers this failure with.
     public var status: Int
     /// For rejected Chapters & Summary answers, the comma-joined rule codes.
     public var detail: String?
-    /// For ad detection, the validation issues of the failing scope.
     public var issues: [String]
     /// The failing ad-detection window; `nil` for the whole episode.
     public var windowIndex: Int?
@@ -81,7 +67,6 @@ public struct AnalysisFailure: Error, Sendable, Hashable {
         self.windowIndex = windowIndex
     }
 
-    /// The error body the service returns for this failure.
     public func errorJSON(policyRevision: String? = nil) -> JSONValue {
         switch feature {
         case .adDetection:
@@ -94,9 +79,6 @@ public struct AnalysisFailure: Error, Sendable, Hashable {
     }
 }
 
-/// The classes of ad-detection validation issue, by the prefix the service
-/// gives them (`v3_boundary_receipt_mismatch:12-30` is
-/// ``boundaryReceiptMismatch``).
 public enum AdIssueClass: String, Sendable, Hashable, CaseIterable {
     case malformedResponse = "v3_malformed_response"
     case candidateCount = "v3_candidate_count"

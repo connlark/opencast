@@ -1,8 +1,5 @@
-/// Instruction and prompt text for the Private Cloud Compute transcript
-/// features. Transcript text is always framed as quoted data so an injected
-/// "ignore your instructions" line stays text to analyze. `promptVersion`
-/// keys the recap cache; bump it whenever a recap string here changes.
-/// `askPromptVersion` is recorded in Ask evaluation reports.
+/// Transcript text is always framed as quoted data, so an injected instruction stays text.
+/// `promptVersion` keys the recap cache: bump it whenever a recap string here changes.
 nonisolated enum TranscriptIntelligencePrompts {
     static let promptVersion = 1
     static let askPromptVersion = 1
@@ -47,8 +44,6 @@ nonisolated enum TranscriptIntelligencePrompts {
         "Question: \(question)"
     }
 
-    /// The first prompt of a fresh session in a running conversation: the
-    /// earlier questions and answers, never the passages behind them.
     static func askPrompt(question: String, history: [TranscriptAskExchange]) -> String {
         guard !history.isEmpty else {
             return askPrompt(question: question)

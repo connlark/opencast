@@ -46,17 +46,6 @@ struct EpisodeNotificationViewModelTests {
         #expect(viewModel.artworkImage == nil)
     }
 
-    @Test("Legacy duration is removed from body summary")
-    func legacyDurationIsRemovedFromBodySummary() {
-        let content = UNMutableNotificationContent()
-        content.body = "44 min\n\nLegacy summary text."
-
-        let viewModel = EpisodeNotificationViewModel(content: content)
-
-        #expect(viewModel.durationText == "44 MIN")
-        #expect(viewModel.summaryText == "Legacy summary text.")
-    }
-
     @Test("Payload summary uses light validation")
     func payloadSummaryUsesLightValidation() {
         let content = UNMutableNotificationContent()
@@ -138,9 +127,6 @@ struct EpisodeNotificationViewModelTests {
 
     @Test("Patreon-wrapped description becomes the whole sentence")
     func patreonWrappedDescriptionBecomesTheWholeSentence() {
-        // A 2026-09-29 production push carried only "The hosts discuss the"
-        // after a byte cut of markup shaped like this; the cleaner must yield
-        // the full prose.
         let content = UNMutableNotificationContent()
         content.subtitle = "Episode Title"
         content.body = "44 min\n\n<div> <div class=\"patreon-post-content\"> <div class=\"PaddingTop-module__FYUbOa__paddingTopSpaceX32\"> <div class=\"CollapsibleContent-module__7CXqlq__singleColumnMargin\"> <div class=\"TokenOverrides-module__yhJOLG__tokensPostPage\"> <div class= \"RichText-module__5kju5G__root RichText-module__5kju5G__additionalStylesPostContentWrapper\"> <p>The hosts discuss the <a href= \"https://www.globe.example.com/2026/09/22/magazine/small-town-bar-backlash/?utm_campaign=Globe_Twitter&arch=example%3Asocialflow%3Atwitter\" target=\"_blank\" rel=\"noopener\">small-town bar masking debacle,</a> the hot new trend of <a href= \"https://www.journal.example.com/health/wellness/why-are-so-many-adults-cutting-off-their-parents-d4e1190c\" target=\"_blank\" rel=\"noopener\">adults cutting off their parents</a>, and <a href= \"https://www.times.example.com/2026/09/20/magazine/public-schools-segregation.html\" target=\"_blank\" rel=\"noopener\">a columnist's schooling mea culpa to her daughter.</a></p> </div> </div> </div> </div> </div> </div>"

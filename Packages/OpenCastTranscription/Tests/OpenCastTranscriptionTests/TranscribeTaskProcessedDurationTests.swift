@@ -32,38 +32,17 @@ struct TranscribeTaskProcessedDurationTests {
         )
     }
 
-    @Test("Unclipped runs report the full audio duration")
-    func unclippedRunsReportFullAudioDuration() async throws {
+    @Test(
+        "Processed duration counts only the decoded clip range",
+        arguments: zip([[], [1], [1, 2]] as [[Float]], [3.0, 2.0, 1.0])
+    )
+    func processedDurationCountsOnlyTheDecodedClipRange(clipTimestamps: [Float], expectedSeconds: Double) async throws {
         let result = try await makeTask().run(
             audioArray: [Float](repeating: 0.1, count: 48000),
-            decodeOptions: makeOptions(clipTimestamps: []),
+            decodeOptions: makeOptions(clipTimestamps: clipTimestamps),
             callback: nil
         )
 
-        #expect(result.timings.inputAudioSeconds == 3.0)
+        #expect(result.timings.inputAudioSeconds == expectedSeconds)
     }
-
-    @Test("Start-only clips report the remaining duration")
-    func startOnlyClipsReportRemainingDuration() async throws {
-        let result = try await makeTask().run(
-            audioArray: [Float](repeating: 0.1, count: 48000),
-            decodeOptions: makeOptions(clipTimestamps: [1]),
-            callback: nil
-        )
-
-        #expect(result.timings.inputAudioSeconds == 2.0)
-    }
-
-    @Test("Bounded clip windows report only the decoded range")
-    func boundedClipWindowsReportOnlyDecodedRange() async throws {
-        let result = try await makeTask().run(
-            audioArray: [Float](repeating: 0.1, count: 48000),
-            decodeOptions: makeOptions(clipTimestamps: [1, 2]),
-            callback: nil
-        )
-
-        #expect(result.timings.inputAudioSeconds == 1.0)
-    }
-
 }
-

@@ -1,20 +1,15 @@
 import Foundation
 import OpenCastTranscription
 
-/// Maps pass stages onto a 0...1000 scale. `subunitsPerUnit` refines it
-/// (the background card uses a finer scale so a slow analyzing step moves
-/// on every creep tick); every band edge is the same scale point times it.
+/// A 0...1000 scale, with every point multiplied by `subunitsPerUnit`.
 struct EpisodeAdFreePassProgressMapper: Equatable {
     static let totalUnitCount: Int64 = 1_000
 
     let subunitsPerUnit: Int64
     private(set) var completedUnitCount: Int64 = 0
     private var attemptID: String?
-    /// Where a handover's steps begin: this mapper's position when the
-    /// attempt changed. Its slices share what is left of the analyzing band,
-    /// because a new attempt's steps start over and a mapper that never moves
-    /// back would otherwise stall, and the system expires a task that reports
-    /// no progress. `nil` for a run's first attempt.
+    /// The position when a handover began; its steps share what is left of the band, since a
+    /// mapper that never moves back would stall and the system expires a stalled task.
     private var attemptBase: Int64?
 
     init(subunitsPerUnit: Int64 = 1) {
@@ -41,9 +36,7 @@ struct EpisodeAdFreePassProgressMapper: Equatable {
         return completedUnitCount
     }
 
-    /// Rebases on `position` when `stage` belongs to a new attempt of the
-    /// run. The queue mapper passes its own position, which holds creep this
-    /// mapper never saw.
+    /// `position` may be ahead of this mapper's count, holding creep it never saw.
     mutating func noteAttempt(of stage: EpisodeAdFreePassStage, position: Int64) {
         guard case .analyzing(let steps) = stage, let id = steps?.attemptID else {
             return
@@ -54,7 +47,6 @@ struct EpisodeAdFreePassProgressMapper: Equatable {
         attemptID = id
     }
 
-    /// `creepCeiling` for the current attempt.
     func creepCeiling(for stage: EpisodeAdFreePassStage) -> Int64? {
         Self.creepCeiling(for: stage, subunitsPerUnit: subunitsPerUnit, attemptBase: attemptBase)
     }
@@ -65,8 +57,7 @@ struct EpisodeAdFreePassProgressMapper: Equatable {
         attemptBase = nil
     }
 
-    /// `currentUnits` and the result are on the scale `subunitsPerUnit`
-    /// sets. Holding stages return `currentUnits`.
+    /// `currentUnits` and the result are on the `subunitsPerUnit` scale.
     static func units(
         for stage: EpisodeAdFreePassStage,
         stageElapsed: TimeInterval = 0,
@@ -85,8 +76,6 @@ struct EpisodeAdFreePassProgressMapper: Equatable {
         }
     }
 
-    /// The highest units an analyzing step's creep may reach: one unit (on
-    /// the given scale) short of its slice end. `nil` for any other stage.
     static func creepCeiling(
         for stage: EpisodeAdFreePassStage,
         subunitsPerUnit: Int64 = 1,
@@ -99,8 +88,7 @@ struct EpisodeAdFreePassProgressMapper: Equatable {
         return slice.end.map { max(slice.start, $0 - 1) }
     }
 
-    /// The 0...1000 point of every other stage; `units` maps analyzing and
-    /// the holding stages itself.
+    /// Unscaled 0...1000 points.
     private static func bandUnits(
         for stage: EpisodeAdFreePassStage,
         stageElapsed: TimeInterval
@@ -115,10 +103,8 @@ struct EpisodeAdFreePassProgressMapper: Equatable {
         case .installingSpeechAssets(let fractionCompleted):
             150 + Int64((min(max(fractionCompleted, 0), 1) * 100).rounded(.down))
         case .transcribing(let progress):
-            // Creep through checkpoint droughts (throttled background
-            // transcription can stretch real checkpoints past the ~60 s
-            // stalled-progress window after which the system expires the
-            // task); capped below the analyzing band.
+            // Creeps because throttled transcription can outlast the ~60 s window after which the
+            // system expires a task that reports no progress.
             min(
                 900,
                 250 + Int64(((progress.fractionCompleted ?? 0) * 650).rounded(.down))
@@ -146,13 +132,8 @@ struct EpisodeAdFreePassProgressMapper: Equatable {
     private static let analyzingBandStart: Int64 = 910
     private static let analyzingBandWidth: Int64 = 65
 
-    /// Each step owns an equal slice of the analyzing band: a finished step
-    /// opens the next slice. Within a slice the creep is paced over the
-    /// step's time budget and stops one unit short of the slice end, so it
-    /// cannot run out before the step could have timed out, and the band's
-    /// end waits for the run's last step. A step the run adds later (a
-    /// corrective request) narrows the slices; the mapper's clamp keeps
-    /// units from going back.
+    /// Each step owns an equal slice of the band. The creep is paced over the step's time budget
+    /// and stops one unit short of the slice end, so it cannot run out before the step times out.
     private static func analyzingUnits(
         steps: EpisodeAdFreePassAnalysisSteps?,
         stageElapsed: TimeInterval,

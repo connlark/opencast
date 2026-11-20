@@ -21,8 +21,6 @@ struct AVAssetChapterReaderTests {
         #expect(chapters.isEmpty)
     }
 
-    /// Silent 8 kHz MP3s made with ffmpeg; the chaptered one carries three
-    /// one-second ID3v2.3 `CHAP` frames and a `CTOC`.
     private func fixture(_ name: String) -> URL {
         URL(filePath: #filePath).deletingLastPathComponent().appending(path: "Fixtures/\(name)")
     }

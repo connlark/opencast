@@ -3,7 +3,6 @@ import OpenCastCore
 
 nonisolated struct EpisodeShowNotesContent: Equatable, Sendable {
     let blocks: [AttributedString]
-    /// The episode this was resolved for; nil for `.empty`.
     let episodeID: String?
     /// Private, so the only way to the list is `chapters(for:)`: the content
     /// outlives an episode change until the new one resolves.
@@ -15,8 +14,6 @@ nonisolated struct EpisodeShowNotesContent: Equatable, Sendable {
         blocks.isEmpty
     }
 
-    /// The chapters derived from these notes, and only for the episode they
-    /// were resolved for; another episode gets none.
     func chapters(for episodeID: String) -> [EpisodeChapter] {
         self.episodeID == episodeID ? derivedChapters : []
     }
@@ -40,8 +37,6 @@ nonisolated struct EpisodeShowNotesContent: Equatable, Sendable {
         )
     }
 
-    /// The same derivation off the caller's actor, for callers that need the
-    /// chapters without the rendered notes.
     @concurrent
     static func resolvingChapters(
         summaryHTML: String?,
@@ -51,12 +46,8 @@ nonisolated struct EpisodeShowNotesContent: Equatable, Sendable {
         derivedChapters(summaryHTML: summaryHTML, showNotesHTML: showNotesHTML, duration: duration)
     }
 
-    /// The one place the app decides which text a chapter list is read from,
-    /// so every surface reads the same one: the notes when they hold a list,
-    /// else the summary. A feed can ship its notes as escaped markup that
-    /// hides the list while its summary carries it clean. An episode with no
-    /// `content:encoded` has its summary copied into the notes, so the
-    /// summary is read only when it differs.
+    /// The summary is a fallback because a feed can ship escaped notes that hide a list its
+    /// summary carries clean. With no `content:encoded` the notes are a copy of the summary.
     static func derivedChapters(
         summaryHTML: String?,
         showNotesHTML: String?,

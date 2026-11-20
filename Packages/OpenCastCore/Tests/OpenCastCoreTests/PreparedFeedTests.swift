@@ -607,8 +607,7 @@ struct PreparedFeedTests {
     }
 
     @Test func decodedFileBoundaries() async throws {
-        // Reuse one generated file; comments keep the field/item guards out of
-        // this transfer-envelope test. No large payload is embedded in resources.
+        // XML comments as filler keep the field and item guards out of this transfer-envelope test.
         let prefix = Data("<rss><channel><item><guid>1</guid></item>".utf8)
         let suffix = Data("</channel></rss>".utf8)
         for mib in [8, 12, 64, 128] {

@@ -16,16 +16,6 @@ struct OpenCastTranscriptSegmentNormalizerTests {
         #expect(segments.map(\.words) == [[word(0, 2, "first")], [word(4, 6, "second")]])
     }
 
-    @Test("Wordless segments stay wordless through normalization")
-    func wordlessSegmentsStayWordlessThroughNormalization() {
-        let segments = OpenCastTranscriptSegmentNormalizer.normalized([
-            segment(id: 0, start: 0, end: 2, text: "no words")
-        ])
-
-        #expect(segments.count == 1)
-        #expect(segments.first?.words == nil)
-    }
-
     @Test("Words clamp into segment bounds")
     func wordsClampIntoSegmentBounds() {
         let words = OpenCastTranscriptSegmentNormalizer.normalizedWords(

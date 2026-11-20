@@ -41,9 +41,6 @@ struct ModelStoreLayoutTests {
         }
     }
 
-    /// The configurations `make` built before the layout existed, which
-    /// resolved the App Group through `.automatic`: the group URL is the
-    /// store every launch since f873d317 has opened.
     @Test("The group URLs are where the automatic group container put the stores")
     func groupURLsAreTheAutomaticLocations() {
         let layout = ModelStoreLayout.current()
@@ -64,14 +61,6 @@ struct ModelStoreLayoutTests {
         #expect(Self.path(layout.local.groupURL) == Self.path(local.url))
     }
 
-    /// What the pinned simulator cannot show: a directory created by the
-    /// first computation on a fresh install, because both `Library/Application
-    /// Support` directories already exist there. An empty directory left
-    /// that way would be harmless: the relocation's branches turn on the
-    /// `.store` file's presence, and an empty directory holds no leftovers.
-    /// The inventories are taken right around the call, so the host app's
-    /// own writes elsewhere stay out of the window; the store-name sweep
-    /// skips the app container's `tmp`, where other suites build fixtures.
     @Test("Computing the layout adds no entry to either container's Library or Application Support, and no store file anywhere")
     func computingTheLayoutCreatesNothing() throws {
         let containers = [try #require(Self.groupContainer), Self.appContainer]
@@ -98,9 +87,7 @@ struct ModelStoreLayoutTests {
         return path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
     }
 
-    /// Every entry directly in `Library` and in `Library/Application Support`,
-    /// by path relative to the container. A directory missing before the call
-    /// lists nothing, so its creation shows as a new entry of its parent.
+    // A directory the call creates shows as a new entry of its parent.
     private static func libraryInventory(in container: URL) throws -> Set<String> {
         var inventory: Set<String> = []
         for directory in ["Library", "Library/Application Support"] {
@@ -115,11 +102,11 @@ struct ModelStoreLayoutTests {
         return inventory
     }
 
-    /// Every path under the container with a store's name in it.
     private static func storeNamedEntries(in container: URL) throws -> Set<String> {
         let enumerator = try #require(FileManager.default.enumerator(atPath: container.path(percentEncoded: false)))
         var entries: Set<String> = []
         for case let relativePath as String in enumerator {
+            // Other suites build store fixtures in the app container's tmp.
             if relativePath == "tmp" {
                 enumerator.skipDescendants()
                 continue

@@ -1,7 +1,6 @@
 import Darwin
 import Foundation
 
-/// `FileManager` plus POSIX (`stat`, `rename`).
 nonisolated struct DefaultModelStoreFileOperations: ModelStoreFileOperations {
     init() {}
 

@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// What the Now Playing overlay read from its window on this layout, so a
-/// part of a window-sized surface can place itself from its own allocation.
 nonisolated struct NowPlayingSurface: Equatable {
     let windowSize: CGSize
     let safeAreaInsets: EdgeInsets
@@ -9,7 +7,7 @@ nonisolated struct NowPlayingSurface: Equatable {
     let occlusions: [CGRect]
     let isAccessibilitySize: Bool
 
-    /// The player in `allocation` (the window reader's space).
+    /// `allocation` is in the window reader's space.
     func playerGeometry(allocation: CGRect) -> NowPlayingCardGeometry {
         NowPlayingCardGeometry(
             allocation: allocation,
@@ -21,7 +19,7 @@ nonisolated struct NowPlayingSurface: Equatable {
         )
     }
 
-    /// The secondary pane in `allocation` (the window reader's space).
+    /// `allocation` is in the window reader's space.
     func paneGeometry(allocation: CGRect) -> NowPlayingPaneGeometry {
         NowPlayingPaneGeometry(
             allocation: allocation,

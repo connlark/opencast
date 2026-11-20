@@ -1,8 +1,6 @@
 import SwiftUI
 
-/// One feature's provider row. Every row lays out the same way at a given
-/// text size: the chip trails its title (which wraps) at standard sizes and
-/// sits under it at accessibility sizes, so the two rows never differ.
+/// The layout follows the text size, not the fit, so the two rows never differ.
 struct AnalysisProviderPickerRow<Chip: View>: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 

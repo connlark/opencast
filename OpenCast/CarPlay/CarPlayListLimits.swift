@@ -1,8 +1,6 @@
-/// The per-template ceilings the connected head unit reports. Every list is
-/// sliced to these before it reaches CarPlay, which drops extra items silently.
+/// CarPlay silently drops list items past these ceilings.
 nonisolated struct CarPlayListLimits: Equatable, Sendable {
-    /// The floor CarPlay guarantees for audio apps. Used when the framework
-    /// reports nothing usable, so a list is never rendered unbounded.
+    /// The floor CarPlay guarantees audio apps, for when the framework reports nothing usable.
     static let fallback = CarPlayListLimits(maximumItemCount: 12, maximumSectionCount: 2)
 
     let maximumItemCount: Int
@@ -11,8 +9,6 @@ nonisolated struct CarPlayListLimits: Equatable, Sendable {
     /// stack, so a list pushed from it has no room left to reach a further page.
     let allowsContinuation: Bool
 
-    /// The same ceilings, spending every visible slot on content because a
-    /// "Show More" row would have nowhere to go.
     var withoutContinuation: CarPlayListLimits {
         CarPlayListLimits(
             maximumItemCount: maximumItemCount,

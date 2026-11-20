@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// Shown when a feed's refreshes keep landing on a different host: offers the
-/// migration instead of performing it automatically, since redirects are
-/// routinely CDN noise.
 struct FeedAddressUpdateView: View {
     let suggestedFeedURL: URL
     let onUpdate: () -> Void

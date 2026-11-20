@@ -1,10 +1,8 @@
 import CryptoKit
 import Foundation
 
-/// Verifies the policy bundle's detached Ed25519 signature against a pinned
-/// key. Same envelope and production key as the transcription model
-/// manifest's verifier, copied here so this package does not depend on the
-/// transcription package.
+/// A copy of the transcription model manifest's verifier, same envelope and key, so this package
+/// does not depend on the transcription package.
 public struct AnalysisPolicySignatureVerifier: Sendable, Equatable {
     public static let pinned = AnalysisPolicySignatureVerifier(
         publicKeyHex: "795f50cc77f7e9723687492643cb3a99a1c5b1c4d145ab75ce2576d4d955d028",
@@ -37,16 +35,12 @@ public struct AnalysisPolicySignatureVerifier: Sendable, Equatable {
         }
     }
 
-    /// The bundle a policy signature names: its version and the SHA-256 of its
-    /// exact bytes. The loader fetches that version's immutable copy, so a
-    /// signature is only ever checked against the bytes it was made for.
     public struct Binding: Sendable, Equatable {
         public let bundleVersion: Int
         public let sha256: String
     }
 
-    /// Reads the binding without verifying anything; the validator checks it
-    /// against the bytes and the signature.
+    /// Reads the binding without verifying anything.
     public static func binding(in signatureData: Data) throws(AnalysisPolicyRejection) -> Binding {
         guard let envelope = try? JSONDecoder().decode(Envelope.self, from: signatureData) else {
             throw .signatureInvalid("unreadable signature envelope")

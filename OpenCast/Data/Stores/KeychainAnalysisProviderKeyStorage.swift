@@ -4,33 +4,12 @@ import OpenCastAnalysisProviders
 import Security
 import Synchronization
 
-/// Provider keys as generic-password Keychain items, one credential per
-/// provider in one of two forms: **synced** (`AfterFirstUnlock`,
-/// synchronizable, so iCloud Keychain carries it to the listener's other
-/// devices) or **local** (`AfterFirstUnlockThisDeviceOnly`, never synced,
-/// not even through a backup).
-///
-/// `kSecAttrSynchronizable` is part of an item's primary key, so both forms
-/// can exist at once: a mutation interrupted between its two calls, or a
-/// synced key another device saved while this one keeps a local key. Reads
-/// take the local form when it exists, else the synced one. Every mutation
-/// is at most two steps in a fixed order, a write of one form before a
-/// delete of the other, and every delete names only the form, never the
-/// bytes.
-///
-/// Deleting the synced form deletes it on the listener's other devices too,
-/// so only three things delete it: this device turning sync off for the key
-/// it was using in that form (a switch, or a save with sync off), finishing
-/// such a sync-off whose delete failed, and a Remove the listener confirmed
-/// for the synced copy. A local save on a
-/// device that already keeps a local key leaves another device's synced key
-/// alone.
+/// `kSecAttrSynchronizable` is part of the primary key, so both forms can exist at once. Each
+/// mutation writes one form before it deletes the other. Deleting the synced form deletes it on
+/// every device, so only a sync-off of the key in use or a confirmed Remove may delete it.
 nonisolated struct KeychainAnalysisProviderKeyStorage: AnalysisProviderKeyStoring {
     static let defaultService = "com.connor.opencast.analysis-provider-keys"
 
-    /// Test seam: called before each Security call with the operation and
-    /// the form it names (`true` synced, `false` local); a returned status
-    /// replaces the call, `nil` makes it.
     typealias Fault = @Sendable (AnalysisProviderKeyStoreError.Operation, _ synchronizable: Bool) -> OSStatus?
 
     private enum Form {
@@ -38,11 +17,8 @@ nonisolated struct KeychainAnalysisProviderKeyStorage: AnalysisProviderKeyStorin
         case synced
     }
 
-    /// One process-wide lock around every mutation and every read, so no
-    /// reader in this process sees a half-applied mutation and two mutations
-    /// never interleave. Other processes and iCloud Keychain are not
-    /// excluded: a synced item they replace between this device's read and
-    /// its delete of that form is deleted with it.
+    /// Process-wide, so no reader sees a half-applied mutation. Other processes and iCloud Keychain
+    /// are not excluded: a synced item they replace mid-mutation is deleted with it.
     private static let lock = Mutex(())
 
     private let service: String
@@ -132,9 +108,8 @@ nonisolated struct KeychainAnalysisProviderKeyStorage: AnalysisProviderKeyStorin
 
     // MARK: - Reads
 
-    /// The local form when it exists, else the synced one. Only "not found"
-    /// means absent: an unreadable local item throws rather than falling
-    /// back to a synced key this device did not choose.
+    /// An unreadable local item throws rather than falling back to a synced key this device did
+    /// not choose.
     private func resolved(_ provider: AnalysisProvider) throws(AnalysisProviderKeyStoreError) -> (form: Form, data: Data)? {
         if let local = try read(provider, synchronizable: false) {
             return (.local, local)
@@ -167,10 +142,8 @@ nonisolated struct KeychainAnalysisProviderKeyStorage: AnalysisProviderKeyStorin
 
     // MARK: - Writes
 
-    /// Adds the form; a duplicate is updated in place (data and class). An
-    /// update that finds nothing (the item went away in between) adds once
-    /// more and fails if that does, so the caller never deletes the other
-    /// form without this one in place.
+    /// The second add covers an item deleted between the add and the update. Any failure throws,
+    /// so the caller never deletes the other form without this one in place.
     private func write(_ data: Data, provider: AnalysisProvider, synchronizable: Bool) throws(AnalysisProviderKeyStoreError) {
         let itemQuery = baseQuery(provider, synchronizable: synchronizable)
         let accessibility = Self.accessibility(synchronizable: synchronizable)
@@ -204,7 +177,6 @@ nonisolated struct KeychainAnalysisProviderKeyStorage: AnalysisProviderKeyStorin
         }
     }
 
-    /// Names only service, account and form. Nothing to delete is success.
     private func delete(provider: AnalysisProvider, synchronizable: Bool) throws(AnalysisProviderKeyStoreError) {
         let query = baseQuery(provider, synchronizable: synchronizable)
         let status = perform(.delete, synchronizable: synchronizable) {
@@ -215,8 +187,6 @@ nonisolated struct KeychainAnalysisProviderKeyStorage: AnalysisProviderKeyStorin
         }
     }
 
-    /// A synced item must be readable on the listener's other devices; a
-    /// local one never leaves this device.
     private static func accessibility(synchronizable: Bool) -> CFString {
         synchronizable ? kSecAttrAccessibleAfterFirstUnlock : kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
     }

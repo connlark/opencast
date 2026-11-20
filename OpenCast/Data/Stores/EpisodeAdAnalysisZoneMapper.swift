@@ -3,17 +3,14 @@ import OpenCastPlayback
 
 enum EpisodeAdAnalysisZoneMapper {
     private static let mergeGap: TimeInterval = 1
-    /// Spans at or above this confidence auto-skip; spans below render as
-    /// dimmed display-only zones (visible, never auto-fire).
     static let autoSkipConfidenceFloor = 0.8
 
     static func zoneTiers(
         for document: EpisodeAdAnalysisDocument,
         duration: TimeInterval?
     ) -> EpisodeAdAnalysisZoneTiers {
-        // Tiers merge internally only: a display-only span must never extend
-        // an auto-skip zone (or the floor would silently skip low-confidence
-        // audio), so the split happens before any merging.
+        // Split before merging: a display-only span must never extend an auto-skip zone, or
+        // low-confidence audio would be skipped.
         let autoSkipSpans = document.spans.filter { $0.confidence >= autoSkipConfidenceFloor }
         let displayOnlySpans = document.spans.filter { $0.confidence < autoSkipConfidenceFloor }
         let automatic = mergedZones(for: autoSkipSpans, duration: duration, mergeGap: effectiveMergeGap(document))
@@ -21,8 +18,6 @@ enum EpisodeAdAnalysisZoneMapper {
         return EpisodeAdAnalysisZoneTiers(autoSkip: automatic, displayOnly: subtract(automatic, from: uncertain))
     }
 
-    /// Presentation uses effective intervals after word refinement. Raw spans
-    /// and their potentially different anchors remain in the analysis document.
     private static func subtract(_ automatic: [PlaybackSkipZone], from uncertain: [PlaybackSkipZone]) -> [PlaybackSkipZone] {
         var result: [PlaybackSkipZone] = []
         var usedIDs = Set((automatic + uncertain).map(\.id))

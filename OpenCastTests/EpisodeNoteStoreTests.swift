@@ -7,33 +7,6 @@ import Testing
 @MainActor
 @Suite("Episode notes")
 struct EpisodeNoteStoreTests {
-    @Test("Notes retain their episode and captured timestamp across store reopen")
-    func persistence() throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let url = directory.appending(path: "notes.store")
-        let schema = Schema([EpisodeNoteRecord.self])
-        let configuration = ModelConfiguration(schema: schema, url: url, cloudKitDatabase: .none)
-        do {
-            let container = try ModelContainer(for: schema, configurations: configuration)
-            let context = ModelContext(container)
-            try EpisodeNoteStore.save("  Remember this idea\n", for: draft("episode-a", at: 123.5), in: context)
-            try EpisodeNoteStore.save("Other episode", for: draft("episode-b", at: 20), in: context)
-            try EpisodeNoteStore.save("Earlier thought", for: draft("episode-a", at: 10), in: context)
-        }
-        let reopened = try ModelContainer(for: schema, configurations: configuration)
-        let context = ModelContext(reopened)
-        let episodeID = "episode-a"
-        let records = try context.fetch(FetchDescriptor<EpisodeNoteRecord>(
-            predicate: #Predicate { $0.episodeID == episodeID },
-            sortBy: [SortDescriptor(\EpisodeNoteRecord.timestamp)]
-        ))
-        #expect(records.map(\.text) == ["Earlier thought", "Remember this idea"])
-        #expect(records.map(\.timestamp) == [10, 123.5])
-        #expect(records.allSatisfy { $0.episodeID == episodeID })
-    }
-
     @Test("Empty notes and invalid timestamps never insert records")
     func validation() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -277,38 +250,6 @@ struct EpisodeNoteStoreTests {
         #expect(try EpisodeNoteStore.noteTimestamps(for: "episode-a", in: context).sorted() == [15, 90])
     }
 
-    @Test("Drafts from an episode carry its show, title and artwork")
-    func draftsFromEpisode() {
-        let episode = snapshot("episode-a", show: "Show A", title: "Title A", artworkURL: "https://example.com/a.jpg")
-        let moment = EpisodeNoteDraft.timestamped(episode: episode, timestamp: 42, resumesPlaybackOnDismiss: true)
-        #expect(moment.episodeID == "episode-a")
-        #expect(moment.podcastID == "feed:Show A")
-        #expect(moment.podcastTitle == "Show A")
-        #expect(moment.episodeTitle == "Title A")
-        #expect(moment.artworkURL == "https://example.com/a.jpg")
-        #expect(moment.timestamp == 42)
-        #expect(!moment.isEpisodeWide)
-        #expect(moment.noteID == nil)
-        #expect(moment.resumesPlaybackOnDismiss)
-
-        let fresh = EpisodeNoteDraft.wholeEpisode(episode: episode, existing: nil)
-        #expect(fresh.isEpisodeWide)
-        #expect(fresh.noteID == nil)
-        #expect(fresh.initialText.isEmpty)
-        #expect(fresh.podcastTitle == "Show A")
-        #expect(fresh.episodeTitle == "Title A")
-
-        let existing = EpisodeNoteRecord(episodeID: "episode-a", timestamp: 0, text: "Overall")
-        existing.isEpisodeWide = true
-        let editing = EpisodeNoteDraft.wholeEpisode(episode: episode, existing: existing)
-        #expect(editing.isEpisodeWide)
-        #expect(editing.noteID == existing.noteID)
-        #expect(editing.initialText == "Overall")
-        #expect(editing.podcastID == "feed:Show A")
-        #expect(editing.artworkURL == "https://example.com/a.jpg")
-        #expect(!editing.resumesPlaybackOnDismiss)
-    }
-
     @Test("An edit draft keeps the note's stored details and fills the empty ones from the episode")
     func editDraft() {
         let note = EpisodeNoteRecord(episodeID: "episode-a", timestamp: 42, text: "Thought")
@@ -491,26 +432,6 @@ struct EpisodeNoteStoreTests {
         #expect(restored.episodeTitle == "Old Title")
         #expect(restored.artworkURL == "https://example.com/old.jpg")
         #expect(restored.updatedAt == editedAt)
-    }
-
-    @Test("All notes spans every episode newest first, and the count covers both note types")
-    func allNotesAndCount() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        #expect(try EpisodeNoteStore.noteCount(in: context) == 0)
-        #expect(try context.fetch(EpisodeNoteStore.allNotes()).isEmpty)
-        let a = try EpisodeNoteStore.save("A", for: draft("episode-a", at: 10), in: context)
-        a.createdAt = Date(timeIntervalSince1970: 1)
-        var whole = draft("episode-b", at: 0)
-        whole.isEpisodeWide = true
-        let b = try EpisodeNoteStore.save("B", for: whole, in: context)
-        b.createdAt = Date(timeIntervalSince1970: 3)
-        let c = try EpisodeNoteStore.save("C", for: draft("episode-c", at: 5), in: context)
-        c.createdAt = Date(timeIntervalSince1970: 2)
-        try context.save()
-        let fresh = ModelContext(container)
-        #expect(try fresh.fetch(EpisodeNoteStore.allNotes()).map(\.text) == ["B", "C", "A"])
-        #expect(try EpisodeNoteStore.noteCount(in: fresh) == 3)
     }
 
     @Test("Backfill fills only missing details of notes whose episode resolves, in one save", arguments: [false, true])

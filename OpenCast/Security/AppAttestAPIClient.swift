@@ -66,8 +66,7 @@ nonisolated struct AppAttestAPIClient: Sendable {
         return try await send(path: path, body: body, timeout: timeout, response: response)
     }
 
-    /// The envelope's reply undecoded, whatever its status, with the body
-    /// read capped at `maximumBodyBytes`.
+    /// Every status comes back undecoded; the body read stops at `maximumBodyBytes`.
     func sendAuthenticatedEnvelopeForRawResponse(
         path: String,
         installID: String,

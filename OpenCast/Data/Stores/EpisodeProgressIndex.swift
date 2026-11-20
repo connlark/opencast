@@ -1,17 +1,8 @@
 import Foundation
 import SwiftData
 
-/// LibraryStore's in-memory projection of the synced progress table: the
-/// store-ordered record array plus the latest-record-per-episode map behind
-/// O(1) progress lookups. The fetch descriptor and the in-memory comparator
-/// live together here because `apply` relies on their sort keys agreeing —
-/// an inserted record must land exactly where the next refetch would put it.
-///
-/// The index only projects; every save, self-save credit, and the
-/// observation revision stay with EpisodeProgressWriter. Mutations return whether an
-/// episode's indexed record changed identity — the revision-bump condition;
-/// rows observe their SwiftData model directly, so same-instance refreshes
-/// owe no bump.
+/// Mutations return whether an episode's indexed record changed identity; rows observe their
+/// SwiftData model, so a same-instance refresh owes no revision bump.
 struct EpisodeProgressIndex {
     private(set) var records: [EpisodeProgressRecord] = []
     private var latestByEpisodeID: [String: EpisodeProgressRecord] = [:]
@@ -20,17 +11,12 @@ struct EpisodeProgressIndex {
         latestByEpisodeID[episodeID]
     }
 
-    /// Replaces the full record set (store-ordered, from
-    /// `allRecordsDescriptor`); returns whether any episode's indexed record
-    /// changed identity.
+    /// `newRecords` must be in `allRecordsDescriptor` order.
     mutating func replaceAll(_ newRecords: [EpisodeProgressRecord]) -> Bool {
         records = newRecords
         return rebuildLatestByEpisodeID()
     }
 
-    /// Re-seats one updated or inserted record in store order and indexes it
-    /// as its episode's latest; returns whether the indexed record changed
-    /// identity.
     mutating func apply(_ record: EpisodeProgressRecord) -> Bool {
         if let existingIndex = records.firstIndex(where: { $0 === record }) {
             records.remove(at: existingIndex)
@@ -73,13 +59,10 @@ struct EpisodeProgressIndex {
         return latestRecordByEpisodeID
     }
 
-    /// The episodes whose latest record, by the rule of
-    /// `latestRecordsByEpisodeID`, carries an archive.
     static func archivedEpisodeIDs(in records: [EpisodeProgressRecord]) -> Set<String> {
         archivedEpisodeIDs(amongLatest: latestRecordsByEpisodeID(records))
     }
 
-    /// The archived episodes of a `latestRecordsByEpisodeID` result.
     static func archivedEpisodeIDs(
         amongLatest latestRecordByEpisodeID: [String: EpisodeProgressRecord]
     ) -> Set<String> {
@@ -90,8 +73,6 @@ struct EpisodeProgressIndex {
         return archivedEpisodeIDs
     }
 
-    /// Whether every episode's indexed record is the one `latest` names, and
-    /// no other episode is indexed.
     func indexesLatest(_ latest: [String: EpisodeProgressRecord]) -> Bool {
         latest.count == latestByEpisodeID.count
             && latest.allSatisfy { episodeID, record in latestByEpisodeID[episodeID] === record }
@@ -141,8 +122,8 @@ struct EpisodeProgressIndex {
         records.insert(record, at: lowerBound)
     }
 
-    /// Mirrors `allRecordsDescriptor`'s sort keys, including nil durations
-    /// ordering before non-nil.
+    /// Must sort exactly as `allRecordsDescriptor` does, a nil duration first: `apply` inserts
+    /// a record where the next refetch would put it.
     private static func precedesInStore(
         _ lhs: EpisodeProgressRecord,
         _ rhs: EpisodeProgressRecord
@@ -171,7 +152,6 @@ struct EpisodeProgressIndex {
         }
     }
 
-    /// Deterministic same-instant tie-break for the latest-per-episode index.
     private static func precedesForIndex(
         _ lhs: EpisodeProgressRecord,
         _ rhs: EpisodeProgressRecord
@@ -185,9 +165,8 @@ struct EpisodeProgressIndex {
         if lhs.position != rhs.position {
             return lhs.position < rhs.position
         }
-        // A missing duration counts as zero, as repair reads it. Compared as
-        // optionals, nil and 0 differ while neither orders first, which
-        // would leave the pick to fetch order.
+        // A missing duration counts as zero. Compared as optionals, nil and 0 differ while
+        // neither orders first, which would leave the pick to fetch order.
         let lhsDuration = lhs.duration ?? 0
         let rhsDuration = rhs.duration ?? 0
         if lhsDuration != rhsDuration {
@@ -199,11 +178,8 @@ struct EpisodeProgressIndex {
         return winsFinalTie(lhs, over: rhs)
     }
 
-    /// The last tie-break between two copies of an episode that agree on
-    /// every listening field, shared with duplicate repair so every peer
-    /// keeps the same archive whatever order it fetched the copies in: an
-    /// archived copy beats an unarchived one, then the later archive, then
-    /// the smaller `dedupeUUID`.
+    /// Depends only on synced fields, so every peer keeps the same copy whatever order it
+    /// fetched the copies in.
     static func winsFinalTie(_ lhs: EpisodeProgressRecord, over rhs: EpisodeProgressRecord) -> Bool {
         switch (lhs.archivedAt, rhs.archivedAt) {
         case let (lhsArchivedAt?, rhsArchivedAt?) where lhsArchivedAt != rhsArchivedAt:

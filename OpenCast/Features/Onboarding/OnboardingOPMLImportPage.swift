@@ -49,8 +49,7 @@ struct OnboardingOPMLImportPage: View {
             allowsMultipleSelection: false,
             onCompletion: handleImportResult
         )
-        // No onDisappear cancel: advancing past this page must not abort a
-        // running import mid-batch (the flow still cancels in deinit).
+        // No onDisappear cancel: advancing past this page must not abort an import mid-batch.
     }
 
     private func handleImportResult(_ result: Result<[URL], any Error>) {

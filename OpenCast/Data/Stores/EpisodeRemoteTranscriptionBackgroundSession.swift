@@ -2,15 +2,6 @@ import Foundation
 import Observation
 import OSLog
 
-/// System progress card for Transcribe Remotely: a queue-less
-/// `BGContinuedProcessingTask` session in the shape of
-/// `EpisodeTranscriptGenerationBackgroundSession`, over the same
-/// identifier-parameterized scheduler layer. The job runs on the server, so
-/// the card never asks for GPU and never counts as local lifecycle
-/// protection. Expiration hands the park to its owner, which stops local
-/// polling and keeps the job's reference; this session never makes a server
-/// decision. Phases from any other episode's run are ignored, so a launch
-/// or activation re-attach never drives the card.
 @Observable
 final class EpisodeRemoteTranscriptionBackgroundSession {
     static let identifier = "com.connor.opencast.remote-transcription"
@@ -29,20 +20,12 @@ final class EpisodeRemoteTranscriptionBackgroundSession {
     private static let creepInterval: Duration = .seconds(2)
 
     @ObservationIgnored private let scheduler: any AdFreePassContinuedTaskScheduling
-    @ObservationIgnored private let forceForegroundOnly: @MainActor () -> Bool
-    /// The plain flow's store: the session's trail goes to its sink and
-    /// carries its reference's ids.
     @ObservationIgnored var jobStore: RemoteTranscriptionJobStore?
-    /// Called once per expired run, on the main actor, with its episode. It
-    /// parks the run synchronously and returns the work the system task must
-    /// outlive (the park's run ending and its notification decision), or nil.
-    /// The task completes only after that work ends, within
-    /// `expirationUnwindBudget`, so the paused notification is scheduled
-    /// before iOS suspends the app.
+    /// Must park the run synchronously and return the work the system task must outlive (the
+    /// run's ending and its notification), so the notification is scheduled before iOS suspends.
     @ObservationIgnored var onExpiration: ((_ episodeID: String) -> Task<Void, Never>?)?
-    /// How long an expiration waits for the park to unwind and deliver
-    /// before the task completes anyway. The handler has a few seconds; a
-    /// cancelled poll leg and a notification `add` take milliseconds.
+    /// The expiration handler gets a few seconds; a cancelled poll and a notification `add` take
+    /// milliseconds.
     static let expirationUnwindBudget: Duration = .seconds(3)
 
     private var state: State = .idle
@@ -55,8 +38,6 @@ final class EpisodeRemoteTranscriptionBackgroundSession {
     private var creepBaseUnits: Int64 = 0
     @ObservationIgnored private var creepTask: Task<Void, Never>?
     private var endingPhaseNotedBeforeLaunch: RemoteTranscriptionRequestPhase?
-    /// While an expiration waits for the park to unwind, an ending phase the
-    /// run publishes is held here instead of completing the task early.
     private var isAwaitingExpirationHandling = false
     private var endingPhaseNotedDuringExpiration: RemoteTranscriptionRequestPhase?
     private var hasCompletedTask = false
@@ -67,27 +48,19 @@ final class EpisodeRemoteTranscriptionBackgroundSession {
     @ObservationIgnored private var completionGate = AdFreePassOnceGate()
     @ObservationIgnored private var expirationGate = AdFreePassOnceGate()
 
-    init(
-        scheduler: any AdFreePassContinuedTaskScheduling = BGTaskSchedulerAdFreePassScheduler(),
-        forceForegroundOnly: @escaping @MainActor () -> Bool = EpisodeRemoteTranscriptionBackgroundSession.environmentForcesForegroundOnly
-    ) {
+    init(scheduler: any AdFreePassContinuedTaskScheduling = BGTaskSchedulerAdFreePassScheduler()) {
         self.scheduler = scheduler
-        self.forceForegroundOnly = forceForegroundOnly
     }
 
     deinit {
         creepTask?.cancel()
     }
 
-    /// A launched task is live. Never lifecycle protection: the work it
-    /// tracks runs on the server.
+    /// Not lifecycle protection: the work it tracks runs on the server.
     var isRunning: Bool {
         handle != nil && state == .running
     }
 
-    /// True while a live run holds the card. A run that ended before its
-    /// task launched no longer holds it, so the next tap or another session
-    /// can arm.
     var isArmed: Bool {
         switch state {
         case .running:
@@ -114,7 +87,7 @@ final class EpisodeRemoteTranscriptionBackgroundSession {
         self.episodeID = episodeID
         let subtitle = Self.truncatedTitleText(episodeTitle)
         AdFreePassBackgroundRunLog.record("remote-transcription arm episodeTitle=\(episodeTitle) subtitle=\(subtitle)")
-        guard !forceForegroundOnly() else {
+        guard !Self.environmentForcesForegroundOnly() else {
             degradeToForegroundOnly(reason: "debugForced")
             return
         }
@@ -142,7 +115,6 @@ final class EpisodeRemoteTranscriptionBackgroundSession {
         }
     }
 
-    /// The one-card guard refused this run before it reached the scheduler.
     func recordRefusedArm(episodeID: String) {
         AdFreePassBackgroundRunLog.record("remote-transcription arm skipped reason=anotherCardArmed")
         record(.sessionForegroundOnly, episodeID: episodeID)
@@ -291,12 +263,9 @@ final class EpisodeRemoteTranscriptionBackgroundSession {
         creepTask?.cancel()
         creepTask = nil
         record(.sessionExpired)
-        // The owner parks the run now, synchronously, so a run released from a
-        // wait cannot slip a request in first. Completing the task right away
-        // let iOS suspend the app before the park's run ending reached
-        // delivery: on a locked phone the paused notification was created only
-        // on the next unlock (SANDBOX SE, 2026-10-05). The task now waits for
-        // that work, within its budget.
+        // Park synchronously so a run released from a wait cannot slip a request in first. Completing
+        // the task before the park's ending is delivered lets iOS suspend the app, and on a locked
+        // phone the paused notification then appears only at the next unlock.
         if let pending = onExpiration?(episodeID) {
             isAwaitingExpirationHandling = true
             await awaitWithinBudget(pending)
@@ -453,8 +422,6 @@ final class EpisodeRemoteTranscriptionBackgroundSession {
         knownJobID = reference.jobID ?? knownJobID
     }
 
-    /// The reference's state when the card ends: cleared after a delivered
-    /// or terminal job, parked after an exit that kept it, retained otherwise.
     private func referenceDisposition() -> RemoteJobDiagnosticEvent.Disposition {
         guard let episodeID,
               let reference = jobStore?.existingReference(for: episodeID, purpose: .transcription)
@@ -530,8 +497,6 @@ final class EpisodeRemoteTranscriptionBackgroundSession {
 }
 
 private extension RemoteTranscriptionRequestPhase {
-    /// The local run is over: a terminal outcome, or a park that leaves the
-    /// job running on the server for a later re-attach.
     var endsBackgroundRun: Bool {
         isTerminal || isParked
     }

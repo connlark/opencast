@@ -1,8 +1,6 @@
 import Foundation
 
-/// Outcome of one HEAD probe: the redirect chain followed, the final
-/// response's identity headers, and any transport error. Never carries a
-/// response body — probes must not accidentally download media.
+/// Never carries a response body: a probe must not download media.
 nonisolated struct EpisodeDiagnosticsHeadProbe: Sendable, Equatable {
     var requestedURL: String
     var redirectURLs: [String] = []

@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// A request that produced no proposals, with the next steps that suit it:
-/// the same request again, a simpler answer after a decline, the other mode,
-/// or back to the typed request.
 struct PlaylistOrganizerOutcomeView: View {
     let outcome: PlaylistOrganizerOutcome
     let mode: PlaylistOrganizerMode
@@ -13,9 +10,8 @@ struct PlaylistOrganizerOutcomeView: View {
     let onEditRequest: () -> Void
 
     var body: some View {
-        // A decline stacks up to five actions under its message; at the
-        // largest text sizes that outgrows a sheet, so it scrolls, and it
-        // stays centred whenever it fits.
+        // Up to five actions can outgrow a sheet at the largest text sizes, so this scrolls, and
+        // it stays centred whenever it fits.
         ScrollView {
             content
         }
@@ -72,7 +68,6 @@ struct PlaylistOrganizerOutcomeView: View {
         .accessibilityIdentifier("Playlist Organizer Outcome")
     }
 
-    /// Offered once: a declined simpler answer gets Try Again instead.
     private var offersSimplerRetry: Bool {
         outcome.offersSimplerRetry && answerStyle == .standard
     }

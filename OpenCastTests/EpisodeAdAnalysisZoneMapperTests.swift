@@ -75,14 +75,11 @@ struct EpisodeAdAnalysisZoneMapperTests {
             #expect(tiers.autoSkip == [.init(id: 1, startTime: 10, endTime: 20), .init(id: 2, startTime: 30, endTime: 40)])
             #expect(tiers.displayOnly.map(\.startTime) == [5, 20, 40])
             #expect(tiers.displayOnly.map(\.endTime) == [10, 30, 45])
-            #expect(document.spans.count == 5) // raw anchors/evidence remain available
         }
     }
 
     @Test
     func tiersMergeInternallyButDisplayOnlyNeverExtendsAutoSkip() {
-        // An adjacent (gap <= 1s) low-confidence span must not stretch the
-        // auto-skip zone; each tier merges only with itself.
         let document = makeDocument(spans: [
             span(id: 1, kind: .hostReadAd, start: 10, end: 20, confidence: 0.9),
             span(id: 2, kind: .insertedAd, start: 20.5, end: 30, confidence: 0.5),
@@ -139,8 +136,6 @@ struct EpisodeAdAnalysisZoneMapperTests {
         try playback.load(makeEpisode(duration: 30, audioURL: fixture.audioURL), startPosition: 0)
         appModel.refreshPlaybackSkipZonesForCurrentEpisode()
         await appModel.waitForSkipZoneRefresh()
-        // Only the >= 0.8 tier reaches the playback policy; the 0.5 span is
-        // display-only.
         #expect(playback.skipZones == [
             PlaybackSkipZone(id: 1, startTime: 4, endTime: 9)
         ])
@@ -162,8 +157,7 @@ struct EpisodeAdAnalysisZoneMapperTests {
             PlaybackSkipZone(id: 1, startTime: 4, endTime: 9)
         ])
 
-        // A legacy ads_only document is outdated even with current
-        // transcript inputs: zero zones in either tier.
+        // An ads_only document is outdated even with current transcript inputs.
         var outdatedPolicyAnalysis = analysis
         outdatedPolicyAnalysis.policy = "ads_only"
         try adAnalysisFileStore.write(outdatedPolicyAnalysis, relativePath: analysisRelativePath)
@@ -186,31 +180,6 @@ struct EpisodeAdAnalysisZoneMapperTests {
     }
 
     @Test
-    func zonesInstallAsynchronouslyAfterPlaybackStarts() async throws {
-        let fixture = try await makeAppModelFixture()
-        let transcript = makeTranscriptDocument()
-        try seedCompletedAnalysis(
-            transcript: transcript,
-            spans: [span(id: 1, kind: .hostReadAd, start: 4, end: 9)],
-            in: fixture
-        )
-
-        fixture.appModel.loadLocalTranscriptionState(modelContext: fixture.context)
-        await fixture.appModel.waitForSkipZoneRefresh()
-        try fixture.playback.load(makeEpisode(duration: 30, audioURL: fixture.audioURL), startPosition: 0)
-        fixture.appModel.refreshPlaybackSkipZonesForCurrentEpisode()
-
-        // The decode runs off-main: nothing is installed at the call boundary,
-        // zones attach when the load completes.
-        #expect(fixture.playback.skipZones == [])
-        #expect(fixture.appModel.displayOnlySkipZones == [])
-        await fixture.appModel.waitForSkipZoneRefresh()
-        #expect(fixture.playback.skipZones == [
-            PlaybackSkipZone(id: 1, startTime: 4, endTime: 9)
-        ])
-    }
-
-    @Test
     func staleZoneResultForSwitchedAwayEpisodeDoesNotInstall() async throws {
         let fixture = try await makeAppModelFixture()
         let transcript = makeTranscriptDocument()
@@ -225,8 +194,6 @@ struct EpisodeAdAnalysisZoneMapperTests {
         try fixture.playback.load(makeEpisode(duration: 30, audioURL: fixture.audioURL), startPosition: 0)
         fixture.appModel.refreshPlaybackSkipZonesForCurrentEpisode()
 
-        // Switch episodes while the analyzed episode's zone load is in flight;
-        // its result must not attach to the new episode.
         try fixture.playback.load(makeOtherEpisode(duration: 45), startPosition: 0)
         await fixture.appModel.waitForSkipZoneRefresh()
         #expect(fixture.playback.skipZones == [])

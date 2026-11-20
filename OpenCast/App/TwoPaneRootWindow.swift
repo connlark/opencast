@@ -1,19 +1,16 @@
 import OSLog
 import SwiftUI
 
-/// The window as the two-pane roots read it: the pose and the size from ONE
-/// window-sized reader in the same layout pass, never a column's size, the
-/// Now Playing overlay's geometry, the orientation, the idiom or the screen.
-/// The vertical size class and the region count ride along for the log only.
+/// Pose and size come from one window-sized reader in the same layout pass,
+/// never a column's size, the orientation, the idiom or the screen. The
+/// vertical size class and the regions are for the log only.
 nonisolated struct TwoPaneRootWindow: Equatable, Sendable {
     var pose: WindowPose
     var size: CGSize
     var horizontalSizeClass: UserInterfaceSizeClass?
     var verticalSizeClass: UserInterfaceSizeClass?
-    /// The usable (active) `.division` regions this layout reported.
     var activeRegions: [CGRect]
 
-    /// Before the first layout: no size, no fold.
     static let unmeasured = TwoPaneRootWindow(
         pose: .compact,
         size: .zero,
@@ -52,10 +49,7 @@ nonisolated struct TwoPaneRootWindow: Equatable, Sendable {
     }
 }
 
-/// Reads the window for the two-pane roots. It is a sibling layer of the
-/// tab view, as the Duo probes' overlay readers are, ignoring the safe area
-/// so its proxy is the window; it reports on every change of size, size
-/// class or `.division` region, the first layout included.
+/// Ignores the safe area so its proxy is the window.
 struct TwoPaneRootWindowReader: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -84,15 +78,9 @@ struct TwoPaneRootWindowReader: View {
     }
 }
 
-/// The two-pane roots' trace: every change of the rule's inputs and every
-/// container change, so a fold's single-switch behaviour can be read back
-/// from the log.
 nonisolated enum TwoPaneRootLog {
     private static let logger = Logger(subsystem: "com.connor.opencast", category: "TwoPaneRoot")
 
-    /// Only in a foldable scene (the only scenes the rule can split): a scene
-    /// that never reports a fold (every iPad, every other iPhone) logs
-    /// nothing. The latch's arrival logs the inputs it found.
     static func inputs(_ window: TwoPaneRootWindow, isFoldableScene: Bool, container: TwoPaneRootContainer) {
         guard isFoldableScene else {
             return

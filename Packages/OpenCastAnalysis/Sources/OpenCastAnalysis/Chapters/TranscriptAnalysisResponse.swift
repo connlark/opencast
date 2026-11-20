@@ -1,4 +1,3 @@
-/// A validated chapter, with times taken from the transcript.
 public struct TranscriptAnalysisChapter: Sendable, Hashable {
     public var title: String
     public var startSegmentID: Int64
@@ -42,8 +41,6 @@ public struct TranscriptAnalysisSummary: Sendable, Hashable {
     }
 }
 
-/// A completed Chapters & Summary analysis: the JSON object the service
-/// returns to the app.
 public struct TranscriptAnalysisResponse: Sendable, Hashable {
     public var schemaVersion: UInt16
     public var requestID: String
@@ -72,10 +69,7 @@ public struct TranscriptAnalysisResponse: Sendable, Hashable {
     public var jsonText: String { JSONWriter.string(jsonValue) }
 }
 
-/// The error body the Chapters & Summary service returns: a code and, for
-/// rejected answers, the comma-joined rule codes.
 public struct TranscriptAnalysisErrorResponse: Sendable, Hashable {
-    /// The HTTP status the service answers with.
     public var status: Int
     public var error: String
     public var detail: String?

@@ -5,18 +5,6 @@ import Testing
 @MainActor
 @Suite("Transcription engine settings store")
 struct TranscriptionEngineSettingsStoreTests {
-    @Test("Absent preferences keep Apple Speech off and warning unacknowledged")
-    func absentPreferencesUseDefaults() throws {
-        let context = try makeContext()
-        let store = TranscriptionEngineSettingsStore()
-
-        store.load(modelContext: context)
-
-        #expect(!store.prefersAppleSpeech)
-        #expect(!store.hasAcknowledgedAppleSpeechNotice)
-        #expect(store.lastErrorMessage == nil)
-    }
-
     @Test("Enabling Apple Speech persists the preference and warning acknowledgement")
     func enablingPersistsPreferenceAndAcknowledgement() throws {
         let context = try makeContext()

@@ -2,15 +2,8 @@ import Foundation
 import Observation
 import SwiftData
 
-/// Device-local Inbox list preferences: the episode filter, whether
-/// episodes in Up Next are hidden, whether the Inbox or its archive is
-/// listed, and the Group by Podcast view with its layout. Every load and
-/// save runs in
-/// its own short-lived context, as in
-/// `LibraryDisplaySettingsStore`: a failed save is discarded with that
-/// context instead of lingering as a dirty row, and a preference save never
-/// flushes another context's pending synced edits. Published values change
-/// only after a save succeeds.
+/// Each load and save uses its own short-lived context: a failed save is discarded with it
+/// instead of lingering as a dirty row, and never flushes another context's pending synced edits.
 @Observable
 final class InboxEpisodeListSettingsStore {
     static let filterPreferenceKey = "inbox.filter"
@@ -21,23 +14,14 @@ final class InboxEpisodeListSettingsStore {
 
     private(set) var filter = PodcastEpisodeFilter.all
     private(set) var hidesQueuedEpisodes = false
-    /// Show Archived: on, the Inbox lists only its archived episodes (the
-    /// archive view); off, the default, only the episodes not archived. The
-    /// filter and Hide Up Next apply in both.
     private(set) var showsArchivedEpisodes = false
-    /// Shows the podcasts with matching episodes instead of the episodes.
-    /// A view choice, not a filter: it hides nothing, so it stays out of
-    /// `activeFilterTitles` and survives Show All Episodes.
+    /// A view choice, not a filter: it stays out of `activeFilterTitles` and survives a reset.
     private(set) var groupsByPodcast = false
     private(set) var groupedLayout = LibraryLayoutPreference.automatic
     private(set) var lastErrorMessage: String?
 
     @ObservationIgnored private let save: (ModelContext) throws -> Void
 
-    /// The settings that differ from their defaults, in display order; empty
-    /// while the Inbox lists its default set (every episode not archived).
-    /// The archive view comes first: it names the view, the rest what the
-    /// view hides.
     var activeFilterTitles: [String] {
         var titles: [String] = []
         if showsArchivedEpisodes {
@@ -52,7 +36,6 @@ final class InboxEpisodeListSettingsStore {
         return titles
     }
 
-    /// `save` is the test seam for preference saves.
     init(save: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
         self.save = save
     }
@@ -153,8 +136,7 @@ final class InboxEpisodeListSettingsStore {
         return true
     }
 
-    /// Automatic is the absence of a choice, so selecting it deletes every
-    /// row for the key, as `LibraryDisplaySettingsStore.setLayout` does.
+    /// Automatic is the absence of a choice, so selecting it deletes the key's rows.
     @discardableResult
     func setGroupedLayout(_ layout: LibraryLayoutPreference, modelContext: ModelContext) -> Bool {
         guard groupedLayout != layout else {
@@ -173,10 +155,8 @@ final class InboxEpisodeListSettingsStore {
         return true
     }
 
-    /// Show All Episodes, the filtered-empty action: All Episodes and Up
-    /// Next shown, persisted in one transaction so a failed save cannot
-    /// leave one setting changed. It leaves the view alone: the Inbox stays
-    /// the Inbox and the archive the archive.
+    /// One transaction, so a failed save cannot leave one setting changed. The view choices
+    /// (Show Archived, Group by Podcast) stay as they are.
     @discardableResult
     func resetFilterAndHideUpNext(modelContext: ModelContext) -> Bool {
         guard filter != .all || hidesQueuedEpisodes else {
@@ -207,7 +187,6 @@ final class InboxEpisodeListSettingsStore {
         }
     }
 
-    /// Writes `value` for `key`, or deletes every row for `key` when nil.
     private func persist(
         _ value: String?,
         forKey key: String,

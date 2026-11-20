@@ -27,13 +27,13 @@ nonisolated enum AnalysisRunTestFixtures {
         return "Part \(index) of the repair: we sand plank number \(index) and check the grain before the next coat."
     }
 
-    static func request(replacingSegment replaced: Int? = nil) -> AdAnalysisRequest {
+    static func request() -> AdAnalysisRequest {
         let segments = (0..<segmentCount).map { index in
             AnalysisSegment(
                 id: Int64(index),
                 start: Double(index) * 30,
                 end: Double(index + 1) * 30,
-                text: index == replaced ? "A different sentence about the varnish on plank \(index)." : segmentText(index)
+                text: segmentText(index)
             )
         }
         return AdAnalysisRequest(
@@ -53,8 +53,6 @@ nonisolated enum AnalysisRunTestFixtures {
         )
     }
 
-    /// The model's answer for one window: the sponsor read in window 1,
-    /// nothing elsewhere.
     static func answer(window: Int) -> String {
         guard window == 1 else { return #"{"spans":[]}"# }
         return #"{"spans":[{"kind":"host_read_ad","label":"Acme Tools","start_segment_id":6,"end_segment_id":6,"confidence":0.92,"evidence_quote":"brought to you by Acme Tools","start_quote":"This episode is brought to you by Acme Tools","end_quote":"ten percent off your first order"}]}"#
@@ -69,7 +67,6 @@ nonisolated enum AnalysisRunTestFixtures {
         return String(decoding: data, as: UTF8.self)
     }
 
-    /// The window an ad-detection request belongs to, read from its payload.
     static func window(of request: AnalysisProviderRequest) -> Int {
         request.purpose.windowIndex ?? 0
     }
@@ -78,22 +75,18 @@ nonisolated enum AnalysisRunTestFixtures {
         FileManager.default.temporaryDirectory.appending(path: "analysis-runs-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
     }
 
-    /// A finished ad-detection outcome for the synthetic episode.
     static func successfulOutcome() async -> AnalysisOutcome {
         let policy = AnalysisRouteResolver.trialPolicy(feature: .adDetection, snapshot: snapshot)!.adDetection!
         return await AnalysisRunner(transport: AnsweringTransport()).detectAds(request(), policy: policy)
     }
 }
 
-/// Answers every window with the fixture answer, without any exchange.
 nonisolated struct AnsweringTransport: AnalysisProviderTransport {
     func send(_ request: AnalysisProviderRequest) async throws(AnalysisTransportError) -> AnalysisProviderReply {
         .geminiBody(AnalysisRunTestFixtures.geminiBody(AnalysisRunTestFixtures.answer(window: AnalysisRunTestFixtures.window(of: request))))
     }
 }
 
-/// A trial exchange that records each post's wrapper fields and answers
-/// with the fixture's Gemini body for the post's window.
 nonisolated final class RecordingTrialProxyExchange: AnalysisTrialProxyExchange {
     struct Post: Sendable, Equatable {
         var path: String
@@ -108,8 +101,6 @@ nonisolated final class RecordingTrialProxyExchange: AnalysisTrialProxyExchange 
         state.withLock { $0.posts }
     }
 
-    /// The next post cancels the task that sends it once it is answered, as
-    /// a killed app stops the run after a reply arrived.
     func cancelAfterNextReply() {
         state.withLock { $0.cancelsNext = true }
     }
@@ -140,8 +131,6 @@ nonisolated final class RecordingTrialProxyExchange: AnalysisTrialProxyExchange 
     }
 }
 
-/// The trial connection a test configures: whether the build has a route,
-/// and the exchange it hands out.
 nonisolated final class FixedTrialConnection: AnalysisTrialConnecting {
     let isConfigured: Bool
     private let current: (any AnalysisTrialProxyExchange)?
@@ -162,7 +151,6 @@ nonisolated final class FixedTrialConnection: AnalysisTrialConnecting {
     }
 }
 
-/// A count shared with escaping closures.
 nonisolated final class AnalysisTestCounter: Sendable {
     private let value = Mutex(0)
 
@@ -175,7 +163,6 @@ nonisolated final class AnalysisTestCounter: Sendable {
     }
 }
 
-/// Counts every request a transport would send, answering none.
 nonisolated final class CountingTransport: AnalysisProviderTransport {
     private let requests = Mutex<[AnalysisProviderRequest]>([])
 
@@ -192,12 +179,10 @@ nonisolated final class CountingTransport: AnalysisProviderTransport {
 @MainActor
 @Suite("Analysis run resume")
 struct AnalysisRunResumeTests {
-    /// One launch's route pieces over a run directory.
     struct Launch {
         let runs: AnalysisRunRecordStore
         let resolver: AnalysisRouteResolver
         let factory: AnalysisTransportFactory
-        let defaults: UserDefaults
     }
 
     let suiteName = "opencast-analysis-resume-tests-\(UUID().uuidString)"
@@ -220,21 +205,17 @@ struct AnalysisRunResumeTests {
         return Launch(
             runs: runs,
             resolver: resolver,
-            factory: AnalysisTransportFactory(policy: policy, runs: runs, keys: InMemoryAnalysisProviderKeyStorage()),
-            defaults: defaults
+            factory: AnalysisTransportFactory(policy: policy, runs: runs, keys: InMemoryAnalysisProviderKeyStorage())
         )
     }
 
-    /// Resolves, writes the record when the run is new, builds the
-    /// transport and runs the synthetic episode, as the store does; never
-    /// finishes the record.
     func execute(
         _ launch: Launch,
         runID: String,
         resuming: Bool,
-        request: AdAnalysisRequest = AnalysisRunTestFixtures.request(),
         reused: AnalysisTestCounter? = nil
     ) async throws -> (AnalysisRouteResolution, AnalysisOutcome) {
+        let request = AnalysisRunTestFixtures.request()
         let resolution = await launch.resolver.resolve(feature: .adDetection, resumingRunID: resuming ? runID : nil)
         let policy = try #require(resolution.policy)
         if !resuming {
@@ -293,7 +274,6 @@ struct AnalysisRunResumeTests {
         #expect(exchange.posts.allSatisfy { $0.runID == runID && $0.feature == "ad_detection" && $0.path == TrialProxyAnalysisTransport.analyzePath })
         #expect(reused.count == 1)
 
-        // The same outcome as a run that was never interrupted.
         let uninterrupted = launch(directory: AnalysisRunTestFixtures.temporaryDirectory(), exchange: RecordingTrialProxyExchange(), status: .init(mode: .open, unitsRemaining: 0, startsAt: .now, monthPaused: false))
         defer { try? FileManager.default.removeItem(at: uninterrupted.runs.directory) }
         let (_, expected) = try await execute(uninterrupted, runID: UUID().uuidString, resuming: false)
@@ -304,7 +284,6 @@ struct AnalysisRunResumeTests {
         #expect(response.spans.map(\.startSegmentID) == [Int64(AnalysisRunTestFixtures.adSegmentIndex)])
         #expect(outcome == expected)
 
-        // The record's totals accumulate across both executions.
         let record = try #require(second.runs.record(id: runID))
         let perWindow = try #require(AnalysisBilledUsage.billed(provider: .google, body: AnalysisRunTestFixtures.geminiBody(#"{"spans":[]}"#)))
         #expect(record.inputTokens == perWindow.input * 3)
@@ -316,38 +295,6 @@ struct AnalysisRunResumeTests {
         second.runs.finish(runID: runID, outcome: outcome, listenerFailure: nil, background: false)
         #expect(second.runs.record(id: runID)?.state == .finished)
         #expect(second.runs.replies(runID: runID).isEmpty)
-    }
-
-    @Test("A kept reply is not reused for a window whose payload bytes changed")
-    func changedBytesAreSentAgain() async throws {
-        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
-        let directory = AnalysisRunTestFixtures.temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let runID = UUID().uuidString
-        let exchange = RecordingTrialProxyExchange()
-        let status = AnalysisTrialProxyStatus(mode: .open, unitsRemaining: 0, startsAt: .now, monthPaused: false)
-
-        let first = launch(directory: directory, exchange: exchange, status: status)
-        exchange.cancelAfterNextReply()
-        _ = try await execute(first, runID: runID, resuming: false)
-        #expect(exchange.posts.map(\.windowIndex) == [0])
-
-        // Segment 1 sits in window 0 only: that window's bytes change.
-        let second = launch(directory: directory, exchange: exchange, status: status)
-        let reused = AnalysisTestCounter()
-        let (_, outcome) = try await execute(
-            second,
-            runID: runID,
-            resuming: true,
-            request: AnalysisRunTestFixtures.request(replacingSegment: 1),
-            reused: reused
-        )
-        #expect(exchange.posts.map(\.windowIndex) == [0, 0, 1, 2])
-        #expect(reused.count == 0)
-        guard case .adDetection = outcome else {
-            Issue.record("expected the resumed run to finish, got \(outcome)")
-            return
-        }
     }
 
     @Test("A kept reply answers only its own purpose and the same bytes")

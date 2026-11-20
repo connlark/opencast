@@ -6,7 +6,6 @@ nonisolated struct HelpTopic: Identifiable, Equatable, Sendable, Decodable {
     let symbol: String
     let summary: String
     let updatedAt: Date
-    /// Hides the topic on older builds; never fails the document.
     let minAppBuild: Int?
     let related: [String]
     let identifiedBlocks: [HelpTopicBlock]

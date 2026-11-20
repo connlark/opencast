@@ -1,9 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// The tab accessory's Up Next variant: with nothing loaded and episodes
-/// queued, it names the queue head and starts the queue in place, where the
-/// mini player then takes over.
 struct UpNextAccessoryView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(TabAccessoryGeometryStore.self) private var accessoryStore: TabAccessoryGeometryStore?
@@ -75,8 +72,6 @@ struct UpNextAccessoryView: View {
         tabAccessoryPlacement == .inline
     }
 
-    /// The accessory's own measured geometry, published by the tab root;
-    /// absent outside the tab view.
     private var accessoryGeometry: TabAccessoryGeometry {
         accessoryStore?.geometry ?? .absent
     }

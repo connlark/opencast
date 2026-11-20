@@ -1,8 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// Edit, share and delete for one episode's notes, and the errors they
-/// raise; owned by whichever container lists the notes.
 @Observable
 final class EpisodeNotesActions {
     var editDraft: EpisodeNoteDraft?
@@ -11,7 +9,6 @@ final class EpisodeNotesActions {
     var shareErrorMessage: String?
     var deleteErrorMessage: String?
 
-    /// `episode` is nil once the note's episode no longer resolves.
     func edit(_ note: EpisodeNoteRecord, episode: EpisodeListItemSnapshot?) {
         editDraft = .editing(note, episode: episode)
     }

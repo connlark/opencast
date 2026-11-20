@@ -1,6 +1,3 @@
-/// The parts of a Gemini `generateContent` body the pipelines read, with
-/// the service's tolerance: unknown fields are ignored, absent fields take
-/// their defaults, and present fields must have the right type.
 struct GeminiResponse {
     struct Part {
         var text: String
@@ -16,8 +13,6 @@ struct GeminiResponse {
     var candidates: [Candidate]
     var usage: AnalysisUsage?
 
-    /// - Parameter readsThought: whether parts carry a typed `thought` flag
-    ///   (the ad pipeline reads it; the chapters pipeline ignores the field).
     init(text: String, readsThought: Bool) throws {
         let root = try StrictDecoding.fields(
             try JSONParser.parse(text),
@@ -64,8 +59,6 @@ struct GeminiResponse {
         )
     }
 
-    /// `usageMetadata`, with the total raised to at least the sum of its
-    /// parts for providers that report thinking separately.
     static func usage(_ value: JSONValue) throws(StrictDecodingError) -> AnalysisUsage {
         let names = ["promptTokenCount", "candidatesTokenCount", "thoughtsTokenCount", "totalTokenCount"]
         let fields = try StrictDecoding.fields(value, .init(fields: names, defaulted: Set(names)))
@@ -87,8 +80,7 @@ struct GeminiResponse {
 }
 
 extension AnalysisUsage {
-    /// The total raised to at least the sum of its parts, for providers that
-    /// report thinking separately.
+    /// Some providers leave thinking tokens out of the total, so it is raised to the parts' sum.
     var guardedTotal: AnalysisUsage {
         var usage = self
         usage.totalTokenCount = max(totalTokenCount, Self.saturatingSum(promptTokenCount, candidatesTokenCount, thoughtsTokenCount))

@@ -1,9 +1,7 @@
 import OpenCastAnalysis
 import OpenCastAnalysisProviders
 
-/// Tests a key through the provider's own transport: Gemini `countTokens` on
-/// the bundle's model, OpenAI `GET /models`. The call is an unpaced auxiliary
-/// call; the transport registers the key with the logger itself.
+/// The transport registers the key with the redacting logger itself.
 nonisolated struct AnalysisProviderKeyTester: AnalysisKeyTesting {
     private let client: any AnalysisHTTPClient
     private let logger: RedactingLogger
@@ -16,8 +14,6 @@ nonisolated struct AnalysisProviderKeyTester: AnalysisKeyTesting {
         self.logger = logger
     }
 
-    /// No endpoint or model for the provider is `model_unavailable`; an
-    /// endpoint the transport refuses is `request_rejected`.
     func test(_ key: AnalysisProviderKey, provider: AnalysisProvider, snapshot: AnalysisPolicySnapshot) async -> AnalysisKeyTestResult {
         guard let endpoint = snapshot.bundle.providers[provider],
               let model = snapshot.adDetection(provider: provider)?.model
@@ -34,7 +30,6 @@ nonisolated struct AnalysisProviderKeyTester: AnalysisKeyTesting {
         return await transport.testKey(model: model)
     }
 
-    /// An endpoint the transport refuses says nothing about the tier.
     func checkTier(_ key: AnalysisProviderKey, snapshot: AnalysisPolicySnapshot) async -> AnalysisTierCheckResult {
         guard let endpoint = snapshot.bundle.providers[.google],
               let transport = try? GeminiAnalysisTransport(endpoint: endpoint, key: key, client: client, pacer: nil, logger: logger)

@@ -2,28 +2,18 @@ import Foundation
 import OpenCastTranscription
 
 #if DEBUG
-/// Launch-argument UI fixtures for the remote transcription states
-/// actually has: `-OPENCAST_REMOTE_TRANSCRIPTION_FIXTURE <name>[:<episodeID>]`
-/// drives the observable job store into one state with no server, StoreKit,
-/// or network involved. Combine with `-OPENCAST_REMOTE_TRANSCRIPTION_DEV` so
-/// the gated UI renders. Debug builds only; release compiles none of this.
+/// The gated UI renders only with `-OPENCAST_REMOTE_TRANSCRIPTION_DEV` also passed.
 enum RemoteTranscriptionUIFixture: String, CaseIterable {
     case devBalance = "dev-balance"
     case hashMatchInProgress = "hash-match"
     case transcribing
-    /// Exact-device upload fallback in flight.
     case uploading
     case resultImported = "result-imported"
     case mismatchLocalFallback = "mismatch"
-    /// Server ended the job `failed` mid-transcription with a stable code.
     case serverFailure = "failure"
-    /// Poll timeout / unreachable backend mid-flow.
     case unreachableFailure = "unreachable"
-    /// Polling stopped by expiration while the server keeps working.
     case parked
-    /// Transport gave up after attach; the job is still running remotely.
     case connectionLost = "connection-lost"
-    /// A local request leg gave up on the attached job.
     case localRequestFailed = "local-request-failed"
     case cancelled
 
@@ -45,9 +35,6 @@ enum RemoteTranscriptionUIFixture: String, CaseIterable {
         return (fixture, parts.count > 1 ? parts[1] : defaultEpisodeID)
     }
 
-    /// Mirrors exactly the store transitions the coordinator would make for
-    /// this state; in-progress states park a real task so active-request
-    /// gating and Cancel behave like a live request.
     func apply(to store: RemoteTranscriptionJobStore, episodeID: String) {
         store.updateAccount(
             OpenCastRemoteTranscriptionBootstrapResponse(
@@ -101,6 +88,7 @@ enum RemoteTranscriptionUIFixture: String, CaseIterable {
         }
     }
 
+    /// A real task, so active-request gating and Cancel behave as for a live request.
     private func beginParked(store: RemoteTranscriptionJobStore, episodeID: String) {
         store.begin(episodeID: episodeID, title: "Fixture Episode")
         store.activeTask = Task {

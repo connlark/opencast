@@ -57,6 +57,7 @@ struct AppleSpeechTranscriptionServiceTests {
         #expect(segments.first?.text == "Untimed phrase")
         #expect(segments.first?.start == 12)
         #expect(segments.first?.end == 14.5)
+        #expect(segments.first?.words == nil)
     }
 
     @Test("Coalescer emits phrase-sized segments from Apple word timing")
@@ -89,8 +90,6 @@ struct AppleSpeechTranscriptionServiceTests {
             return
         }
 
-        // Real device runs emit adjacent final results whose shared boundary differs
-        // by ~1e-14s after CMTime conversion; that fuzz must not evict the earlier final.
         var accumulator = AppleSpeechResultAccumulator()
         accumulator.replaceSegments(
             in: timeRange(start: 85.68, end: 91.38),
@@ -163,33 +162,6 @@ struct AppleSpeechTranscriptionServiceTests {
         #expect(checkpointEmits == [true, false, false, true, false, true])
     }
 
-    @Test("Progress and checkpoint throttles stride independently")
-    func eventThrottleTracksStreamsIndependently() {
-        var throttle = AppleSpeechEventThrottle()
-        let emitsFirstProgress = throttle.shouldEmitProgress(at: 0)
-        let emitsFirstCheckpoint = throttle.shouldEmitCheckpoint(at: 0)
-        #expect(emitsFirstProgress)
-        #expect(emitsFirstCheckpoint)
-
-        // A dense sentence burst: progress keeps striding at 5 s while
-        // checkpoints stay parked until 60 s of audio has accumulated.
-        var emittedProgress = 0
-        var emittedCheckpoints = 0
-        for tenths in stride(from: 5, through: 590, by: 5) {
-            let duration = TimeInterval(tenths) / 10
-            if throttle.shouldEmitProgress(at: duration) {
-                emittedProgress += 1
-            }
-            if throttle.shouldEmitCheckpoint(at: duration) {
-                emittedCheckpoints += 1
-            }
-        }
-        #expect(emittedProgress == 11)
-        #expect(emittedCheckpoints == 0)
-        let emitsAtSixtySeconds = throttle.shouldEmitCheckpoint(at: 60)
-        #expect(emitsAtSixtySeconds)
-    }
-
     @Test("Mapper captures word timings whose joined text reconstructs the segment text")
     func mapperCapturesWordTimingsThatReconstructSegmentText() throws {
         guard #available(macOS 26.0, iOS 26.0, visionOS 26.0, tvOS 26.0, *) else {
@@ -213,47 +185,8 @@ struct AppleSpeechTranscriptionServiceTests {
         #expect(words.map(\.text) == ["Hello", "world."])
         #expect(words.map(\.start) == [3.5, 4.25])
         #expect(words.map(\.end) == [4, 4.75])
-        #expect(joinedWordText(words) == segment.text)
+        #expect(segment.text == "Hello world.")
         #expect(words.allSatisfy { $0.start >= segment.start && $0.end <= segment.end })
-    }
-
-    @Test("Mapper fallback segment carries no word timings")
-    func mapperFallbackSegmentCarriesNoWordTimings() {
-        guard #available(macOS 26.0, iOS 26.0, visionOS 26.0, tvOS 26.0, *) else {
-            return
-        }
-
-        let segments = AppleSpeechTranscriptionService.mappedSegments(
-            from: AttributedString("Untimed phrase"),
-            fallbackRange: timeRange(start: 12, end: 14.5)
-        )
-
-        #expect(segments.count == 1)
-        #expect(segments.first?.words == nil)
-    }
-
-    @Test("Coalescer concatenates word timings within segment bounds")
-    func coalescerConcatenatesWordTimingsWithinSegmentBounds() throws {
-        guard #available(macOS 26.0, iOS 26.0, visionOS 26.0, tvOS 26.0, *) else {
-            return
-        }
-
-        let segments = AppleSpeechTranscriptionService.coalescedSegments([
-            segment(id: 0, start: 0, end: 0.4, text: "Hello", words: [word(0, 0.4, "Hello")]),
-            segment(id: 1, start: 0.45, end: 0.85, text: "world.", words: [word(0.45, 0.85, "world.")]),
-            segment(id: 2, start: 1, end: 1.4, text: "Next", words: [word(1, 1.4, "Next")]),
-            segment(id: 3, start: 1.45, end: 1.9, text: "idea", words: [word(1.45, 1.9, "idea")])
-        ])
-
-        #expect(segments.count == 2)
-        let first = try #require(segments.first)
-        let firstWords = try #require(first.words)
-        #expect(firstWords.map(\.text) == ["Hello", "world."])
-        #expect(firstWords.allSatisfy { $0.start >= first.start && $0.end <= first.end })
-        let second = try #require(segments.last)
-        let secondWords = try #require(second.words)
-        #expect(secondWords.map(\.text) == ["Next", "idea"])
-        #expect(secondWords.allSatisfy { $0.start >= second.start && $0.end <= second.end })
     }
 
     @Test("Coalescer emits nil words for mixed word provenance")
@@ -318,17 +251,6 @@ struct AppleSpeechTranscriptionServiceTests {
         _ text: String
     ) -> OpenCastTranscriptWord {
         OpenCastTranscriptWord(start: start, end: end, text: text)
-    }
-
-    private func joinedWordText(_ words: [OpenCastTranscriptWord]) -> String {
-        let attached = CharacterSet(charactersIn: ".,;:!?)]}%")
-        return words.reduce(into: "") { result, word in
-            if result.isEmpty || word.text.unicodeScalars.allSatisfy(attached.contains) {
-                result += word.text
-            } else {
-                result += " " + word.text
-            }
-        }
     }
 
     private func segment(

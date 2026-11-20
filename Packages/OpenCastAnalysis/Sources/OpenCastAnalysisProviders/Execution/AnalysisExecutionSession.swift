@@ -1,38 +1,25 @@
 import Foundation
 import OpenCastAnalysis
 
-/// How a run under an ``AnalysisExecutionSession`` ended.
 public enum AnalysisExecutionResult: Sendable, Hashable {
-    /// The run finished. `background` tells whether a continued-processing
-    /// card held it.
+    /// `background`: a continued-processing card held the run.
     case finished(AnalysisOutcome, background: Bool)
-    /// The system (or the listener, from the card) ended the task and the
-    /// run was cancelled; resume it from its run record.
+    /// The system, or the listener from the card, ended the task and cancelled the run.
     case expired
 }
 
-/// Runs one analysis at a time under its own continued-processing task, so
-/// a run started in the foreground can finish after the app backgrounds.
-/// The card's progress moves on every tick, at most a minute apart, so the
-/// system never sees a stalled task while a long provider call is in
-/// flight. When the app's arbiter refuses the card, or the system refuses
-/// the request, the work runs in the foreground only.
+/// The card's progress moves on every tick, at most a minute apart, so the system never sees
+/// a stalled task while a long provider call is in flight.
 @MainActor
 public final class AnalysisExecutionSession {
     public enum State: Sendable, Hashable {
         case idle
-        /// The request is submitted and the system has not launched it yet.
         case submitted
-        /// The card is up and holds the run.
         case running
-        /// No card: refused by the arbiter, the scheduler or the system.
         case foregroundOnly
     }
 
-    /// The longest pause between progress updates.
     public nonisolated static let maxTickInterval: Duration = .seconds(60)
-    /// The fewest progress units a run's card has; longer runs at shorter
-    /// ticks get more, so every tick can move the card.
     public nonisolated static let minimumUnitCount: Int64 = 1_000
 
     public let identifier: String
@@ -57,11 +44,6 @@ public final class AnalysisExecutionSession {
     private var work: Task<AnalysisOutcome, Never>?
     private var ticker: Task<Void, Never>?
 
-    /// - Parameters:
-    ///   - identifier: The permitted continued-processing identifier.
-    ///   - title: The card's title.
-    ///   - tickInterval: The pause between progress updates, capped at
-    ///     ``maxTickInterval``.
     public init(
         identifier: String,
         title: String,
@@ -78,17 +60,10 @@ public final class AnalysisExecutionSession {
         self.clock = clock
     }
 
-    /// Whether this session holds or has requested the card; the arbiter
-    /// reads it to refuse other sessions.
     public var isArmed: Bool { state == .submitted || state == .running }
 
-    /// Whether a launched card protects work running on this device.
     public var isProtectingBackgroundExecution: Bool { state == .running && handle != nil }
 
-    /// Runs `work` (one analysis run) under the card. `expectedSeconds` is
-    /// the run's budget, which paces the progress creep. Cancelling the
-    /// calling task cancels the work. A session runs one run at a time; a
-    /// second concurrent call runs its work in the foreground only.
     public func run(
         subtitle: String,
         expectedSeconds: Int,
@@ -191,19 +166,14 @@ public final class AnalysisExecutionSession {
         }
     }
 
-    /// Moves the card forward: linearly over the expected run time up to the
-    /// creep ceiling, and by at least one unit every tick until one short of
-    /// the total.
     func tick() {
         guard let handle, state == .running else { return }
         units = scale.units(after: max(clock.now() - startedAt, 0), previous: units)
         handle.progress.completedUnitCount = units
     }
 
-    /// A run's progress units. The total holds at least twenty units per
-    /// tick of the expected run, so the linear creep moves the card on every
-    /// tick (start 1 %, ceiling 90 % at the expected time) and the one-unit
-    /// floor after the ceiling lasts at least twice the expected run again.
+    /// Twenty units per expected tick: the creep moves the card every tick, and the one-unit
+    /// floor past the 90 % ceiling lasts twice the expected run again.
     struct ProgressScale: Equatable {
         let total: Int64
         let start: Int64

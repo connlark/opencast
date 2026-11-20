@@ -6,8 +6,6 @@ struct NowPlayingTransportControls: View {
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    /// `resolvedPlayButtonDiameter(scaled:isAccessibilitySize:)`, computed
-    /// once by the card so the utility circles share it.
     let playButtonDiameter: Double
     let skipBackwardInterval: TimeInterval
     let skipForwardInterval: TimeInterval
@@ -98,8 +96,6 @@ struct NowPlayingTransportControls: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// The scaled play button under its maxima: 96 pt, or 74 pt at
-    /// accessibility sizes, where the transport has to share the card.
     nonisolated static func resolvedPlayButtonDiameter(scaled: Double, isAccessibilitySize: Bool) -> Double {
         scaled.clamped(to: 52...(isAccessibilitySize ? 74 : 96))
     }

@@ -3,11 +3,7 @@ import NaturalLanguage
 import Testing
 @testable import OpenCast
 
-/// Parity with the external evaluation harness on real show metadata: the
-/// app's own line preparation (boilerplate snippets, show-wide title
-/// prefixes) feeds the index, and the rankings and candidate windows must
-/// match what the harness recorded. Every fixture name comes from the
-/// manifest; failures report entry numbers, indices and counts, never titles.
+// The corpus is real show metadata: failure messages carry entry numbers and indices, never titles.
 @Suite("Episode metadata index on the evaluation corpus", .enabled(if: PlaylistEvaluationCorpus.isAvailable))
 struct EpisodeMetadataCorpusTests {
     @Test("Every recorded BM25 ranking matches the index, scores within 1e-9")
@@ -66,10 +62,8 @@ struct EpisodeMetadataCorpusTests {
                 #expect(actual.fillCount == 0, "window entry \(entry)")
                 #expect(actual.rankedPositions == Array(expected.prefix(actual.lexicalCount)), "window entry \(entry)")
             } else {
-                // The lexical block is exact. The fill is compared as a set:
-                // lines with identical vectors tie on similarity, and the last
-                // bit of that product differs between platforms, so their
-                // order is not portable. Lines are sent in index order anyway.
+                // Lines with identical vectors tie on similarity, and the tie order differs
+                // between platforms, so the fill is compared as a set.
                 let lexicalCount = actual.lexicalCount
                 #expect(
                     Array(actual.rankedPositions.prefix(lexicalCount)) == Array(expected.prefix(lexicalCount)),

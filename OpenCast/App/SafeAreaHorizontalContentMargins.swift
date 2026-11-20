@@ -1,12 +1,8 @@
 import SwiftUI
 
-/// A List's regular-width horizontal margin, counted from the safe area's
-/// edge, never the window's. A List's explicit content margins replace its
-/// safe-area-aware layout margins and count from the scroll view's edge (A4,
-/// Open landscape: the Inbox rows ran 52 pt into the rail's 84 pt inset), so
-/// the List's own horizontal safe-area insets are added back. Compact width
-/// keeps the system's margins. A ScrollView's content margins already add to
-/// its safe area and need none of this.
+/// A List's explicit content margins replace its safe-area-aware layout
+/// margins and count from the scroll view's edge, so the List's horizontal
+/// safe-area insets are added back. A ScrollView needs none of this.
 struct SafeAreaHorizontalContentMargins: ViewModifier {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -30,9 +26,8 @@ struct SafeAreaHorizontalContentMargins: ViewModifier {
             .contentMargins(.trailing, margins.trailing, for: .scrollContent)
     }
 
-    /// Nil at compact width: the system's margins. `CGFloat` because a
-    /// content margin takes an optional length.
-    nonisolated static func margins(
+    /// nil keeps the system's margins.
+    private nonisolated static func margins(
         regularMargin: Double,
         isRegularWidth: Bool,
         safeAreaInsets: EdgeInsets

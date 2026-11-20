@@ -45,8 +45,6 @@ nonisolated final class VoiceBoostAudioTap {
         context.reset()
     }
 
-    /// Adaptation control state for handing across tap replacement (the
-    /// track-bound reinstall creates a new tap on the same item).
     func captureContinuationState() -> VoiceBoostContinuationState? {
         context.captureContinuationState()
     }
@@ -65,16 +63,11 @@ public nonisolated struct VoiceBoostAudioTapDiagnosticsSnapshot: Equatable, Send
     public var unprepareCount = 0
     public var processCount = 0
     public var processedFrameCount = 0
-    /// Frames processed while a toggle transition (drain, latency splice,
-    /// or warmup) was blending; also included in `processedFrameCount`.
+    /// Frames blended during a toggle transition; also counted in `processedFrameCount`.
     public var transitionFrameCount = 0
-    /// Untouched frames from the steady-state disabled short-circuit.
     public var disabledBypassedFrameCount = 0
-    /// Untouched frames because the state lock was contended. Normal
-    /// playback records zero; configuration updates may cost single buffers.
+    /// Zero in normal playback; a configuration update may cost single buffers.
     public var contentionBypassedFrameCount = 0
-    /// Untouched frames with no prepared processor or an unprocessable
-    /// format.
     public var unsupportedFormatBypassedFrameCount = 0
     public var sourceErrorCount = 0
     public var unsupportedFormatCount = 0
@@ -93,7 +86,6 @@ public nonisolated struct VoiceBoostAudioTapDiagnosticsSnapshot: Equatable, Send
 
     public init() {}
 
-    /// All untouched frames regardless of reason.
     public var bypassedFrameCount: Int {
         disabledBypassedFrameCount
             + contentionBypassedFrameCount

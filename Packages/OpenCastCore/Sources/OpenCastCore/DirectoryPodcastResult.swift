@@ -1,13 +1,10 @@
 import Foundation
 
-/// A provider-neutral directory search result. `id` is a deterministic
-/// namespaced string (`apple:…` / `podcastindex:…`) so merged and
-/// appended results stay stable across providers.
+/// `id` is namespaced (`apple:…`, `podcastindex:…`) so it stays stable across providers.
 public struct DirectoryPodcastResult: Codable, Hashable, Identifiable, Sendable {
     public var id: String
     public var title: String
     public var artistName: String?
-    /// The display/primary feed URL. Apple's wins on merged results.
     public var feedURL: URL?
     public var artworkURL: URL?
     public var collectionViewURL: URL?
@@ -45,8 +42,6 @@ public struct DirectoryPodcastResult: Codable, Hashable, Identifiable, Sendable 
         self.feedCandidates = feedCandidates
     }
 
-    /// Compatibility initializer for Apple-sourced results, hardcoded
-    /// suggestions, and existing tests: `id` is the Apple collection ID.
     public init(
         id: Int,
         title: String,

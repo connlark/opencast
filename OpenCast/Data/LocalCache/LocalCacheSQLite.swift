@@ -1,9 +1,6 @@
 import Foundation
 import SQLite3
 
-/// Shared raw-SQLite plumbing for the local cache store and the derived
-/// search index: statement preparation, stepping, binding, column reads, and
-/// error mapping over one `LocalLibraryCacheStoreError` shape.
 nonisolated enum LocalCacheSQLite {
     static var transientDestructor: sqlite3_destructor_type {
         unsafeBitCast(-1, to: sqlite3_destructor_type.self)

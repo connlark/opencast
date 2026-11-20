@@ -1,11 +1,6 @@
 import Foundation
 
-/// The bakeoff transcript normalization, shared by the app-side mapper and
-/// tests so the Swift side reproduces the server's normalized transcript
-/// hash bit-for-bit: lowercase, apostrophes removed, digit-grouping commas
-/// collapsed, every other non-`[a-z0-9 ]` character replaced by a space,
-/// whitespace-split. The hash is SHA-256 of the tokens joined with single
-/// spaces.
+/// Must reproduce the server's normalized transcript hash bit for bit.
 public enum OpenCastRemoteTranscriptNormalization {
     public static func normalizedTokens(_ text: String) -> [String] {
         var value = text.lowercased()
@@ -28,10 +23,8 @@ public enum OpenCastRemoteTranscriptNormalization {
     }
 
     private static func collapseDigitGroupingCommas(in text: String) -> String {
-        // Exact mirror of python re.sub(r"(\d),(\d)", r"\1\2", ...):
-        // non-overlapping left-to-right matches of digit-comma-digit, and the
-        // matched trailing digit is consumed, so it cannot anchor the next
-        // match ("1,2,3" becomes "12,3", not "123").
+        // Mirrors Python's re.sub(r"(\d),(\d)", r"\1\2", ...): the matched trailing digit is
+        // consumed and cannot anchor the next match, so "1,2,3" becomes "12,3", not "123".
         let characters = Array(text)
         var result = ""
         result.reserveCapacity(characters.count)

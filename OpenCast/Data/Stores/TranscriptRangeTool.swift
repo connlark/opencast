@@ -1,8 +1,6 @@
 import FoundationModels
 import OpenCastTranscription
 
-/// `transcriptAround`: the segments covering a time range, in order, for
-/// questions that name a moment in the episode or follow up on a citation.
 nonisolated final class TranscriptRangeTool: Tool {
     typealias Arguments = TranscriptRangeToolArguments
 

@@ -1,9 +1,5 @@
 import Foundation
 
-/// Pure progress-domain rules shared by every progress writer: the
-/// completion threshold, the smart-resume rewind, the trivial-progress prune
-/// bounds, and the meaningful-change gates that keep routine writes from
-/// dirtying synced records.
 nonisolated enum EpisodeProgressRules {
     static let completedEpisodeRemainingThreshold: TimeInterval = 60
     static let trivialProgressPrunableMaxPosition: TimeInterval = 60
@@ -19,10 +15,6 @@ nonisolated enum EpisodeProgressRules {
         return duration - clampedPosition < remainingThreshold
     }
 
-    /// Resuming drops the listener mid-word; rewind a little for context,
-    /// more the longer the position has sat. Every resume consumer (play
-    /// path, restore, CarPlay/Siri) inherits this through
-    /// `LibraryStore.resumePosition`.
     static func smartResumePosition(
         position: TimeInterval,
         updatedAt: Date,

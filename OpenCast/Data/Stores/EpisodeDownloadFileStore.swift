@@ -23,11 +23,8 @@ struct EpisodeDownloadFileStore: Sendable {
         "\(Self.directoryName)/\(safeStem(episodeID: episodeID)).\(extensionName)"
     }
 
-    /// The completed file's name. A known audio extension on the enclosure
-    /// URL wins, so mainstream hosts keep today's names. Otherwise the bytes
-    /// decide first, because they are the one signal a fresh download, a
-    /// resume whose 206 omits the headers, and the launch repair all share;
-    /// then the Content-Disposition filename, then an audio Content-Type.
+    /// A known audio extension on the URL wins, so existing names stay. The bytes outrank the
+    /// response headers, which a resume's 206 can omit.
     nonisolated func settledRelativePath(
         episodeID: String,
         sourceAudioURL: URL,
@@ -48,12 +45,8 @@ struct EpisodeDownloadFileStore: Sendable {
         !EpisodeDownloadAudioFormat.isKnownAudioExtension(fileURL(relativePath: relativePath).pathExtension)
     }
 
-    /// A completed file under the episode's stem with a known audio extension
-    /// and exactly the recorded size and hash, for a record whose stored path
-    /// vanished in the launch repair's rename-then-save window. Stems are
-    /// lossy and a stale earlier download can keep the stem, so the size, the
-    /// hash (when the record has one) and the paths other records claim keep
-    /// the probe from adopting bytes that are not the record's.
+    /// Stems are lossy and a stale download can keep one, so size, hash and other records' paths
+    /// keep this from adopting bytes that are not the record's.
     nonisolated func completedSiblingRelativePath(
         episodeID: String,
         expectedSize: Int64,
@@ -242,10 +235,7 @@ struct EpisodeDownloadFileStore: Sendable {
         try removeItemIfPresent(at: downloadsDirectory)
     }
 
-    /// Moves the completed file and paused partial onto the new episode stem
-    /// when an episode's identity migrates; token-suffixed temporaries are
-    /// transient and simply removed. Returns the completed file's new relative
-    /// path, or the stored path unchanged when its file is missing on disk.
+    /// Returns the stored path unchanged when its file is missing.
     nonisolated func migrateFiles(
         fromEpisodeID oldEpisodeID: String,
         to newEpisodeID: String,
@@ -276,11 +266,8 @@ struct EpisodeDownloadFileStore: Sendable {
         return newRelativePath
     }
 
-    /// Deletes downloads-directory files no record claims — strandings from a
-    /// crash window between a file move and its record save. Claims are
-    /// deliberately broad (any record's path or episode stem, in any state);
-    /// over-claiming keeps a file another path deletes later, under-claiming
-    /// would destroy real audio.
+    /// Claims are broad on purpose: over-claiming keeps a file for a later delete, while
+    /// under-claiming would destroy real audio.
     @discardableResult
     nonisolated func removeUnclaimedFiles(
         claimedRelativePaths: [String],

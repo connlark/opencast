@@ -2,11 +2,8 @@ import CryptoKit
 import Foundation
 import OpenCastAnalysis
 
-/// Which request a kept reply answers: the request's purpose and the
-/// SHA-256 of its exact payload, so a reply is reused only for the same
-/// bytes the provider answered.
+/// A reply is reused only for the exact payload bytes the provider answered.
 nonisolated struct AnalysisRunReplyKey: Codable, Sendable, Hashable {
-    /// `ad_window_<n>`, `ad_repair_<n>` or `chapters_<n>`.
     var purpose: String
     var payloadSHA256: String
 
@@ -30,7 +27,6 @@ nonisolated struct AnalysisRunReplyKey: Codable, Sendable, Hashable {
     }
 }
 
-/// A provider reply as a resumed run reads it back.
 nonisolated enum AnalysisRunStoredReply: Codable, Sendable, Hashable {
     case geminiBody(String)
     case answer(texts: [String], finishReason: String?, usage: Usage?)

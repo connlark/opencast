@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// Settings › Storage's route to Download Settings, which lives in the
-/// Downloads tab. It is a button rather than a link because it changes tabs.
+/// A button rather than a link, because Download Settings lives in the Downloads tab.
 struct SettingsStorageDownloadsRow: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.openDownloadSettings) private var openDownloadSettings

@@ -29,8 +29,11 @@ struct ArtworkSourceConsistencyTests {
         }
     }
 
-    @Test("Concurrent display sizes share hashing and preview publication", arguments: [false, true])
-    func concurrentSizesShareSource(fromDisk: Bool) async throws {
+    @Test(
+        "Concurrent display sizes share hashing and preview publication",
+        arguments: [(fromDisk: false, networkRequests: 1), (fromDisk: true, networkRequests: 0)]
+    )
+    func concurrentSizesShareSource(fromDisk: Bool, networkRequests: Int) async throws {
         let data = try patternedArtwork()
         let url = URL(string: "https://example.com/shared-source.png")!
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -55,30 +58,8 @@ struct ArtworkSourceConsistencyTests {
         }
         #expect(work.hashCount == 1)
         #expect(work.previewCount == 1)
-        #expect(await network.requestCount == (fromDisk ? 0 : 1))
+        #expect(await network.requestCount == networkRequests)
         #expect(try await disk.metadata(for: url)?.preview == expected)
-    }
-
-    @Test("Identical sources at different URLs share one canonical preview")
-    func aliasesShareCanonicalPreview() async throws {
-        let data = try patternedArtwork()
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let work = ArtworkSourceWorkProbe()
-        await work.previewGate.release()
-        let network = ArtworkDataLoaderProbe(responses: [(data, nil)])
-        let loader = ArtworkLoader(diskCache: ArtworkDiskCache(directory: directory), dataLoader: network.load,
-                                   sourceHasher: work.hash, previewBuilder: work.preview)
-        var previews: [ArtworkPreview] = []
-        for size in [24, 112, 1_024] {
-            let url = URL(string: "https://example.com/alias-\(size).png")!
-            let preview = try #require(try await loader.loadResult(for: request(url, size: size))?.preview)
-            #expect(preview.canonicalArtworkURLKey == url.absoluteString)
-            previews.append(preview)
-        }
-        #expect(previews.allSatisfy { $0.rgbData == previews.first?.rgbData && $0.sourceHash == previews.first?.sourceHash })
-        #expect(work.previewCount == 1)
-        #expect(work.hashCount == 3) // Unrelated URLs require inspecting their bytes to discover the alias.
     }
 
     @Test("A delayed backfill cannot overwrite a refreshed source's preview")

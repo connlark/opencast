@@ -1,7 +1,5 @@
 import Foundation
 
-/// Seam over `SpeechTranscriber`/`AssetInventory` so the asset store's state
-/// machine is unit-testable without the real system inventory.
 protocol AppleSpeechAssetProviding: Sendable {
     var isTranscriberAvailable: Bool { get }
     var maximumReservedLocales: Int { get }

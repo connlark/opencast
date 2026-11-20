@@ -1,15 +1,5 @@
 import Foundation
 
-/// UI-testing stand-in for the live ad-detection queue so the pipeline card,
-/// the Ad Detection screen, and the Inbox indicator can show a pass mid-flight
-/// without running one.
-///
-/// `OPENCAST_UI_TEST_AD_FREE_PASS_QUEUE_OVERRIDE=<stage>:<activeEpisodeID>[|<pendingEpisodeID>…]`
-/// with `<stage>` one of `downloading`, `transcribing`, `analyzing`, or the
-/// cloud pass's `uploading` (this device's audio, held mid-upload) and
-/// `cloudtranscribing`. The transcribing stage reads
-/// `OPENCAST_UI_TEST_AD_FREE_PASS_QUEUE_OVERRIDE_PROGRESS=<completedSeconds>/<totalSeconds>`;
-/// the uploading stage reads the same key as `<completedParts>/<totalParts>`.
 struct AdFreePassQueueUITestOverride: Equatable {
     static let environmentKey = "OPENCAST_UI_TEST_AD_FREE_PASS_QUEUE_OVERRIDE"
     static let progressEnvironmentKey = "OPENCAST_UI_TEST_AD_FREE_PASS_QUEUE_OVERRIDE_PROGRESS"

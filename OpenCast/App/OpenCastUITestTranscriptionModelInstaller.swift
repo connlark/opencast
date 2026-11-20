@@ -1,11 +1,9 @@
 import Foundation
 import OpenCastTranscription
 
-/// UI-test installer. `install` must durably flip the installed flag: after
-/// the store reports `.installed`, the plan resolver independently re-checks
+/// `install` must durably flip the installed flag: the plan resolver re-checks
 /// `installedSummary(model:version:)`, and a fake that still throws there
-/// sends the request coordinator's resolve/ensure loop into a main-actor
-/// spin that hangs the app.
+/// spins the request coordinator on the main actor and hangs the app.
 final class OpenCastUITestTranscriptionModelInstaller: TranscriptionModelInstalling, @unchecked Sendable {
     private let lock = NSLock()
     private var installed: Bool

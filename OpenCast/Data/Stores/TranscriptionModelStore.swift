@@ -51,7 +51,6 @@ final class TranscriptionModelStore {
         }
     }
 
-    // Test seam — no production callers (dead-code audit Low 40).
     var canStartTranscription: Bool {
         if case .installed = state {
             true
@@ -68,7 +67,6 @@ final class TranscriptionModelStore {
         try await stateChanges.wait(after: sequence)
     }
 
-    // Test seam — no production callers (dead-code audit Low 40).
     func loadLocalStatus() {
         state = localStatus()
     }
@@ -176,11 +174,8 @@ final class TranscriptionModelStore {
         state = localStatus()
     }
 
-    /// Deliberately synchronous and main-actor: the data-nuke ordering
-    /// guarantee beside `resetRuntimeStateAfterDataNuke` depends on the
-    /// removal completing before the nuke proceeds. The catch keeps any
-    /// throw from stranding `.deleting` — the Settings section renders that
-    /// state as a bare spinner with no way out.
+    /// Synchronous on purpose: a data nuke relies on the removal finishing before it proceeds.
+    /// The catch keeps a throw from stranding `.deleting`, which shows a spinner with no way out.
     private func performDeleteInstalledModel() throws {
         state = .deleting
         do {

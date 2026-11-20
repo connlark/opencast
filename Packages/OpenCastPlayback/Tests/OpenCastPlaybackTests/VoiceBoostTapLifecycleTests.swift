@@ -4,9 +4,6 @@ import OpenCastVoiceBoost
 import Testing
 @testable import OpenCastPlayback
 
-/// Lifecycle coverage: adaptation carryover across re-prepare,
-/// the seek re-seed policy, drain interruptions (teardown mid-drain), the
-/// enable-from-never-engaged path, and the split bypass counters.
 struct VoiceBoostTapLifecycleTests {
     private let sampleRate = 48_000.0
     private let blockFrames = 1_024
@@ -28,8 +25,7 @@ struct VoiceBoostTapLifecycleTests {
         return state
     }
 
-    /// Quiet speech-like fixture: converges auto gain well past the +3 dB
-    /// low-confidence cap so cap re-clamps are observable.
+    // Quiet enough to converge well past the +3 dB low-confidence cap, so a re-clamp shows.
     private func convergeGain(
         _ state: inout VoiceBoostAudioTapRuntimeState,
         seconds: Double,
@@ -80,8 +76,7 @@ struct VoiceBoostTapLifecycleTests {
         let restoredGain = state.processor?.metrics.currentAutoGainDB ?? 0
         #expect(abs(restoredGain - convergedGain) < 1e-9)
 
-        // Quiet-intro scenario: two more seconds of quiet audio must not
-        // re-clamp through the low-confidence cap.
+        // More quiet audio must not re-clamp through the low-confidence cap.
         let continuedGain = convergeGain(&state, seconds: 2, sampleRate: 44_100)
         #expect(continuedGain > 4)
         #expect(abs(continuedGain - convergedGain) < 1.5)
@@ -99,8 +94,7 @@ struct VoiceBoostTapLifecycleTests {
         let gainAfterSeek = state.processor?.metrics.currentAutoGainDB ?? 0
         #expect(abs(gainAfterSeek - convergedGain) < 1e-9)
 
-        // Post-seek audio in the same programme: gain must neither step nor
-        // fall back to the cap.
+        // After the seek, gain must neither step nor fall back to the cap.
         let continuedGain = convergeGain(&state, seconds: 2, sampleRate: 48_000)
         #expect(continuedGain > 4)
         #expect(abs(continuedGain - convergedGain) < 1.5)

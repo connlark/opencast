@@ -2,18 +2,9 @@ import Foundation
 import OpenCastAnalysisProviders
 import Synchronization
 
-/// Posts to the trial service with the install's App Attest key for the
-/// service's deployment: each post carries a fresh assertion over
-/// `POST\n<path>\n<sha256 of the payload>`, the key's assertion gate is
-/// held until the whole reply is read, a stale counter is retried once and
-/// an unknown key is registered again once, and the reply is capped. The
-/// deployment's slot holds its own install id and key, registered with
-/// that deployment's `/v1/app-attest/challenge` and `/register`. Every
-/// status comes back as the service sent it; only a post that got no reply
-/// fails. Nothing here logs.
+/// Every status comes back as the service sent it; only a post that got no reply fails. Nothing
+/// here logs.
 nonisolated struct AppAttestTrialProxyExchange: AnalysisTrialProxyExchange {
-    /// One session for every trial exchange: nothing cached, no cookies, no
-    /// stored credentials.
     static let session = URLSessionAnalysisHTTPClient.makeSession()
 
     let baseURL: URL
@@ -68,10 +59,7 @@ nonisolated struct AppAttestTrialProxyExchange: AnalysisTrialProxyExchange {
         )
     }
 
-    /// One post with the credential recovery around it: a rejection a new
-    /// key could clear deletes the key and registers a new one once,
-    /// outside the gate. When recovery does not clear it, the service's
-    /// last rejection goes back as the reply.
+    /// When credential recovery cannot clear a rejection, the last rejection becomes the reply.
     private func exchange(
         path: String,
         payloadText: String,
@@ -105,9 +93,6 @@ nonisolated struct AppAttestTrialProxyExchange: AnalysisTrialProxyExchange {
         }
     }
 
-    /// The deadline is `.timeout`, as is a transport timeout; a body past
-    /// the cap is `.oversizedBody`; every other failure (transport,
-    /// Keychain, DeviceCheck, registration, cancellation) is `.network`.
     static func failure(for error: any Error) -> AnalysisHTTPFailure {
         switch error {
         case let failure as AnalysisHTTPFailure:
@@ -122,7 +107,6 @@ nonisolated struct AppAttestTrialProxyExchange: AnalysisTrialProxyExchange {
     }
 }
 
-/// The latest reply a post's credential recovery saw rejected.
 private nonisolated final class LastRejection: Sendable {
     private let storage = Mutex<AppAttestRawHTTPResponse?>(nil)
 

@@ -20,7 +20,6 @@ struct HelpHubView: View {
 
     private func topicList(_ topics: [HelpTopic], updatedAt: Date) -> some View {
         List {
-            // A "Service Status" section slots in above the topics later.
             Section {
                 ForEach(topics) { topic in
                     HelpTopicRow(topic: topic)

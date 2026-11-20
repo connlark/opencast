@@ -1,22 +1,16 @@
 import Foundation
 
-/// Which playlist rows a set of playlist tombstones shadows. Repair and the
-/// store's listing share it so memory never shows a row the next repair
-/// pass would delete.
 struct PlaylistTombstoneIndex {
     struct ItemKey: Hashable {
         let playlistID: String
         let episodeID: String
     }
 
-    /// Playlists with a whole-playlist tombstone.
     private(set) var deletedPlaylistIDs: Set<String> = []
-    /// The newest item tombstone per pair.
     private(set) var latestItemClears: [ItemKey: Date] = [:]
 
-    /// Malformed tombstones (an empty `playlistID`, or an `episodeID` that is
-    /// the empty string) index nothing: an empty key would otherwise shadow
-    /// every row whose key was never set.
+    /// Malformed tombstones index nothing: an empty key would otherwise shadow every row whose key
+    /// was never set.
     init(_ tombstones: [PlaylistTombstoneRecord]) {
         for tombstone in tombstones where !tombstone.playlistID.isEmpty {
             guard let episodeID = tombstone.episodeID else {

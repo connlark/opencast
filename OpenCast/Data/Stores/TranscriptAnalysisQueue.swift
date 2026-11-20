@@ -1,16 +1,11 @@
 import Foundation
 import SwiftData
 
-/// Chapters & Summary queue coordination: manual generate requests and
-/// resumes of interrupted device runs queue here and drain one at a time
-/// through the single-flight analysis store.
 final class TranscriptAnalysisQueue {
     private let transcriptAnalyses: EpisodeTranscriptAnalysisStore
     private let transcriptions: EpisodeTranscriptionStore
     private let library: LibraryStore
     private let publisherChapters: PublisherChaptersStore
-    /// Set by the app model once it is fully initialized; an episode that no
-    /// longer resolves can never run.
     var resolveEpisode: (String) -> EpisodeListItemSnapshot? = { _ in nil }
     private(set) var pendingEpisodeIDs: [String] = []
     /// Episodes a listener asked for; every other entry is a resume.
@@ -29,28 +24,20 @@ final class TranscriptAnalysisQueue {
         self.publisherChapters = publisherChapters
     }
 
-    /// Explicit episode-detail action for an already-transcribed episode —
-    /// the only way a new analysis starts. Eligibility (current transcript,
-    /// creator-chapters gate) is re-checked before any provider call, and
-    /// ineligible requests skip quietly.
     func generate(episodeID: String, modelContext: ModelContext) {
         manualEpisodeIDs.insert(episodeID)
         enqueue(episodeID: episodeID, atFront: true, modelContext: modelContext)
     }
 
-    /// Resumes device runs that a background card expiry or a relaunch
-    /// interrupted: every `.running` record the store holds without a live
-    /// run re-runs with its run id, so a resumed trial run spends no second
-    /// unit. Launch and every scene activation call this; the queue's dedupe
-    /// and the store's single flight keep one run per episode.
+    /// Safe to call on every activation: the queue's dedupe and the store's single flight keep
+    /// one run per episode.
     func resumeInterruptedRuns(modelContext: ModelContext) {
         for episodeID in transcriptAnalyses.resumableEpisodeIDs {
             enqueue(episodeID: episodeID, modelContext: modelContext)
         }
     }
 
-    /// Stops the pending-analysis queue and waits for the drain to finish,
-    /// so no suspended iteration can dequeue another episode afterwards.
+    /// Awaits the drain so no suspended iteration can dequeue another episode afterwards.
     func cancelPending() async {
         discardQueuedWork()
         guard let drainTask else {
@@ -113,9 +100,7 @@ final class TranscriptAnalysisQueue {
         }
     }
 
-    /// The next entry to run, removed from the queue: a pending resume
-    /// first. While an interrupted run waits for the next activation to
-    /// resume it, every other entry waits too and the drain stops, so at
+    /// Resumes go first, and while one waits for the next activation the drain stops, so at
     /// most one record is ever left `.running` for a relaunch to resume.
     private func nextEpisodeID() -> String? {
         let resumable = transcriptAnalyses.resumableEpisodeIDs
@@ -144,11 +129,8 @@ final class TranscriptAnalysisQueue {
         return true
     }
 
-    /// Every guard exits quietly (fail-open): no chapters, no summary, never
-    /// a user-facing error. Titles must be real (decision H2) — a missing
-    /// episode snapshot skips the run rather than sending nil titles. A
-    /// resume that can no longer run ends its record as interrupted, so the
-    /// episode never keeps a spinner for a run nothing will finish.
+    /// Every guard exits quietly. A resume that can no longer run ends its record as
+    /// interrupted, so the episode never keeps a spinner for a run nothing will finish.
     private func startEligibleAnalysis(
         episodeID: String,
         isManual: Bool,
@@ -168,11 +150,8 @@ final class TranscriptAnalysisQueue {
             return
         }
 
-        // Creator chapters win when they exist (D3): a feed-declared
-        // chapters document suppresses generation for that episode unless
-        // this device read it and found nothing usable. A document never
-        // read, or one that failed, still suppresses: unknown stays
-        // conservative. The check reads the cache only, never the network.
+        // A feed-declared chapters document suppresses generation unless this device read it and
+        // found it empty; one never read, or one that failed, still suppresses.
         if let documentURL = await library.episodeDetail(for: episodeID)?.chaptersURL,
            await !publisherChapters.isDocumentKnownEmpty(episodeID: episodeID, documentURL: documentURL) {
             abandonIfResume(isResume, episodeID: episodeID, modelContext: modelContext)
@@ -190,11 +169,8 @@ final class TranscriptAnalysisQueue {
                 return
             }
         }
-        // The cancellation check closes the nuke race: a drain cancelled
-        // between this method's awaits must never launch the (unstructured,
-        // cancellation-blind) store task. The transcript state is rechecked
-        // for the same reason: a transcript deleted while an await above was
-        // suspended must stop the run here.
+        // Rechecked after the awaits above: a data nuke or a transcript deletion may have landed
+        // meanwhile, and the store task, once launched, ignores cancellation.
         guard transcriptions.record(for: episodeID)?.state == .completed,
               !transcriptAnalyses.hasActiveJob,
               !Task.isCancelled

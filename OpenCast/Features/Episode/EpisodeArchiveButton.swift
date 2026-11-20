@@ -1,11 +1,8 @@
 import SwiftData
 import SwiftUI
 
-/// Archive or Unarchive, whichever the row or menu shows. Each button
-/// performs only the command it names: if the episode's state changes
-/// between drawing and tapping, the tap is a no-op rather than the opposite
-/// command. Neither is ever disabled: archiving the current episode leaves
-/// it playing.
+/// Each button performs only the command it names, never a toggle: if the state changes between
+/// drawing and tapping, the tap is a no-op rather than the opposite command.
 struct EpisodeArchiveButton: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext

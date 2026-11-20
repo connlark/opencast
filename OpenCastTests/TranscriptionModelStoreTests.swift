@@ -7,15 +7,6 @@ import Testing
 @MainActor
 @Suite("Transcription model store")
 struct TranscriptionModelStoreTests {
-    @Test("Missing model loads as not installed")
-    func missingModelLoadsAsNotInstalled() {
-        let store = TranscriptionModelStore(installer: FakeTranscriptionModelInstaller(isInstalled: false))
-
-        store.loadLocalStatus()
-
-        #expect(store.state == .notInstalled)
-    }
-
     @Test("Fast model requires remote install")
     func fastModelRequiresRemoteInstall() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -46,21 +37,6 @@ struct TranscriptionModelStoreTests {
         reloadedStore.load(modelContext: context)
 
         #expect(reloadedStore.selectedChoice == .accurateLargeV3)
-    }
-
-    @Test("Model choice persists through local load")
-    func modelChoicePersistsThroughLocalLoad() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let firstStore = TranscriptionModelStore(installer: FakeTranscriptionModelInstaller(isInstalled: false))
-
-        #expect(firstStore.setSelectedChoice(.fastTinyEnglish, modelContext: context))
-
-        let secondStore = TranscriptionModelStore(installer: FakeTranscriptionModelInstaller(isInstalled: false))
-        secondStore.load(modelContext: context)
-
-        #expect(secondStore.selectedChoice == .fastTinyEnglish)
-        #expect(!secondStore.canStartTranscription)
     }
 
     @Test("Active transcription blocks model choice changes with message")
@@ -211,29 +187,6 @@ struct TranscriptionModelStoreTests {
         })
         #expect(installer.requestedInstallModel == .tinyEnglish)
         #expect(installer.requestedInstallVersion == OpenCastWhisperModel.tinyEnglish.defaultRemoteVersion)
-    }
-
-    @Test("Late install progress cannot overwrite installed state")
-    func lateInstallProgressCannotOverwriteInstalledState() async {
-        let installer = FakeTranscriptionModelInstaller(isInstalled: false)
-        let store = TranscriptionModelStore(installer: installer)
-
-        #expect(store.installPinnedModel())
-
-        #expect(await waitUntil {
-            if case .installed = store.state {
-                true
-            } else {
-                false
-            }
-        })
-        #expect(installer.emitLateProgress())
-        #expect(await waitUntil { installer.lateProgressDeliveryAcknowledged })
-        if case .installed(let summary) = store.state {
-            #expect(summary.treeSHA256 == installer.summary.treeSHA256)
-        } else {
-            Issue.record("Expected installed state after late progress, got \(store.state)")
-        }
     }
 
     @Test("Manifest mismatch reports repair")

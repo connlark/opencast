@@ -1,9 +1,6 @@
 import Observation
 
-/// Per-feed refresh busy flag. Subscription rows observe their own feed's
-/// activity object instead of a store-wide set, so marking one feed busy
-/// invalidates only that feed's rows (the `progressIndexRevision`
-/// granularity precedent in `LibraryStore`).
+/// One object per feed: a store-wide set would invalidate every row when one feed turns busy.
 @Observable
 final class FeedRefreshActivity {
     var isRefreshing = false

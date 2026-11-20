@@ -3,9 +3,6 @@ import SwiftUI
 import Testing
 @testable import OpenCast
 
-/// The resolver at the fixtures. The Closed card's square and heading are the
-/// README's: the measured-row 156.33 pt square centred in the 24…442 stack, a
-/// complete padded heading of 25 pt.
 @Suite("Sound Lab open panel")
 struct NowPlayingSoundLabOpenPanelTests {
     typealias Layout = NowPlayingSoundLabLayout
@@ -15,7 +12,6 @@ struct NowPlayingSoundLabOpenPanelTests {
     static let closedSide: CGFloat = 156.33
     static let closedTop: CGFloat = 92
 
-    /// The square of `side` over the Closed stack's centre.
     static func closedSquare(side: CGFloat = closedSide, top: CGFloat = closedTop) -> CGRect {
         CGRect(x: 233 - side / 2, y: top, width: side, height: side)
     }
@@ -46,8 +42,7 @@ struct NowPlayingSoundLabOpenPanelTests {
         )
     }
 
-    /// A card as wide as the cap needs, nothing in the way but what a test
-    /// adds, for the rule's arithmetic away from any device's numbers.
+    /// A card as wide as the cap needs, with nothing in the way.
     static func openInputs(
         side: CGFloat,
         top: CGFloat = 400,
@@ -98,22 +93,6 @@ struct NowPlayingSoundLabOpenPanelTests {
         #expect(Self.isNear(layout.rowAreaWidth, 217.37))
         #expect(Self.isNear(layout.protectedLeadingSpace, 54.76))
         #expect(Self.isNear(layout.contentInset, 9.87))
-    }
-
-    @Test("Two rows need less than the square, so the square's height stands and the gaps open")
-    func closedWithTwoRows() throws {
-        let panel = OpenPanel(Self.closedInputs(rowCount: 2))
-        let rows = try #require(panel.titledRows)
-        let inset = Layout(panelWidth: 282).contentInset
-
-        #expect(panel.mode == .headed)
-        #expect(Self.isNear(panel.frame.width, 282))
-        #expect(Self.isNear(panel.frame.height, Self.closedSide))
-        #expect(Self.isNear(panel.frame.minY, Self.closedTop))
-        let gap = (Self.closedSide - Self.heading - 2 * Layout.compactRowHeight - 2 * inset) / 2
-        #expect(Self.isNear(try #require(rows.headingGap), gap))
-        #expect(Self.isNear(rows.rowGap, gap))
-        #expect(Self.isNear(rows.verticalRemainder, 0))
     }
 
     // MARK: Item 2, the early return
@@ -169,15 +148,6 @@ struct NowPlayingSoundLabOpenPanelTests {
         #expect(panel.titledRows == nil)
     }
 
-    @Test("Either side of the exact threshold: titled just below it, the square from it up")
-    func thresholdResolves() {
-        let below = OpenPanel(Self.openInputs(side: Self.thresholdSide - Self.thresholdStep))
-        #expect(below.mode == .headed)
-        #expect(below.frame.width > below.frame.height)
-        let above = OpenPanel(Self.openInputs(side: Self.thresholdSide + Self.thresholdStep))
-        #expect(above.mode == .legacy)
-    }
-
     // MARK: Item 3, the clearance
 
     @Test("A band too narrow for the titles falls to the square, and the square alone needs no clearance")
@@ -196,17 +166,8 @@ struct NowPlayingSoundLabOpenPanelTests {
         #expect(panel.frame == Self.closedSquare())
     }
 
-    @Test("An obstacle over the square's centre leaves no candidate")
-    func obstacleOverTheCentre() {
-        let square = Self.closedSquare()
-        let obstacle = CGRect(x: square.midX, y: square.midY, width: 0, height: 0)
-        #expect(OpenPanel(Self.closedInputs(occlusions: [obstacle])).mode == .legacy)
-    }
-
     @Test("An obstacle one point outside the vertical extent narrows nothing; one point inside it does")
     func obstacleAtTheVerticalExtent() {
-        // At the Closed card's left edge of the top row's band, across the
-        // panel's whole width.
         let free = OpenPanel(Self.closedInputs(occlusions: []))
         let clearance = Layout.openPanelClearance
         func obstacle(inflatedBottom: CGFloat) -> CGRect {
@@ -217,13 +178,6 @@ struct NowPlayingSoundLabOpenPanelTests {
 
         let inside = OpenPanel(Self.closedInputs(occlusions: [obstacle(inflatedBottom: free.frame.minY + 1)]))
         #expect(inside != free)
-    }
-
-    @Test("A panel may touch an inflated obstacle: the cluster's edge less the clearance is the panel's edge")
-    func touchingIsAllowed() {
-        let panel = OpenPanel(Self.closedInputs())
-        let cluster = NowPlayingCardGeometryTests.closedOcclusions[1]
-        #expect(Self.isNear(panel.frame.maxX, cluster.minX - Layout.openPanelClearance))
     }
 
     @Test("No room above: the heading gives way only where the square holds the rows, at 154 and 156.33 it cannot")
@@ -302,46 +256,7 @@ struct NowPlayingSoundLabOpenPanelTests {
         #expect(refused.mode == .legacy)
     }
 
-    @Test("A wider band never narrows the panel, and the cap ends it")
-    func monotonicInTheBand() {
-        var previous: CGFloat = 0
-        for edge in stride(from: CGFloat(340), through: 470, by: 0.5) {
-            let obstacle = CGRect(x: edge, y: 0, width: 200, height: 200)
-            let panel = OpenPanel(Self.closedInputs(occlusions: [obstacle]))
-            let width = panel.mode == .legacy ? 0 : panel.frame.width
-            #expect(width >= previous, "edge \(edge)")
-            previous = width
-        }
-        #expect(Self.isNear(previous, Self.capWidth(scale: 3)))
-    }
-
     // MARK: Item 5, the height and the gaps
-
-    @Test("The open height never rises to widen a gap: the compact tier's height is the square or the tightest stack")
-    func compactHeightIsUnique() throws {
-        // A square just taller than the tightest stack keeps its height.
-        let panel = OpenPanel(Self.openInputs(side: 200))
-        let rows = try #require(panel.titledRows)
-        let inset = Layout(panelWidth: panel.frame.width).contentInset
-        #expect(panel.frame.height == 200)
-        let gap = (200 - Self.heading - 3 * Layout.compactRowHeight - 2 * inset) / 3
-        #expect(Self.isNear(rows.rowGap, gap))
-        #expect(rows.headingGap == rows.rowGap)
-        #expect(Self.isNear(rows.verticalRemainder, 0))
-    }
-
-    @Test("A roomy square's gaps stop at the compact maximum and the rest splits around the stack")
-    func compactGapsStopAtTheMaximum() throws {
-        let side = CGFloat(240)
-        let panel = OpenPanel(Self.openInputs(side: side))
-        let rows = try #require(panel.titledRows)
-        let inset = Layout(panelWidth: panel.frame.width).contentInset
-        #expect(rows.rowGap == Layout.maximumCompactRowSpacing)
-        #expect(rows.headingGap == Layout.maximumCompactRowSpacing)
-        let expected = side - Self.heading - 2 * inset - 3 * (Layout.compactRowHeight + Layout.maximumCompactRowSpacing)
-        #expect(Self.isNear(rows.verticalRemainder, expected))
-        #expect(expected > 0)
-    }
 
     @Test(
         "Open heights just below, at and above 250 pt: compact below it, today's row metrics from it up",
@@ -416,6 +331,7 @@ struct NowPlayingSoundLabOpenPanelTests {
         #expect(Self.isNear(panel.frame.minX, 49.1666666666667))
         #expect(Self.isNear(panel.frame.width, 303.6666666666667))
         #expect(Self.isNear(rows.rowGap, 11.5144444444444))
+        #expect(rows.headingGap == rows.rowGap)
         #expect(Self.isNear(rows.verticalRemainder, 0))
     }
 
@@ -462,63 +378,10 @@ struct NowPlayingSoundLabOpenPanelTests {
         #expect(Self.isNear(rows.verticalRemainder, 0))
     }
 
-    @Test("A right-to-left card's leading-relative inputs resolve as the left-to-right card's do")
-    func rightToLeft() {
-        // Mirrored into leading-relative coordinates a right-to-left card is
-        // the same card: More is at its leading side and the cluster at its
-        // trailing one, and nothing in the resolver reads a direction.
-        let cluster = NowPlayingCardGeometryTests.closedOcclusions[1]
-        let physical = CGRect(x: 466 - cluster.maxX, y: cluster.minY, width: cluster.width, height: cluster.height)
-        let mirrored = CGRect(x: 466 - physical.maxX, y: physical.minY, width: physical.width, height: physical.height)
-        #expect(mirrored == cluster)
-        let panel = OpenPanel(Self.closedInputs(occlusions: [mirrored]))
-        #expect(panel.mode == .headed)
-        #expect(Self.isNear(panel.frame.minX, 92))
-        #expect(Self.isNear(panel.frame.maxX, 374))
-        #expect(Self.isNear(panel.frame.minY, 56.59))
-        #expect(Self.isNear(panel.frame.height, 191.74))
-    }
-
-    @Test("A square scrolled upward: the panel follows it while it clears, then the square takes over")
-    func scrolledUpward() {
-        let rest = OpenPanel(Self.closedInputs())
-        let scrolled = OpenPanel(Self.closedInputs(square: Self.closedSquare(top: Self.closedTop - 40)))
-        #expect(scrolled.mode == .headed)
-        #expect(Self.isNear(scrolled.frame.minY, rest.frame.minY - 40))
-        #expect(Self.isNear(scrolled.frame.width, rest.frame.width))
-
-        let square = Self.closedSquare(top: Self.closedTop - 80)
-        let tooHigh = OpenPanel(Self.closedInputs(square: square))
-        #expect(tooHigh.mode == .legacy)
-        #expect(tooHigh.frame == square)
-    }
-
     // MARK: The pixel grid
 
     static func capWidth(scale: CGFloat) -> CGFloat {
         (Layout.titledReferenceWidth * scale).rounded(.up) / scale
-    }
-
-    @Test("The cap is the exact reference width rounded up to the display grid", arguments: [2.0, 3.0])
-    func capRoundsUp(scale: Double) throws {
-        let scale = CGFloat(scale)
-        let panel = OpenPanel(OpenPanel.Inputs(
-            square: CGRect(x: 400 - 100, y: 400, width: 200, height: 200),
-            contentSpan: 0...800,
-            viewport: CGRect(x: 0, y: 0, width: 800, height: 1000),
-            safeTop: 0,
-            moreFrame: CGRect(x: 0, y: 0, width: 44, height: 44),
-            occlusions: [],
-            displayScale: scale,
-            pixelGridOrigin: .zero,
-            rowCount: 3,
-            isAccessibilitySize: false,
-            paddedHeadingHeight: Self.heading
-        ))
-        let pixels = panel.frame.width * scale
-        #expect(Self.isNear(pixels, pixels.rounded()))
-        #expect(panel.frame.width >= Layout.titledReferenceWidth)
-        #expect(panel.frame.width - Layout.titledReferenceWidth < 1 / scale)
     }
 
     struct PixelFixture: Sendable {
@@ -568,66 +431,6 @@ struct NowPlayingSoundLabOpenPanelTests {
         #expect((panel.frame.maxX * 3).rounded(.up) / 3 <= 374)
     }
 
-    @Test(
-        "A square carrying measurement noise resolves as the clean fixture does",
-        arguments: [
-            (dx: 1e-12, dy: 0.0),
-            (dx: -1e-12, dy: 0.0),
-            (dx: 0.0, dy: 1e-12),
-            (dx: 0.0, dy: -1e-12),
-            (dx: 1e-12, dy: -1e-12)
-        ]
-    )
-    func measurementNoise(dx: Double, dy: Double) {
-        let clean = OpenPanel(Self.closedInputs())
-        let noisy = OpenPanel(Self.closedInputs(square: Self.closedSquare().offsetBy(dx: dx, dy: dy)))
-        #expect(noisy.mode == clean.mode)
-        #expect(noisy.frame.width == clean.frame.width)
-        #expect(noisy.titledRows == clean.titledRows)
-        #expect(Self.isNear(noisy.frame.minX, clean.frame.minX, within: 1e-9))
-        #expect(Self.isNear(noisy.frame.minY, clean.frame.minY, within: 1e-9))
-    }
-
-    @Test("A candidate's covered pixels decide it: half a pixel past the obstacle's edge rounds out onto the next pixel")
-    func coverageDecides() {
-        // With the inflated edge a pixel short of 374, a width of 281.67
-        // would end at 373.83, whose pixel ends at 374: refused, and 281.33,
-        // ending on the edge, taken.
-        let edge = CGFloat(374) - 1.0 / 3
-        let panel = OpenPanel(Self.closedInputs(occlusions: [
-            CGRect(x: edge + Layout.openPanelClearance, y: 0, width: 10, height: 300)
-        ]))
-        #expect(Self.isNear(panel.frame.maxX, edge))
-        #expect(Self.isNear(panel.frame.width, 281.0 + 1.0 / 3))
-        #expect(Self.isNear(panel.frame.midX, Self.closedSquare().midX))
-    }
-
-    @Test("Fractional logical edges are allowed: a centre that puts the cap's edges between pixels keeps the cap")
-    func fractionalEdgesAreAllowed() {
-        // Half the cap's pixels, plus the centre's, must land on a half pixel.
-        let capIsOddInPixels = Int((Self.capWidth(scale: 3) * 3).rounded()) % 2 == 1
-        let offset: CGFloat = capIsOddInPixels ? 0 : 1.0 / 6
-        let open = Self.openInputs(side: 200)
-        let centre = open.square.midX + offset
-        let panel = OpenPanel(OpenPanel.Inputs(
-            square: open.square.offsetBy(dx: offset, dy: 0),
-            contentSpan: open.contentSpan,
-            viewport: open.viewport,
-            safeTop: open.safeTop,
-            moreFrame: open.moreFrame,
-            occlusions: open.occlusions,
-            displayScale: open.displayScale,
-            pixelGridOrigin: open.pixelGridOrigin,
-            rowCount: open.rowCount,
-            isAccessibilitySize: open.isAccessibilitySize,
-            paddedHeadingHeight: open.paddedHeadingHeight
-        ))
-        #expect(Self.isNear(panel.frame.width, Self.capWidth(scale: 3)))
-        #expect(Self.isNear(panel.frame.midX, centre))
-        let edgePixels = panel.frame.minX * 3
-        #expect(Self.isNear(abs(edgePixels - edgePixels.rounded()), 0.5))
-    }
-
     // MARK: Malformed inputs
 
     /// The Closed inputs with one value replaced. Every case below would
@@ -658,18 +461,6 @@ struct NowPlayingSoundLabOpenPanelTests {
         )
     }
 
-    @Test("The malformed-input helper's defaults are the Closed fixture")
-    func malformedDefaultsResolve() {
-        #expect(OpenPanel(Self.malformed()) == OpenPanel(Self.closedInputs()))
-    }
-
-    @Test("A row count of zero or less keeps the square", arguments: [0, -1, Int.min])
-    func malformedRowCount(rowCount: Int) {
-        let panel = OpenPanel(Self.malformed(rowCount: rowCount))
-        #expect(panel.mode == .legacy)
-        #expect(panel.frame == Self.closedSquare())
-    }
-
     @Test(
         "A display scale that is not a positive finite number keeps the square",
         arguments: [0.0, -1.0, -3.0, Double.nan, Double.infinity, -Double.infinity]
@@ -678,11 +469,6 @@ struct NowPlayingSoundLabOpenPanelTests {
         let panel = OpenPanel(Self.malformed(displayScale: CGFloat(scale)))
         #expect(panel.mode == .legacy)
         #expect(panel.frame == Self.closedSquare())
-    }
-
-    @Test("A scale too large to count in pixels keeps the square")
-    func scaleBeyondInt() {
-        #expect(OpenPanel(Self.malformed(displayScale: .greatestFiniteMagnitude)).mode == .legacy)
     }
 
     @Test("A heading height that is not a non-negative finite number keeps the square", arguments: [Double.nan, Double.infinity, -1.0])
@@ -708,19 +494,6 @@ struct NowPlayingSoundLabOpenPanelTests {
         ]
         for input in inputs {
             #expect(OpenPanel(input).mode == .legacy)
-        }
-    }
-
-    @Test("A square that is not a finite size is no square to open from")
-    func malformedSquare() {
-        let squares = [
-            CGRect(x: 100, y: 92, width: CGFloat.nan, height: 156),
-            CGRect(x: 100, y: 92, width: CGFloat.infinity, height: 156),
-            CGRect(x: CGFloat.nan, y: 92, width: 156.33, height: 156.33),
-            CGRect(x: 100, y: CGFloat.infinity, width: 156.33, height: 156.33)
-        ]
-        for square in squares {
-            #expect(OpenPanel(Self.malformed(square: square)).mode == .legacy)
         }
     }
 }

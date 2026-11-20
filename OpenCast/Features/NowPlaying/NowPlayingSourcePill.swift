@@ -1,12 +1,7 @@
 import SwiftUI
 
-/// The glass capsule at the bottom of the Now Playing card naming the playlist
-/// playback came from. The capsule stays footnote-sized; the 44 pt frame
-/// around it is the tap target.
 struct NowPlayingSourcePill: View {
     static let height: CGFloat = 44
-    /// Spare room the card needs below the utility row to show the pill: its
-    /// frame plus a gap that keeps it clear of the controls.
     static let minimumSpareHeight: CGFloat = height + 16
 
     let name: String

@@ -2,12 +2,8 @@ import CryptoKit
 import Foundation
 import Testing
 
-/// `Corpus/PROVENANCE.md` against the files it describes: each file has exactly one row, and the row's byte count and
-/// SHA-256 are those of the file in the bundle. A corpus file is the server's bytes, so any edit to one fails here,
-/// including an edit that keeps its length.
 @Suite("Corpus provenance")
 struct CorpusProvenanceTests {
-    /// Each `Corpus/` directory and its files' extension; PROVENANCE.md names the directory in its table's heading.
     static let directories = [("feeds", "xml"), ("chapters", "json")]
 
     @Test("Every corpus file has exactly one provenance row", arguments: directories)
@@ -44,7 +40,6 @@ struct CorpusProvenanceTests {
         }
     }
 
-    /// The size check misses an edit that keeps a file's length; the digest covers every byte.
     @Test("Every provenance row's SHA-256 cell is the digest of its file's bytes in the bundle", arguments: directories)
     func digestsMatchFiles(directory: String, fileExtension: String) throws {
         let rows = try Self.rows(for: directory)
@@ -58,7 +53,6 @@ struct CorpusProvenanceTests {
         }
     }
 
-    /// The File, Bytes and SHA-256 cells of each row in the table under the heading that names `directory`.
     private static func rows(for directory: String) throws -> [(file: String, bytes: String, sha256: String)] {
         let url = try #require(Bundle.module.url(forResource: "PROVENANCE", withExtension: "md", subdirectory: "Corpus"))
         let lines = try String(contentsOf: url, encoding: .utf8).split(separator: "\n", omittingEmptySubsequences: false)
@@ -79,7 +73,6 @@ struct CorpusProvenanceTests {
         }
     }
 
-    /// A Markdown table row's cells, split at every pipe not escaped as `\|`.
     private static func cells(_ row: Substring) -> [String] {
         var cells = [""]
         var previous: Character?

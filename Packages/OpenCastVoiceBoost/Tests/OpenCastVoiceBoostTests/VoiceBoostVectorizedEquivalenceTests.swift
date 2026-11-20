@@ -2,20 +2,6 @@ import Foundation
 import Testing
 @testable import OpenCastVoiceBoost
 
-/// The vectorized planar engine against the retained scalar
-/// reference (the oracle), and the interleaved wrapper against the planar
-/// entry point. The oracle is the pre-vectorization implementation compiled
-/// permanently behind `setScalarReferenceProcessing(true)`.
-///
-/// Null bounds and their provenance:
-/// - limiterOnly below the ceiling is bit-identical by construction (unity
-///   gains multiply bit-exactly and delay rings store byte copies).
-/// - Configurations without compression are bounded by float32 drift in the
-///   EQ cascade and auto-gain multiply (<= 1e-5 on +/-1-scale samples).
-/// - Configurations with compression additionally carry the sanctioned
-///   control-rate gain quantization (32-frame ticks, linearly interpolated,
-///   <= 0.7 ms against 10/250 ms ballistics); the measured end-to-end bound
-///   is recorded per test below.
 struct VoiceBoostVectorizedEquivalenceTests {
     private func processedPair(
         fixture: [Float],
@@ -133,6 +119,7 @@ struct VoiceBoostVectorizedEquivalenceTests {
             channelCount: 2,
             configuration: VoiceBoostPreset.limiterOnly.configuration
         )
+        // Unity gains multiply bit-exactly and the delay rings copy bytes.
         #expect(VoiceBoostFixtureGenerator.maximumDelta(pair.oracle, pair.vectorized) == 0)
     }
 
@@ -159,8 +146,6 @@ struct VoiceBoostVectorizedEquivalenceTests {
         #expect(pair.oracleProcessor.metrics.safetyClampCount == 0)
     }
 
-    /// Pure signal-path null: adaptive gain off pins the control loop, so
-    /// the only differences are the vectorized stages themselves.
     @Test(arguments: [1, 2])
     func fixedGainEqualizedChainMatchesOracle(channelCount: Int) {
         let sampleRate = 48_000.0
@@ -180,14 +165,11 @@ struct VoiceBoostVectorizedEquivalenceTests {
             configuration: configuration
         )
         let delta = VoiceBoostFixtureGenerator.maximumDelta(pair.oracle, pair.vectorized)
+        // Adaptive gain off pins the control loop: what is left is float32 drift
+        // in the EQ cascade and gain multiply.
         #expect(delta <= 1e-5, "fixed-gain EQ null \(delta)")
     }
 
-    /// With the control loop live, last-bit metering drift can shift *when*
-    /// a deadband-gated gain step fires by one 100 ms hop; the engines then
-    /// track the same trajectory offset by a hop for ~a slew step. The
-    /// bound covers that transient timing skew, not signal-path precision
-    /// (see fixedGainEqualizedChainMatchesOracle for the tight bound).
     @Test(arguments: [1, 2])
     func noCompressionChainMatchesOracle(channelCount: Int) {
         let sampleRate = 48_000.0
@@ -206,6 +188,8 @@ struct VoiceBoostVectorizedEquivalenceTests {
             configuration: configuration
         )
         let delta = VoiceBoostFixtureGenerator.maximumDelta(pair.oracle, pair.vectorized)
+        // Last-bit metering drift can shift a deadband-gated gain step by one
+        // 100 ms hop; the bound covers that skew, not signal-path precision.
         #expect(delta <= 2e-3, "no-compression null \(delta)")
         #expect(
             abs(pair.oracleProcessor.metrics.currentAutoGainDB - pair.vectorizedProcessor.metrics.currentAutoGainDB) <= 1e-3
@@ -284,5 +268,6 @@ struct VoiceBoostVectorizedEquivalenceTests {
         )
         #expect(VoiceBoostFixtureGenerator.maxAbs(pair.vectorized) == 0)
         #expect(VoiceBoostFixtureGenerator.maxAbs(pair.oracle) == 0)
+        #expect(pair.vectorizedProcessor.metrics.estimatedInputLUFS == nil)
     }
 }

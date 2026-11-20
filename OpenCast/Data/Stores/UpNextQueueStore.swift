@@ -89,9 +89,8 @@ final class UpNextQueueStore {
         enqueue([episode], atFront: false, source: source, evicting: [], modelContext: modelContext)
     }
 
-    /// Inserts the whole batch at the front in array order, so `episodes[0]`
-    /// becomes the new head, and deletes the `evicting` rows in the same
-    /// save. A failure leaves the queue untouched, evicted rows included.
+    /// `episodes[0]` becomes the new head. Evictions share the save, so a failure leaves the
+    /// queue untouched.
     @discardableResult
     func enqueueNext(
         _ episodes: [EpisodeListItemSnapshot],
@@ -102,9 +101,7 @@ final class UpNextQueueStore {
         enqueue(episodes, atFront: true, source: source, evicting: evicting, modelContext: modelContext)
     }
 
-    /// Appends the whole batch in array order and deletes the `evicting`
-    /// rows in the same save. A failure leaves the queue untouched, evicted
-    /// rows included.
+    /// Evictions share the save, so a failure leaves the queue untouched.
     @discardableResult
     func enqueueLast(
         _ episodes: [EpisodeListItemSnapshot],
@@ -299,11 +296,9 @@ final class UpNextQueueStore {
         return lastErrorMessage
     }
 
-    /// Already-queued episodes move into the batch's slot and take its
-    /// source; a repeat inside the batch keeps its first occurrence. The
-    /// batch's sequences continue from its neighbour, so untouched rows keep
-    /// their stored order without a rewrite. Evicted rows only make room for
-    /// the batch, so an empty batch evicts nothing.
+    /// Batch sequences continue from the neighbouring row, so untouched rows keep their stored
+    /// order without a rewrite. Evictions only make room for the batch, so an empty batch evicts
+    /// nothing.
     private func enqueue(
         _ episodes: [EpisodeListItemSnapshot],
         atFront: Bool,

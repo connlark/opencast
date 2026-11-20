@@ -1,8 +1,7 @@
 import Foundation
 import OpenCastTranscription
 
-/// Transport-level failure from the remote transcription worker. `code`
-/// carries the server's stable machine error string when one was decodable.
+/// `code` is the server's stable machine error string when one was decodable.
 nonisolated struct RemoteTranscriptionHTTPError: Error, Equatable {
     let statusCode: Int
     let code: String

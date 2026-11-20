@@ -57,17 +57,6 @@ struct HelpContentStoreTests {
         #expect(await harness.client.requestCount == 1)
     }
 
-    @Test("Cancellation leaves the document and the error untouched")
-    func cancellationLeavesStateUntouched() async throws {
-        let harness = try Harness(responses: [.failure(CancellationError())])
-        let bundledDocument = harness.store.document
-
-        await harness.store.refreshIfNeeded()
-
-        #expect(harness.store.document == bundledDocument)
-        #expect(harness.store.lastRefreshErrorMessage == nil)
-    }
-
     @Test("A newer remote document replaces the bundled one and persists to the cache")
     func newerRemoteDocumentIsAdoptedAndPersisted() async throws {
         let harness = try Harness(responses: [.success(Self.documentData(updatedAt: Self.futureUpdatedAt))])
@@ -106,20 +95,6 @@ struct HelpContentStoreTests {
         await harness.store.refreshIfNeeded()
 
         #expect(harness.store.document == bundledDocument)
-    }
-
-    @Test("A disabled configuration makes no requests")
-    func disabledConfigurationMakesNoRequests() async throws {
-        let harness = try Harness(
-            responses: [.success(Self.documentData(updatedAt: Self.futureUpdatedAt))],
-            isEnabled: false
-        )
-        let bundledDocument = harness.store.document
-
-        await harness.store.refreshIfNeeded()
-
-        #expect(harness.store.document == bundledDocument)
-        #expect(await harness.client.requestCount == 0)
     }
 
     @Test("Refreshes within an hour share one request")

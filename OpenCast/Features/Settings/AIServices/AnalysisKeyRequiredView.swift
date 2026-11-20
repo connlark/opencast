@@ -1,8 +1,6 @@
 import OpenCastAnalysis
 import SwiftUI
 
-/// Asks for a key when an analysis cannot run on the free analyses, worded by
-/// the trial's state, with a route to Settings › AI Services.
 struct AnalysisKeyRequiredView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss

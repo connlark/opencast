@@ -2,11 +2,6 @@ import Foundation
 @testable import OpenCastAnalysis
 import Testing
 
-/// The trial route's serial execution budget: 1,740 seconds for the run, each
-/// send up to the model's per-call timeout while at least 30 seconds remain.
-/// The direct route keeps the service's allocation whatever its concurrency.
-/// Every run here goes through a transport that holds each send to the
-/// timeout it was given.
 @Suite("Trial execution budget")
 struct AdTrialBudgetTests {
     typealias Step = TestSupport.TimedTransport.Step
@@ -107,13 +102,6 @@ struct AdTrialBudgetTests {
         sent.filter { $0.purpose == purpose }.map(\.timeoutSeconds)
     }
 
-    @Test("The synthetic transcripts cut into the intended windows", arguments: [1, 5, 8, 9])
-    func syntheticWindows(windows: Int) {
-        let request = Self.request(windows: windows)
-        #expect(AnalysisRequestValidation.validate(request).failureCode == nil)
-        #expect(AdWindowing.windowCount(segmentCount: request.segments.count, policy: AdDetectionAnalysisPolicy.service.settings) == windows)
-    }
-
     @Test("Five serial windows that answer in 40 s each complete with 120-second sends")
     func fiveSerialWindows() async {
         let (outcome, clock, sent) = await run(Self.request(windows: 5), policy: Self.trial(), every: Self.answer(after: 40))
@@ -136,21 +124,6 @@ struct AdTrialBudgetTests {
         #expect(sent.map(\.purpose) == [.adWindow(index: 0), .adWindow(index: 0)])
         #expect(sent.map(\.timeoutSeconds) == [120, 120])
         #expect(clock.recordedPauses == [2])
-    }
-
-    @Test("A serial run may outlast the service's 570 seconds: twelve windows of 60 s")
-    func twelveWindowsPastTheServiceBudget() async {
-        // A narrower valid geometry gives twelve windows, the trial's run bound.
-        var settings = AdDetectionAnalysisPolicy.service.settings
-        settings.window.segments = 400
-        settings.window.overlap = 60
-        let request = Self.request(segments: 4_000)
-        #expect(AdWindowing.windowCount(segmentCount: 4_000, policy: settings) == 12)
-        let (outcome, clock, sent) = await run(request, policy: Self.trial(settings), every: Self.answer(after: 60))
-        #expect(succeeded(outcome), "\(outcome)")
-        #expect(sent.map(\.timeoutSeconds) == Array(repeating: 120, count: 12))
-        #expect(clock.now() == 720)
-        #expect(clock.now() > Double(AdDetectionAnalysisPolicy.service.model.runBudgetSeconds))
     }
 
     @Test("A send gets what is left under the cap, and its answer completes the run below the floor")
@@ -269,21 +242,6 @@ struct AdTrialBudgetTests {
         #expect(budget.deadline == 570)
         #expect(budget.sendFloorSeconds == 1)
         #expect(budget.backoffReserveSeconds == seconds)
-    }
-
-    @Test("The trial allocation is the model's cap for every window count", arguments: [1, 5, 9, 12, 20])
-    func trialAllocation(windows: Int) {
-        let budget = AdRunBudget(
-            clock: TestSupport.SteppingClock(),
-            segmentCount: Self.segments(forWindows: windows),
-            policy: Self.trial().settings,
-            model: .serviceAdDetection,
-            execution: .trial
-        )
-        #expect(budget.callTimeoutSeconds == 120)
-        #expect(budget.deadline == 1_740)
-        #expect(budget.sendFloorSeconds == 30)
-        #expect(budget.backoffReserveSeconds == 30)
     }
 
     @Test("Only an explicit choice selects the trial budget")

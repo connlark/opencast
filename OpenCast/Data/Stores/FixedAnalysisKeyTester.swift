@@ -2,11 +2,6 @@ import OpenCastAnalysis
 import OpenCastAnalysisProviders
 import Synchronization
 
-/// A key tester that answers with seeded results without any network: UI
-/// tests and previews. Call n answers `results[n - 1]` (the last repeats),
-/// after the gate releases it, if there is one, and after `delay`. Neither
-/// wait ends early on cancellation: a cancelled request still answers, late,
-/// as a slow provider would.
 nonisolated struct FixedAnalysisKeyTester: AnalysisKeyTesting {
     let results: [AnalysisKeyTestResult]
     let delay: Duration
@@ -37,6 +32,8 @@ nonisolated struct FixedAnalysisKeyTester: AnalysisKeyTesting {
         }
         if delay > .zero {
             let delay = delay
+            // Detached so cancellation cannot cut the sleep short: a cancelled request still
+            // answers, late, as a slow provider would.
             await Task.detached {
                 try? await Task.sleep(for: delay)
             }.value

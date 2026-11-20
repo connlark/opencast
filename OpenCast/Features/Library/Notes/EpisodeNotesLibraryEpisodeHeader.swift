@@ -1,9 +1,5 @@
 import SwiftUI
 
-/// An episode's header in the Notes library: artwork, show and episode title.
-/// It opens the episode while the episode resolves; once the episode has
-/// left the library it keeps the titles the notes stored and says why it no
-/// longer opens.
 struct EpisodeNotesLibraryEpisodeHeader: View {
     let group: EpisodeNotesLibraryGroup
     let onOpen: (String) -> Void

@@ -1,6 +1,3 @@
-/// Body of `account/bootstrap`. The app-transaction JWS field exists from
-/// day one so the wire shape is stable; the development lane ignores it and
-/// keys the account to the registered App Attest install.
 public struct OpenCastRemoteTranscriptionBootstrapRequest: Codable, Sendable, Equatable {
     public var schemaVersion: Int
     public var appTransactionJWS: String?

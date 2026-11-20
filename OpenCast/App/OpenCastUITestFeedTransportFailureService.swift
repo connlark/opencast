@@ -1,8 +1,6 @@
 import Foundation
 import OpenCastCore
 
-/// UI-test seam: every feed fetch fails with one transport error, so a test
-/// can drive a refresh the way a device without a network sees it.
 nonisolated struct OpenCastUITestFeedTransportFailureService: FeedService {
     static let environmentKey = "OPENCAST_UI_TEST_FEED_TRANSPORT_FAILURE"
 

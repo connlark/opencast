@@ -1,18 +1,12 @@
 import Foundation
 
-/// Live upload transport: one background `URLSession` per job with a stable
-/// identifier derived from the job ID, so uploads survive app suspension and
-/// a relaunched process reconnects to still-running part tasks instead of
-/// re-enqueuing them. Presigned URLs are plain PUTs — no header signing.
-///
-/// Thread safety: URLSession delivers delegate callbacks off-main; the
-/// continuation registry is guarded by a lock and every continuation is
-/// resolved exactly once (registry removal is the claim).
+/// The session identifier derives from the job ID, so a relaunched process reconnects to running
+/// part tasks instead of re-enqueuing them. Delegate callbacks arrive off-main; removal from the
+/// locked registry is the claim that resolves a continuation exactly once.
 final class BackgroundRemoteTranscriptionUploadTransport: NSObject, RemoteTranscriptionUploadTransport, URLSessionDataDelegate, @unchecked Sendable {
     private static let identifierPrefix = "com.connor.opencast.remote-transcription.upload."
 
-    /// A second waiter registered for the same part number; the displaced
-    /// waiter fails visibly instead of hanging forever.
+    /// Thrown to a displaced waiter for the same part, so it fails instead of hanging.
     struct WaiterDisplaced: Error, Sendable {}
 
     private let lock = NSLock()
@@ -52,8 +46,7 @@ final class BackgroundRemoteTranscriptionUploadTransport: NSObject, RemoteTransc
     nonisolated func cancelOutstandingTasks() async {
         let tasks = await session.allTasks
         for task in tasks {
-            // Cancellation surfaces through didCompleteWithError, which
-            // resolves any registered continuation by throwing.
+            // didCompleteWithError resolves any registered continuation by throwing.
             task.cancel()
         }
         session.invalidateAndCancel()
@@ -78,9 +71,8 @@ final class BackgroundRemoteTranscriptionUploadTransport: NSObject, RemoteTransc
             try await withCheckedThrowingContinuation { continuation in
                 register(continuation, partNumber: partNumber)
                 if task.state == .completed {
-                    // The task may have completed between discovery and
-                    // registration; claim its response here so the
-                    // continuation cannot hang.
+                    // The task may have completed between discovery and registration; claim
+                    // its response here so the continuation cannot hang.
                     resolve(partNumber: partNumber, task: task, error: task.error)
                 } else {
                     task.resume()
@@ -91,7 +83,6 @@ final class BackgroundRemoteTranscriptionUploadTransport: NSObject, RemoteTransc
         }
     }
 
-    // Internal (not private) so the displaced-waiter contract stays testable.
     nonisolated func register(
         _ continuation: CheckedContinuation<RemoteTranscriptionUploadPartPutResult, any Error>,
         partNumber: Int

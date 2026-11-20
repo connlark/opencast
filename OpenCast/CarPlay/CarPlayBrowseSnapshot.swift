@@ -1,6 +1,4 @@
-/// One CarPlay list, already sliced to the head unit's ceilings: the rows to
-/// render, the empty-state copy to show when there are none, and the single
-/// continuation page a "Show More" row reaches.
+/// One CarPlay list, already sliced to the head unit's ceilings.
 nonisolated struct CarPlayBrowseSnapshot: Equatable, Sendable {
     let title: String
     let sections: [CarPlayListSection]

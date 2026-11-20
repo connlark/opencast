@@ -16,8 +16,8 @@ struct NotificationDeviceTokenStore {
         }
     }
 
-    // Recorded only after the backend accepts the token, so the hash always names the
-    // endpoint the backend holds: unregister targets it, and a differing APNs token needs an upload.
+    // Only after the backend accepts the token, so the hash names the endpoint the backend
+    // holds: unregister targets it, and a differing APNs token needs an upload.
     func markUploaded(_ token: String) {
         defaults.set(Self.hash(token), forKey: Self.latestTokenHashKey)
     }

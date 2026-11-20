@@ -1,5 +1,3 @@
-/// A typed read of a parsed document failed. The pipeline never needs the
-/// reason, only that the document does not have the expected shape.
 public struct StrictDecodingError: Error, Sendable, Equatable {
     public let reason: String
 
@@ -8,25 +6,19 @@ public struct StrictDecodingError: Error, Sendable, Equatable {
     }
 }
 
-/// Field-level reads with the acceptance rules of a Rust `serde` derive:
-/// integers must be integral and in range, floats accept any number, strings
-/// reject unpaired surrogates, and a struct reads from an object (by name)
-/// or from an array (by position).
+/// Mirrors a Rust `serde` derive, which also reads a struct from an array, by position.
 enum StrictDecoding {
     struct Shape {
-        /// Field names in declaration order.
+        /// In declaration order: an array supplies fields by position.
         var fields: [String]
         /// Fields with a default value: absent is allowed in both forms.
         var defaulted: Set<String> = []
         /// `Option` fields without a default: absent is allowed only when
         /// reading from an object.
         var optional: Set<String> = []
-        /// Reject unknown names when reading from an object.
         var denyUnknownFields = false
     }
 
-    /// The present fields of a struct, by name. Absent fields are omitted;
-    /// callers apply the default or `nil`.
     static func fields(_ value: JSONValue, _ shape: Shape) throws(StrictDecodingError) -> [String: JSONValue] {
         var result: [String: JSONValue] = [:]
         switch value {
@@ -97,7 +89,6 @@ enum StrictDecoding {
         return narrowed
     }
 
-    /// A Rust `usize` read into `Int`.
     static func count(_ value: JSONValue) throws(StrictDecodingError) -> Int {
         let number = try uint64(value)
         guard let count = Int(exactly: number) else { throw StrictDecodingError("integer out of range") }
@@ -119,7 +110,6 @@ enum StrictDecoding {
         return elements
     }
 
-    /// `Option<T>`: absent or `null` is `nil`.
     static func optional<T>(
         _ value: JSONValue?,
         _ read: (JSONValue) throws(StrictDecodingError) -> T

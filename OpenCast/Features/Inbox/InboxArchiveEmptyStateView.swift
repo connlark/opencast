@@ -1,12 +1,8 @@
 import SwiftUI
 
-/// The Inbox's archive view with nothing to list: nothing is archived, or
-/// nothing archived is left under the filter and Hide Up Next. Show Inbox
-/// returns to the Inbox view.
 struct InboxArchiveEmptyStateView: View {
     let filter: PodcastEpisodeFilter
-    /// Only `queued`, and only while Hide Up Next hides archived episodes
-    /// (`InboxFilteredEmptyStateView.hiddenEpisodes`).
+    /// Only `queued` is ever set, and only while Hide Up Next hides archived episodes.
     let hiddenEpisodes: PodcastHiddenEpisodes
     let onShowInbox: () -> Void
 
@@ -28,9 +24,6 @@ struct InboxArchiveEmptyStateView: View {
         .accessibilityIdentifier("Inbox Archive Empty")
     }
 
-    /// Under All Episodes the archive is empty unless Hide Up Next hides
-    /// what is in it. Another filter says none are left to show, and what is
-    /// hidden.
     static func description(filter: PodcastEpisodeFilter, hiddenEpisodes: PodcastHiddenEpisodes) -> String {
         guard filter == .all else {
             return hiddenEpisodes.filteredEmptyDescription(hiddenUnder: filter)

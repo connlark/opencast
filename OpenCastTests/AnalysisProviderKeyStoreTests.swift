@@ -16,8 +16,6 @@ struct AnalysisProviderKeyStoreTests {
 
     // MARK: - Both storages
 
-    /// The forms a test starts from: `a` is this device's local key, `b`
-    /// a synced key (this device's or another device's).
     enum Start: String, CaseIterable, CustomTestStringConvertible, Sendable {
         case empty, local, synced, both
         var testDescription: String { rawValue }
@@ -28,22 +26,17 @@ struct AnalysisProviderKeyStoreTests {
         var testDescription: String { rawValue }
     }
 
-    /// The Keychain storage, and its in-memory twin: every case below runs
-    /// against both.
     enum Backend: String, CaseIterable, CustomTestStringConvertible, Sendable {
         case keychain, inMemory
         var testDescription: String { rawValue }
     }
 
-    /// The forms present: local bytes and synced bytes.
     struct Forms: Equatable, CustomStringConvertible {
         var local: String?
         var synced: String?
         var description: String { "local \(local == nil ? "none" : "set"), synced \(synced == nil ? "none" : "set")" }
     }
 
-    /// One storage under test, with its fault script, and its Google items
-    /// staged and read behind its back, as another device or process would.
     struct Bench: Sendable {
         let storage: any AnalysisProviderKeyStoring
         let faults: AnalysisKeychainFaultScript
@@ -103,7 +96,6 @@ struct AnalysisProviderKeyStoreTests {
     fileprivate nonisolated static let b = AnalysisKeyFixtures.replacementText
     private nonisolated static let k = AnalysisKeyFixtures.openAIText
 
-    /// CONTRACT 6R as folded: what each operation leaves from each start.
     private static func expected(_ operation: Operation, from start: Start) -> Forms? {
         let local = start == .local || start == .both ? a : nil
         let synced = start == .synced || start == .both ? b : nil
@@ -137,7 +129,6 @@ struct AnalysisProviderKeyStoreTests {
         }
     }
 
-    /// Both forms the twin holds, as text.
     private func forms(_ storage: InMemoryAnalysisProviderKeyStorage) -> Forms {
         let stored = storage.stored(.google)
         return Forms(
@@ -146,7 +137,6 @@ struct AnalysisProviderKeyStoreTests {
         )
     }
 
-    /// The read rule: the local form when present, else the synced one.
     private func expectReadRule(_ storage: any AnalysisProviderKeyStoring, _ forms: Forms, _ backend: Backend) throws {
         let shown = forms.local ?? forms.synced
         #expect(try AnalysisKeyFixtures.bytes(of: storage.key(for: .google)) == shown.map { Data($0.utf8) }, "\(backend)")
@@ -325,7 +315,6 @@ struct AnalysisProviderKeyStoreTests {
         #expect(throws: AnalysisProviderKeyStoreError.keychain(operation: .read, status: errSecInteractionNotAllowed)) {
             try bench.storage.presence(for: .google)
         }
-        // The synced copy alone still reads.
         #expect(try bench.storage.syncedCopyExists(for: .google))
     }
 
@@ -735,8 +724,6 @@ struct AnalysisProviderKeyStoreTests {
         }
         await store.refreshPresences()
 
-        // The new local item was written and wins on read; the synced copy
-        // it could not delete is still reported, and offered.
         #expect(store.presence(for: .google) == .saved(synced: false))
         #expect(store.syncedCopyStatus(.google) == .present)
         #expect(store.syncedCopyBesideLocalKey(for: .google))

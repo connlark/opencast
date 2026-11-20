@@ -1,19 +1,15 @@
 import Foundation
 import OpenCastAnalysis
 
-/// The downloaded bundle and refresh bookkeeping under Application Support.
 /// Nothing here is secret; the bundle is re-verified every time it is read.
 struct AnalysisPolicyStore: Sendable {
     struct Metadata: Codable, Equatable {
         var lastAttemptAt: Date?
-        /// Why the last refresh failed; `nil` after a success.
         var lastFailure: AnalysisPolicyRejection?
-        /// The highest version ever accepted; the loader never accepts lower.
         var highestAcceptedVersion = 0
     }
 
-    /// The accepted bundle, its signature and when the server last served it,
-    /// in one file so they are always replaced together.
+    /// One file, so the bundle, its signature and its date are always replaced together.
     struct CachedBundle: Codable, Equatable {
         var bundle: Data
         var signature: Data

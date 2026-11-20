@@ -1,7 +1,6 @@
 import Foundation
 
-/// The question the sheet is answering; a fresh id per send so the
-/// view's task restarts (and cancels the previous turn on dismissal).
+/// A fresh id per send restarts the view's task, which cancels the previous turn.
 struct TranscriptAskPendingQuestion: Identifiable, Equatable {
     let id = UUID()
     let text: String

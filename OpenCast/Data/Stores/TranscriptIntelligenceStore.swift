@@ -3,17 +3,12 @@ import FoundationModels
 import Observation
 import SwiftData
 
-/// Owns the Private Cloud Compute plumbing for Recap and Ask: eligibility,
-/// quota, the one-time disclosure, and the last request outcome. Entry
-/// points read `isVisible`; request paths run through `perform` so every
-/// outcome feeds back into `availability`.
+/// Every request runs through `perform`, so its outcome feeds back into `availability`.
 @Observable
 final class TranscriptIntelligenceStore {
     private(set) var availability = TranscriptIntelligenceAvailability.modelNotReady
     private(set) var quota = TranscriptIntelligenceQuotaSnapshot()
-    /// Lives in `LocalPreferenceRecord` with the rest of the wipeable local
-    /// state, like the Chapters & Summary disclosure: a data nuke deletes the
-    /// row and the reload makes the next request disclose again.
+    /// Stored in `LocalPreferenceRecord`, so a data nuke makes the next request disclose again.
     private(set) var hasAcknowledgedDisclosure = false
     private(set) var lastFailure: TranscriptIntelligenceFailure?
     @ObservationIgnored private let client: any TranscriptIntelligenceModelClient
@@ -37,13 +32,11 @@ final class TranscriptIntelligenceStore {
         self.now = now
     }
 
-    /// Hidden, not disabled, wherever the feature can never work here: the
-    /// flag off, ineligible hardware, or a build without the entitlement.
+    /// Hidden, not disabled, wherever the feature can never work on this device and build.
     var isVisible: Bool {
         isFeatureEnabled && availability != .unsupportedDevice && availability != .notEntitled
     }
 
-    /// Ask ships behind its own compile-time sub-flag until its stage closes.
     var isAskVisible: Bool {
         isVisible && isAskEnabled
     }
@@ -54,9 +47,6 @@ final class TranscriptIntelligenceStore {
         refreshAvailability()
     }
 
-    /// Called when the scene becomes active and after every request. Drops
-    /// transient failures so the next attempt is allowed; entitlement and
-    /// rate-limit failures clear on their own terms.
     func refreshAvailability() {
         if let lastFailure, lastFailure.isTransient {
             clearFailure()
@@ -74,9 +64,8 @@ final class TranscriptIntelligenceStore {
             )
             try modelContext.save()
         } catch {
-            // The acknowledgement the user just gave stands for this
-            // session; a failed persist only re-shows the disclosure on a
-            // later launch.
+            // The acknowledgement stands for this session; a failed persist only re-shows the
+            // disclosure on a later launch.
         }
     }
 
@@ -96,8 +85,6 @@ final class TranscriptIntelligenceStore {
         client.makeSession(instructions: instructions, tools: tools)
     }
 
-    /// Runs one request under a wall-clock deadline and folds its outcome
-    /// into the store. Cancellation is normal and leaves no trace.
     func perform<Result: Sendable>(
         deadline: Duration = TranscriptIntelligenceRequestDeadline.default,
         _ request: @escaping () async throws -> Result

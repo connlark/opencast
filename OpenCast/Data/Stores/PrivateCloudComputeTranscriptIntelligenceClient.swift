@@ -1,9 +1,8 @@
 import Foundation
 import FoundationModels
 
-/// The production client over `PrivateCloudComputeLanguageModel`. The model
-/// handle is created on first use so app-model construction in tests and on
-/// the simulator never touches Foundation Models.
+/// The model handle is lazy so app-model construction in tests and on the simulator never
+/// touches Foundation Models.
 nonisolated final class PrivateCloudComputeTranscriptIntelligenceClient: TranscriptIntelligenceModelClient {
     private lazy var model = PrivateCloudComputeLanguageModel()
 

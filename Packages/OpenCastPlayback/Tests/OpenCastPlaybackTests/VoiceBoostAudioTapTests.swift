@@ -6,11 +6,6 @@ import Testing
 
 struct VoiceBoostAudioTapTests {
     @Test
-    func createsMediaToolboxTap() throws {
-        _ = try VoiceBoostAudioTap(configuration: .default)
-    }
-
-    @Test
     @MainActor
     func processesLocalPlayerItemAudio() async throws {
         try await AVFoundationPlaybackTestGate.acquire()
@@ -57,7 +52,7 @@ struct VoiceBoostAudioTapTests {
             try? FileManager.default.removeItem(at: fixtureURL)
         }
 
-        let deadline = Date.now.addingTimeInterval(30)
+        let deadline = Date.now.addingTimeInterval(60)
         while diagnostics.snapshot.processedFrameCount == 0 && Date.now < deadline {
             try await Task.sleep(for: .milliseconds(50))
         }

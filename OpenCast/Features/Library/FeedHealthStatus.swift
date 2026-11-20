@@ -1,7 +1,5 @@
 import Foundation
 
-/// Pure derivation of a feed's health copy from the per-feed refresh-log
-/// projection the store already carries; view-layer only.
 nonisolated struct FeedHealthStatus: Equatable {
     enum Kind: Equatable {
         case neverRefreshed
@@ -56,8 +54,7 @@ nonisolated struct FeedHealthStatus: Equatable {
         }
     }
 
-    /// True when the status line supersedes the routine "Refreshed X ago"
-    /// copy — a failing feed's recency would otherwise read as success.
+    /// A failing feed's "Refreshed X ago" would read as success, so its status line replaces it.
     var replacesRefreshedLine: Bool {
         switch kind {
         case .failingSince, .neverSucceeded:
@@ -80,7 +77,6 @@ nonisolated struct FeedHealthStatus: Equatable {
         }
     }
 
-    /// Polling recency versus the most recent show or episode content change.
     var checkedUpdatedLine: String? {
         guard let lastCheckedAt else {
             return nil

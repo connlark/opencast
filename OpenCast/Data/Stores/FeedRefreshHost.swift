@@ -1,9 +1,6 @@
 import Foundation
 import SwiftData
 
-/// What the refresh flows need from the core store: the observable state
-/// machine they drive, the subscription reads that pick their feed sets, and
-/// the publication that stays with the store.
 protocol FeedRefreshHost: AnyObject {
     var state: LibraryStore.State { get set }
     var lastErrorMessage: String? { get set }

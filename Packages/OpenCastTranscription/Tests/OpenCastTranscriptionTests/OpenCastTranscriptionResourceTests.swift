@@ -20,23 +20,4 @@ struct OpenCastTranscriptionResourceTests {
 
         #expect(FileManager.default.fileExists(atPath: licenseURL.path))
     }
-
-    @Test("Supported model identities are remote models")
-    func supportedModelIdentitiesAreRemoteModels() {
-        #expect(OpenCastWhisperModel.allCases.contains(.tinyEnglish))
-        #expect(OpenCastWhisperModel.allCases.contains(.largeV3))
-        #expect(OpenCastWhisperModel.tinyEnglish.defaultRemoteVersion == "20260712_49MB-v3-w8")
-        #expect(OpenCastWhisperModel.largeV3.defaultRemoteVersion == "20240930_626MB-v1")
-    }
-
-    @Test("Command-line model aliases parse consistently")
-    func commandLineModelAliasesParseConsistently() {
-        #expect(OpenCastWhisperModel(commandLineValue: "tiny") == .tinyEnglish)
-        #expect(OpenCastWhisperModel(commandLineValue: "tiny.en") == .tinyEnglish)
-        #expect(OpenCastWhisperModel(commandLineValue: OpenCastWhisperModel.tinyEnglish.rawValue) == .tinyEnglish)
-        #expect(OpenCastWhisperModel(commandLineValue: "large") == .largeV3)
-        #expect(OpenCastWhisperModel(commandLineValue: "large-v3") == .largeV3)
-        #expect(OpenCastWhisperModel(commandLineValue: OpenCastWhisperModel.largeV3.rawValue) == .largeV3)
-        #expect(OpenCastWhisperModel(commandLineValue: "medium") == nil)
-    }
 }

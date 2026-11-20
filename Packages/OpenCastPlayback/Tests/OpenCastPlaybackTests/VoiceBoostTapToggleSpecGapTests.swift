@@ -3,17 +3,12 @@ import OpenCastVoiceBoost
 import Testing
 @testable import OpenCastPlayback
 
-/// Disabling Voice Boost drains through the C crossfade (time-aligned wet/dry legs),
-/// splices the delayed dry output back onto the live signal over ~5 ms, and
-/// only then parks in the bit-identical zero-latency bypass. Enabling takes
-/// the mirrored path. No cuts, no forward skips, no wedged states.
 struct VoiceBoostTapToggleSpecGapTests {
     private let sampleRate = 48_000.0
     private let blockFrames = 1_024
     private let warmupBlocks = 281
-    // 5 ms is not a whole 330 Hz period, so the latency splice genuinely
-    // blends out-of-phase copies; a frequency whose period divides the
-    // lookahead would hide splice artifacts.
+    // 5 ms is not a whole 330 Hz period, so the splice blends out-of-phase copies;
+    // a period that divides the lookahead would hide splice artifacts.
     private let toneFrequency = 330.0
     private let toneAmplitude = 0.06
 
@@ -96,22 +91,16 @@ struct VoiceBoostTapToggleSpecGapTests {
             outcomes.append(processBlock(&state, &samples, block: block))
         }
 
-        // The first post-toggle buffer must still be processed (the drain),
-        // and the tail must reach the steady-state bypass.
         #expect(outcomes.first == .processedTransition)
         #expect(outcomes.suffix(3).allSatisfy { $0 == .bypassedDisabled })
 
         let boundary = warmupBlocks * blockFrames
         let window = Int(sampleRate * 0.005)
 
-        // A 50 ms ramp keeps the first 5 ms after the toggle near the wet
-        // level; the old short-circuit dropped -10.8 dB in one buffer.
         let preLevel = rms(samples[(boundary - window)..<boundary])
         let postLevel = rms(samples[boundary..<(boundary + window)])
         #expect(abs(20 * log10(postLevel / preLevel)) < 3)
 
-        // The whole trajectory ramps: no 5 ms window steps more than 3 dB
-        // from its neighbor anywhere across the transition.
         var previousLevel = preLevel
         for windowIndex in 0..<30 {
             let start = boundary + windowIndex * window
@@ -120,15 +109,12 @@ struct VoiceBoostTapToggleSpecGapTests {
             previousLevel = level
         }
 
-        // No sample-level click: transition steps stay within the intrinsic
-        // step range of the wet signal itself.
         let wetStepBound = 1.5 * maxAdjacentStep(
             samples[(boundary - 4 * window)..<boundary]
         )
         let transitionStep = maxAdjacentStep(samples[boundary..<(boundary + 20 * window)])
         #expect(transitionStep <= wetStepBound)
 
-        // Terminal state: buffers pass through untouched.
         let terminalStart = (warmupBlocks + 5) * blockFrames
         #expect(Array(samples[terminalStart...]) == Array(original[terminalStart...]))
     }
@@ -158,8 +144,6 @@ struct VoiceBoostTapToggleSpecGapTests {
         #expect(state.phase == .bypassed)
 
         state.update(configuration: .default)
-        // Reset-on-reengage plus control re-seed: the delay line starts
-        // fresh but adaptation resumes at the pre-disable gain.
         let restoredGain = state.processor?.metrics.currentAutoGainDB ?? 0
         #expect(abs(restoredGain - convergedGain) < 1e-9)
 
@@ -171,11 +155,7 @@ struct VoiceBoostTapToggleSpecGapTests {
         #expect(outcomes.allSatisfy { $0.wasProcessed })
         #expect(state.phase == .engaged)
 
-        // No click across the enable boundary: the warmup window holds pure
-        // live output, then the splice fades the processed leg in from zero
-        // and the in-processor ramp brings the boost up. Steps stay within
-        // the intrinsic step range of the fully wet signal; a cut from dry
-        // straight to wet would exceed it by an order of magnitude.
+        // A cut from dry straight to wet would exceed the wet step range tenfold.
         let enableBoundary = resumeStart * blockFrames
         let window = Int(sampleRate * 0.005)
         let enableStep = maxAdjacentStep(
@@ -183,7 +163,6 @@ struct VoiceBoostTapToggleSpecGapTests {
         )
         #expect(enableStep <= 1.5 * wetIntrinsicStep)
 
-        // Level returns to the wet level once the in-processor ramp lands.
         let finalLevel = rms(samples[((totalBlocks - 1) * blockFrames)...])
         #expect(abs(20 * log10(finalLevel / wetLevel)) < 1.5)
     }
@@ -249,7 +228,6 @@ struct VoiceBoostTapToggleSpecGapTests {
             )
         }
 
-        // Terminal disable: drains to untouched bypass.
         var disabledConfiguration = VoiceBoostConfiguration.default
         disabledConfiguration.isEnabled = false
         state.update(configuration: disabledConfiguration)
@@ -264,7 +242,6 @@ struct VoiceBoostTapToggleSpecGapTests {
                 == Array(original[terminalStart..<(terminalStart + blockFrames)])
         )
 
-        // Terminal enable: engages and processes.
         state.update(configuration: .default)
         var lastOutcome = VoiceBoostTapProcessOutcome.bypassedDisabled
         for block in (fuzzBlocks + 10)..<totalBlocks {

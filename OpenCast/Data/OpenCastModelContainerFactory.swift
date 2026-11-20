@@ -55,10 +55,8 @@ enum OpenCastModelContainerFactory {
         ])
     }
 
-    /// On disk, each store opens at the layout's resolved URL through the
-    /// explicit-URL configuration, so SwiftData's App Group discovery, and the
-    /// copy into the group that came with it, is never consulted. In memory,
-    /// the layout is never read.
+    /// Stores open through the explicit-URL configuration, so SwiftData's App Group discovery,
+    /// which copies a store into the group, is never consulted.
     static func make(inMemory: Bool = false, layout: ModelStoreLayout = .current()) throws -> ModelContainer {
         try make(
             inMemory: inMemory,
@@ -67,8 +65,8 @@ enum OpenCastModelContainerFactory {
         )
     }
 
-    /// Tests open the on-disk stores with `.none`: a mirrored store would
-    /// share the CloudKit container and zone with the host app's live store.
+    /// Tests pass `.none`: a mirrored store would share the CloudKit container and zone with the
+    /// host app's live store.
     static func make(
         inMemory: Bool,
         layout: ModelStoreLayout,
@@ -93,7 +91,7 @@ enum OpenCastModelContainerFactory {
     }
 
     /// Synced then local.
-    static func configurations(
+    private static func configurations(
         inMemory: Bool,
         layout: ModelStoreLayout,
         syncedCloudKitDatabase: ModelConfiguration.CloudKitDatabase

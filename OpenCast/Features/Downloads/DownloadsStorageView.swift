@@ -1,8 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// Downloads' Storage screen, pushed from the tab's toolbar: the bar by
-/// show with its captions, then one legend row per segment.
 struct DownloadsStorageView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext

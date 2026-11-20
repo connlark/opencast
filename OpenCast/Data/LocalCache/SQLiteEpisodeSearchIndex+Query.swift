@@ -164,10 +164,8 @@ nonisolated extension SQLiteEpisodeSearchIndex {
             }
         }
 
-        // FTS-ranked hits keep their tuned ordering; hits reachable only by
-        // visible-substring containment supplement them afterward, ordered by
-        // the channel's own deterministic score. A substring hit never
-        // outranks or rescores an FTS hit.
+        // Substring-only hits follow every FTS hit, in their own score order; they never outrank
+        // or rescore an FTS hit.
         let rankedCandidates = candidatesByEpisodeID.values
             .sorted(by: Candidate.isOrderedBefore)
         let substringOnlyCandidates = substringCandidatesByEpisodeID.values
@@ -574,12 +572,9 @@ nonisolated extension SQLiteEpisodeSearchIndex {
         return values
     }
 
-    /// The legacy matcher used substring containment on the visible fields
-    /// ("cast" found "The Broadcast Hour"), and `unicode61` cannot split the
-    /// user-visible terms inside an unsegmented CJK run. One bounded, scoped
-    /// scan of the stored canonical visible titles preserves both recall
-    /// paths for every script. Its hits only supplement FTS-ranked results —
-    /// `search` orders substring-only hits after every FTS hit.
+    /// FTS misses substring matches ("cast" in "The Broadcast Hour") and terms inside an
+    /// unsegmented CJK run, which `unicode61` cannot split. This bounded scan of the canonical
+    /// visible titles recovers both.
     private static func visibleSubstringCandidates(
         tokens: [String],
         canonicalPhrase: String,
@@ -922,9 +917,8 @@ nonisolated extension SQLiteEpisodeSearchIndex {
                 ?? transcriptCandidate.recencyBoost,
             finalScore: finalScore
         )
-        // A transcript hit must explain itself: excerpt the best passage
-        // around its first matched term, falling back to the passage head so
-        // transcript-only rows never render bare.
+        // The passage head is the fallback, so a transcript-only row never renders without a
+        // snippet.
         let snippet = matchingSnippet(
             in: bestPassage.text,
             terms: bestPassage.highlightTerms
@@ -1051,9 +1045,6 @@ nonisolated extension SQLiteEpisodeSearchIndex {
                 terms: candidate.highlightTerms
             )
         }
-        // Legacy search surfaced the summary/show-notes snippet, so body
-        // evidence wins; a transcript excerpt already on the hit stays only
-        // when no body snippet materialized.
         let snippet = bodySnippet ?? candidate.hit.snippet
         let snippetHighlightTerms = bodySnippet == nil
             ? candidate.hit.snippetHighlightTerms
@@ -1100,8 +1091,8 @@ nonisolated extension SQLiteEpisodeSearchIndex {
         }
     }
 
-    /// `fieldMatches` for text that is already canonical (normalized tokens
-    /// joined by single spaces), so the hot per-row path never re-tokenizes.
+    /// `canonicalText` must already be normalized tokens joined by single spaces, so the hot
+    /// per-row path never re-tokenizes.
     private static func canonicalFieldMatches(
         _ canonicalText: String,
         terms: [String]

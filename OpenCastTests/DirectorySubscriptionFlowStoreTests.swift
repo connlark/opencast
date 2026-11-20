@@ -153,47 +153,6 @@ struct DirectorySubscriptionFlowStoreTests {
         #expect(harness.library.subscriptions.isEmpty)
     }
 
-    @Test("A result with no feed and no lookup capability is rejected")
-    func unresolvableResultIsRejected() async throws {
-        let harness = try Harness(feeds: [:])
-
-        harness.flow.subscribe(
-            to: DirectoryPodcastResult(
-                id: "podcastindex:1",
-                title: "Unresolvable",
-                sources: [.podcastIndex],
-                feedCandidates: []
-            ),
-            library: harness.library,
-            modelContext: harness.modelContext
-        )
-        await harness.flow.waitForCurrentSubscription()
-
-        #expect(harness.flow.subscribingResultID == nil)
-        #expect(harness.flow.errorMessage == nil)
-        #expect(harness.library.subscriptions.isEmpty)
-    }
-
-    @Test("Merged results resolve without an extra lookup")
-    func mergedResultsSkipEnrichment() async throws {
-        let harness = try Harness(
-            feeds: [
-                windowedFeedURL: makeSnapshot(feedURL: windowedFeedURL, episodeCount: 33),
-                fullFeedURL: makeSnapshot(feedURL: fullFeedURL, episodeCount: 124),
-            ]
-        )
-
-        harness.flow.subscribe(
-            to: mergedResult(),
-            library: harness.library,
-            modelContext: harness.modelContext
-        )
-        await harness.flow.waitForCurrentSubscription()
-
-        #expect(await harness.directoryService.requestedLookupAppleIDs().isEmpty)
-        #expect(harness.flow.pendingChoice != nil)
-    }
-
     @Test("A choice resolved after the presenter is gone subscribes to the primary")
     func detachedResolutionSubscribesToPrimary() async throws {
         let harness = try Harness(

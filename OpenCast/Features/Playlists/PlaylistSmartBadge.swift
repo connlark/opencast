@@ -1,10 +1,7 @@
 import SwiftUI
 
-/// The small glass sparkles at a smart playlist's cover's top-leading
-/// corner. It scales with the cover rather than with Dynamic Type, because
-/// it belongs to the artwork: the 56 pt list thumbnail cannot grow with the
-/// text. It is decorative: the summary and meta lines already say "Smart"
-/// to VoiceOver.
+/// Scales with the cover, not Dynamic Type: the 56 pt list thumbnail cannot grow with the
+/// text. Decorative, since the summary and meta lines already say "Smart" to VoiceOver.
 struct PlaylistSmartBadge: View {
     let tint: PlaylistTint
     let coverSide: Double

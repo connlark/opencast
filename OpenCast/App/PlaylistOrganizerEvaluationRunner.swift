@@ -3,16 +3,8 @@ import Foundation
 import OSLog
 import UIKit
 
-/// Make a Playlist evaluation on a PCC-eligible device or simulator. Reads
-/// the cases, settings and episode fixtures pushed into
-/// `Documents/PlaylistOrganizerEvaluationInputs`, runs every case through
-/// `PlaylistOrganizerClient` with the candidates, line format, line numbers
-/// and answer style the case forces (fixture episodes, never the device
-/// library, so returned indices line up with the labels), and rewrites
-/// `Documents/PlaylistOrganizerEvaluation/report.json` after every run so a
-/// partial run is still harvestable; the external evaluation harness scores
-/// it. The report carries episode titles, so they stay in the container and
-/// never reach the log.
+/// The report carries episode titles: they stay in the container and never
+/// reach the log.
 enum PlaylistOrganizerEvaluationRunner {
     nonisolated static let requestArgument = "--opencast-run-playlist-organizer-evaluation"
     nonisolated static let requestEnvironmentKey = "OPENCAST_RUN_PLAYLIST_ORGANIZER_EVALUATION"
@@ -125,8 +117,6 @@ enum PlaylistOrganizerEvaluationRunner {
         return repeats
     }
 
-    /// Builder episodes and the snapshots validation resolves them against,
-    /// both keyed by a synthetic episode id that maps back to the fixture index.
     private static func loadFixture(slug: String) throws -> LoadedFixture {
         let fixture = try decode(Fixture.self, from: inputDirectory.appending(path: "fixtures/\(slug).json"))
         let podcastID = "evaluation-\(slug)"
@@ -206,10 +196,8 @@ enum PlaylistOrganizerEvaluationRunner {
         nan: "NaN"
     )
 
-    /// The model's answer re-encoded in the instructions' JSON shape, with
-    /// every number mapped back to the episode index it stands for, so the
-    /// harness scores it exactly as it scored answers taken from the model
-    /// directly.
+    /// Every number is mapped back to its episode index, so the harness scores
+    /// this as it scores an answer taken from the model directly.
     private static func rawJSON(_ proposals: [PlaylistProposal], input: PlaylistOrganizerInput?) -> String? {
         let set = RawProposalSet(playlists: proposals.map { RawProposal($0, input: input) })
         let encoder = JSONEncoder()
@@ -240,7 +228,6 @@ enum PlaylistOrganizerEvaluationRunner {
         }
     }
 
-    /// The model answered and its answer decoded.
     private static func isAnswer(_ outcome: PlaylistOrganizerOutcome) -> Bool {
         switch outcome {
         case .proposals, .empty:
@@ -323,7 +310,7 @@ enum PlaylistOrganizerEvaluationRunner {
         var lines: String?
         /// standard (default) or indicesOnly.
         var answerStyle: String?
-        /// index (default, as the sheet sends) or gapped.
+        /// index (default) or gapped.
         var lineNumbers: String?
     }
 
@@ -518,9 +505,7 @@ enum PlaylistOrganizerEvaluationRunner {
         var outcome: String
         var elapsedSeconds: Double
         var attempts: Int
-        /// Case names of the failures retried before the outcome.
         var retried: [String]
-        /// The side of every guardrail decline in the run, retried or final.
         var guardrailSides: [String]
         var usage: UsageReport?
         var error: ErrorReport?
@@ -586,8 +571,6 @@ enum PlaylistOrganizerEvaluationRunner {
     }
 
     private struct ErrorReport: Encodable {
-        /// The failure's case name without associated values, or the outcome's
-        /// name when no model failure caused it.
         var kind: String
         var message: String
         /// input, output, recitation or unknown for a guardrail decline.
@@ -637,8 +620,6 @@ enum PlaylistOrganizerEvaluationRunner {
         var lexicalCount: Int?
         var fillCount: Int?
         var retrievalMilliseconds: Double
-        /// Exactly what the model received, so a decline can be replayed on
-        /// the Mac probe. Episode text stays in the container.
         var instructions: String
         var prompt: String
 
@@ -709,8 +690,8 @@ enum PlaylistOrganizerEvaluationRunner {
         var episodeIndices: [Int]
         var confidence: Double
 
-        /// Index numbers pass through. A gapped number missing from the
-        /// input's table becomes negative, so the harness counts it invalid.
+        /// A gapped number missing from the input's table becomes negative, so
+        /// the harness counts it invalid.
         init(_ proposal: PlaylistProposal, input: PlaylistOrganizerInput?) {
             title = proposal.title
             rationale = proposal.rationale

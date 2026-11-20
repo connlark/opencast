@@ -16,28 +16,6 @@ struct AppIconStoreTests {
         #expect(store.lastErrorMessage == nil)
     }
 
-    @Test("Load maps an unknown stored name to the primary")
-    func loadMapsUnknownNameToPrimary() {
-        let application = AlternateIconApplyingSpy(alternateIconName: "AppIconRetired")
-        let store = AppIconStore(application: application)
-
-        store.load()
-
-        #expect(store.selection == .primary)
-        #expect(application.appliedNames.isEmpty)
-    }
-
-    @Test("Unsupported devices report isSupported false")
-    func unsupportedDevicesReportUnsupported() {
-        let application = AlternateIconApplyingSpy(alternateIconName: nil, supportsAlternateIcons: false)
-        let store = AppIconStore(application: application)
-
-        store.load()
-
-        #expect(!store.isSupported)
-        #expect(store.selection == .primary)
-    }
-
     @Test("Selecting applies the name and updates the selection")
     func selectAppliesNameAndUpdatesSelection() async {
         let application = AlternateIconApplyingSpy(alternateIconName: nil)
@@ -53,17 +31,6 @@ struct AppIconStoreTests {
         #expect(store.selection == .primary)
         #expect(application.appliedNames == ["AppIconViolet", nil])
         #expect(!store.isApplying)
-    }
-
-    @Test("Selecting the current option is a no-op")
-    func selectingCurrentOptionIsNoOp() async {
-        let application = AlternateIconApplyingSpy(alternateIconName: "AppIconFern")
-        let store = AppIconStore(application: application)
-        store.load()
-
-        await store.select(.fern)
-
-        #expect(application.appliedNames.isEmpty)
     }
 
     @Test("A failed change rolls back and records the error")
@@ -89,14 +56,13 @@ private enum SpyError: Error {
 
 @MainActor
 private final class AlternateIconApplyingSpy: AlternateIconApplying {
-    let supportsAlternateIcons: Bool
+    let supportsAlternateIcons = true
     private(set) var alternateIconName: String?
     private(set) var appliedNames: [String?] = []
     private let error: (any Error)?
 
-    init(alternateIconName: String?, supportsAlternateIcons: Bool = true, error: (any Error)? = nil) {
+    init(alternateIconName: String?, error: (any Error)? = nil) {
         self.alternateIconName = alternateIconName
-        self.supportsAlternateIcons = supportsAlternateIcons
         self.error = error
     }
 

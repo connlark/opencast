@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// One `.division` reserved region (a fold band) as `WindowPose` reads it.
-/// `ReservedRegion` has no public initializer, so the pose model and its tests
-/// take this value instead of the SDK type.
+/// `ReservedRegion` has no public initializer, so the pose model takes this
+/// value instead of the SDK type.
 nonisolated struct WindowDivisionRegion: Equatable, Sendable {
     /// In the reading proxy's local coordinate space.
     var frame: CGRect
@@ -17,14 +16,12 @@ nonisolated struct WindowDivisionRegion: Equatable, Sendable {
         self.init(frame: region.frame, isActive: region.isActive)
     }
 
-    /// The proxy's CURRENT `.division` regions. Read it on every layout (in a
-    /// `GeometryReader` body) and never cache it: the first layout after
-    /// launch reports none, and a later layout reports the fold.
+    /// Read on every layout and never cache: the first layout after launch
+    /// reports no region, and a later layout reports the fold.
     static func current(in proxy: GeometryProxy) -> [WindowDivisionRegion] {
         proxy.reservedRegions(kind: .division).map(Self.init)
     }
 
-    /// Active, with a finite origin and a positive, finite width and height.
     /// `CGRect.width` and `height` standardize a negative size, so the raw
     /// `size` is checked; `CGRect.infinite` is stored as huge finite numbers,
     /// so it is excluded by name.

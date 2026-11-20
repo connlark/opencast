@@ -14,7 +14,6 @@ struct PodcastDetailView: View {
     /// Set when this page is a two-pane split's detail root, where `dismiss`
     /// cannot remove it.
     @Environment(\.twoPaneRootClose) private var rootClose
-    /// Inside a two-pane root, the visit ledger above its containers.
     @Environment(\.twoPaneRootVisit) private var rootVisit
     @State private var feedMigrationErrorMessage: String?
     @State private var isShowingFeedMigrationError = false
@@ -31,8 +30,6 @@ struct PodcastDetailView: View {
 
     let feedURL: String
     let onOpenEpisode: (String) -> Void
-    /// The route this page was opened with: its identity, and the key of
-    /// its visit in a two-pane root's ledger.
     private let route: AppRoute
 
     init(
@@ -47,9 +44,8 @@ struct PodcastDetailView: View {
         _localVisit = State(initialValue: PodcastDetailVisit(route: route))
     }
 
-    /// The visit as a two-pane root's ledger holds it, above its containers,
-    /// so a fold or rotation that rebuilds this page keeps it. Nil outside a
-    /// two-pane root, and while the path holds this route more than once.
+    /// Survives a fold or rotation that rebuilds this page. Nil outside a two-pane root, and while
+    /// the path holds this route more than once.
     private var ledgerVisit: PodcastDetailVisit? {
         rootVisit?.podcastDetailVisit(for: route)
     }
@@ -67,9 +63,8 @@ struct PodcastDetailView: View {
         }
     }
 
-    /// The Inbox settings a Group by Podcast tap opened this visit under.
-    /// They win over the show's stored filter without being written to it,
-    /// and end with the first filter pick here.
+    /// Wins over the show's stored filter without being written to it, and ends with the first
+    /// filter pick here.
     private var episodeListOverride: PodcastEpisodeListOverride? {
         visit.episodeListOverride
     }
@@ -116,10 +111,7 @@ struct PodcastDetailView: View {
         episodeListOverride?.archiveScope ?? .all
     }
 
-    /// What this visit keeps off the list, as the Inbox view it came from
-    /// does: Up Next plus the playing episode, and the show's archived
-    /// episodes (from the Inbox) or those not archived (from the archive).
-    /// Reads the queue, player and archived set only while hiding by them.
+    /// Reads the queue, player and archived set only while hiding by them: each is observed state.
     private func episodesHiddenByVisit(
         in episodes: [EpisodeListItemSnapshot]
     ) -> (kinds: PodcastHiddenEpisodes, episodeIDs: Set<String>) {
@@ -481,7 +473,6 @@ struct PodcastDetailView: View {
         )
     }
 
-    /// A pick here ends the visit's Inbox settings, Hide Up Next included.
     private func setFilter(_ filter: PodcastEpisodeFilter) {
         updateVisit { $0.episodeListOverride = nil }
         appModel.podcastEpisodeListSettings.setFilter(
@@ -546,7 +537,6 @@ struct PodcastDetailView: View {
         setFilter(.all)
     }
 
-    /// Keeps the visit's filter and brings back every row it hid.
     private func showHiddenEpisodes() {
         updateVisit {
             $0.episodeListOverride?.hidesQueuedEpisodes = false
@@ -554,9 +544,6 @@ struct PodcastDetailView: View {
         }
     }
 
-    /// Leaves this page: a pushed page pops; a two-pane split's detail root
-    /// clears its section's path, since `dismiss` cannot remove a stack's
-    /// root.
     private func close() {
         if let rootClose, rootClose.route == route {
             rootClose.close()

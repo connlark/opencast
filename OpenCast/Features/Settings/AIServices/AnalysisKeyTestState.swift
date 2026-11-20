@@ -1,15 +1,12 @@
 import OpenCastAnalysisProviders
 
-/// The key sheet's last Test as one value, so a new Test or an edit clears
-/// whether the key was accepted and what Google said about its tier together.
+/// One value, so a new Test or an edit clears the acceptance and the tier answer together.
 struct AnalysisKeyTestState {
     /// Bumped by every edit, sync change, Save, Remove and Test. A result
     /// stamped with an older generation describes a draft that is gone.
     private(set) var generation = 0
     private(set) var isTesting = false
     private(set) var result: AnalysisKeyTestResult?
-    /// What Google said about the tested key's tier, apart from whether it
-    /// accepted the key, with the digest of the key it was given for.
     private(set) var tier: AnalysisKeyTierStore.Answer?
 
     var isFreeTier: Bool {
@@ -23,10 +20,7 @@ struct AnalysisKeyTestState {
         tier = nil
     }
 
-    /// Begins a Test of `key` and returns its generation. A key that could
-    /// not be read has nothing to test: that is the result, and it returns
-    /// `nil`. The last result goes first either way, so a failure here never
-    /// reads under what Google said about an earlier Test.
+    /// Clears the last result first, so a failure never reads under an earlier tier answer.
     mutating func start(key: AnalysisProviderKey?) -> Int? {
         invalidate()
         guard key != nil else {

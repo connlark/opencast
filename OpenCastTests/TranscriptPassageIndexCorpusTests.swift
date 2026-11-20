@@ -3,11 +3,6 @@ import OpenCastTranscription
 import Testing
 @testable import OpenCast
 
-/// Retrieval recall over the frozen evaluation corpus: for every answerable
-/// Ask case in the generated evaluation inputs, the passages the search tool
-/// would return must include one containing an expected supporting segment.
-/// The transcripts live outside the tree, so the suite runs only where
-/// `TranscriptEvaluationCorpus` finds the inputs.
 @Suite("Transcript passage index on the evaluation corpus", .enabled(if: TranscriptEvaluationCorpus.isAvailable))
 struct TranscriptPassageIndexCorpusTests {
 

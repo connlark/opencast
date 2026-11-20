@@ -70,8 +70,8 @@ struct NukeConfirmationSheet: View {
                 try await appModel.nukeAllData(modelContext: modelContext)
                 dismiss()
             } catch {
-                // The model surfaces failures through lastDataNukeErrorMessage. This task is not a SwiftUI .task,
-                // so sheet dismissal cannot cancel a multi-step delete while interactive dismissal is disabled.
+                // The model reports the failure in lastDataNukeErrorMessage. Not a SwiftUI .task,
+                // so sheet dismissal cannot cancel a multi-step delete.
             }
             dataNukeTask = nil
         }

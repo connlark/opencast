@@ -1,9 +1,6 @@
 import Foundation
 
-/// The signed analysis policy document: prompts, schemas, model entries,
-/// timeouts and limits for ad detection and Chapters & Summary. Decoding
-/// alone proves nothing; `AnalysisPolicyValidator` verifies the signature
-/// and the app's hard bounds before a bundle is used.
+/// Decoding proves nothing: use a bundle only after `AnalysisPolicyValidator` accepts it.
 public struct AnalysisPolicyBundle: Sendable, Equatable, Decodable {
     public struct Features: Sendable, Equatable, Decodable {
         public var adDetection: AdDetectionPolicy
@@ -15,7 +12,6 @@ public struct AnalysisPolicyBundle: Sendable, Equatable, Decodable {
         }
     }
 
-    /// Document format. This build reads format 1 only.
     public var schemaVersion: Int
     /// Monotonic content version; the app never moves to a lower one.
     public var bundleVersion: Int
@@ -23,7 +19,6 @@ public struct AnalysisPolicyBundle: Sendable, Equatable, Decodable {
     /// Lowest `CFBundleVersion` that may use this bundle.
     public var minAppBuild: Int
     public var features: Features
-    /// Wire facts for the providers this build knows; others are ignored.
     public var providers: [AnalysisProvider: AnalysisProviderEndpoint]
     public var trial: AnalysisTrialPolicy
     public var notice: AnalysisNoticePolicy?
@@ -66,8 +61,6 @@ public struct AnalysisPolicyBundle: Sendable, Equatable, Decodable {
         notice = try container.decodeIfPresent(AnalysisNoticePolicy.self, forKey: .notice)
     }
 
-    /// Decodes bundle bytes. Timestamps must be canonical UTC
-    /// (`AnalysisPolicyTimestamp`), the same rule the generator enforces.
     public static func decode(_ data: Data) throws -> AnalysisPolicyBundle {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in

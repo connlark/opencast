@@ -3,9 +3,7 @@ import OpenCastAnalysisProviders
 import OpenCastTranscription
 
 struct EpisodeAdAnalysisHTTPError: LocalizedError, Sendable, Equatable {
-    /// Worker cap-rejection codes (`Server/AdAnalysisWorker`): all three defer
-    /// the queue identically. Classification is status + code —
-    /// never the user-facing message string.
+    /// Classify by status and code, never by the message string.
     static let capExceededCodes: Set<String> = [
         "daily_request_cap_exceeded",
         "daily_input_token_cap_exceeded",
@@ -22,8 +20,7 @@ struct EpisodeAdAnalysisHTTPError: LocalizedError, Sendable, Equatable {
     var code: String
     var detail: String?
     var failure: OpenCastAdAnalysisFailure? = nil
-    /// What the listener is told about a device run's failure; `nil` for
-    /// the service's errors and for failures that are not the provider's.
+    /// Set only for a device run's provider failures.
     var listenerFailure: AnalysisProviderFailure? = nil
 
     var isCapExceeded: Bool {
@@ -35,11 +32,7 @@ struct EpisodeAdAnalysisHTTPError: LocalizedError, Sendable, Equatable {
         failure?.category == .interruptedJob || Self.transientJobFailureCodes.contains(code)
     }
 
-    /// A read of an accepted job that failed without a verdict: the worker's
-    /// untyped `job_unavailable` (its job object threw) or any untyped 5xx
-    /// such as the platform's plain-text 500. The poller retries the same
-    /// handle; a typed failure the job stored (`usage_limiter_error`,
-    /// `gemini_*`) stays terminal.
+    /// A typed failure the job stored stays terminal; only untyped ones are retried.
     var isTransientPollFailure: Bool {
         guard !isCapExceeded, !isTransientJobFailure else { return false }
         return code == Self.jobUnavailableCode
@@ -61,8 +54,7 @@ struct EpisodeAdAnalysisHTTPError: LocalizedError, Sendable, Equatable {
         case "ambiguous_legacy_job":
             return "This older ad-analysis job needs a new polling reference. Retry Detect Ads."
         case "gemini_quota_exhausted" where listenerFailure == nil:
-            // The service's shared key; a device run's quota is the
-            // listener's own and keeps its listener failure.
+            // The service's shared key; a device run's own quota keeps its listener failure.
             return "Promo/ad analysis is at capacity. Try again later."
         case "global_capacity_exhausted":
             return "Promo/ad analysis is at capacity today. Try again tomorrow."
@@ -81,9 +73,6 @@ struct EpisodeAdAnalysisHTTPError: LocalizedError, Sendable, Equatable {
 }
 
 extension EpisodeAdAnalysisHTTPError {
-    /// An error body as the ad-analysis service writes it, read the one way
-    /// both the service's replies and a device run's failures are read; a
-    /// body that is not one reads as `http_<status>`.
     init(statusCode: Int, body: Data, listenerFailure: AnalysisProviderFailure? = nil) {
         let errorResponse = try? EpisodeAdAnalysisJSONCoding.decoder()
             .decode(EpisodeAdAnalysisAPIErrorResponse.self, from: body)

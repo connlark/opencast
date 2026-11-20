@@ -1,12 +1,7 @@
 import Foundation
 
-/// Release-only lane router for draining Chapters & Summary jobs the service
-/// accepted before the update. It resolves the StoreKit
-/// environment once, then pins every request for this process to one
-/// concrete client — sandbox/TestFlight installs must exercise prod-staging
-/// billing, production installs the production lane. An unknown or failed
-/// environment lookup never falls back to a money/state lane; requests fail
-/// with the quiet `clientDisabled` error until resolution succeeds.
+/// Resolves the lane once and pins the process to it, so no request reaches a second
+/// money/state lane.
 actor TranscriptAnalysisRoutedAPIClient: EpisodeTranscriptAnalysisClient {
     private let environmentProvider: @Sendable () async throws -> RemoteTranscriptionStoreEnvironment
     private let clientFactory: @Sendable (

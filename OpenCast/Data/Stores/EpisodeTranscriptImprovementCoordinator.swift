@@ -2,11 +2,6 @@ import Foundation
 import Observation
 import SwiftData
 
-/// Drives the explicit "Improve Transcript" flow: an Apple Speech
-/// re-transcription of an episode that already has a completed Whisper
-/// transcript. Foreground-only by design — no background session is armed, so
-/// the existing lifecycle policy interrupts the run on backgrounding and the
-/// store's prior-transcript snapshot puts the Whisper transcript back.
 @Observable
 final class EpisodeTranscriptImprovementCoordinator {
     enum Phase: Equatable {
@@ -90,8 +85,6 @@ final class EpisodeTranscriptImprovementCoordinator {
         }
     }
 
-    /// "Stop" keeps the current transcript: the store restores the preserved
-    /// Whisper record and the banner disappears immediately.
     func cancel(modelContext: ModelContext) {
         guard isRunning else {
             return

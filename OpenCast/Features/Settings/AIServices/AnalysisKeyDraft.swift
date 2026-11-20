@@ -1,5 +1,4 @@
-/// The key typed into the key sheet. Its text has no textual or reflected
-/// form, so dumping the sheet's state never shows it.
+/// Has no textual or reflected form, so dumping the sheet's state never shows the key.
 nonisolated struct AnalysisKeyDraft: Equatable {
     var text = ""
 }

@@ -2,16 +2,10 @@ import Foundation
 import OpenCastAnalysis
 import OpenCastAnalysisProviders
 
-/// `reproject`: rewrites exchanges recorded before the recorder kept
-/// structured fields only (request with method, URL and body; the response
-/// body itself; a meta file) into today's records, through the same
-/// ``AnalysisExchangeRecord`` functions and verification the live recorder
-/// uses. Prints counts only.
+/// Prints counts only, never recorded text.
 struct Reproject {
     let arguments: Arguments
 
-    /// The meta fields a record keeps: the tool's own bookkeeping, numbers
-    /// and closed values.
     static let metaNumbers = ["timeout_s", "send_timeout_s", "seconds", "input_bound", "max_output", "status", "retry_after_s", "ledger_exit"]
     static let metaClosed: [String: Set<String>] = [
         "kind": ["generate", "count", "key_test"],
@@ -61,7 +55,6 @@ struct Reproject {
         return count
     }
 
-    /// The old meta reduced to the fields a record keeps.
     static func meta(_ old: JSONValue) -> JSONValue {
         guard case .object(let members) = old else { return .object([]) }
         var kept: [JSONMember] = []
@@ -91,7 +84,6 @@ struct Reproject {
 }
 
 extension Data {
-    /// Without the newline the recorder ended every file with.
     var trimmingTrailingNewline: Data {
         last == 0x0A ? dropLast() : self
     }

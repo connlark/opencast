@@ -1,17 +1,13 @@
 import SwiftUI
 
-/// The Automatic / List / Grid picker behind a toolbar icon, shared by the
-/// Library and the Group by Podcast Inbox. Checkmarks follow the stored
-/// choice (Automatic stays checked while it resolves to either layout); the
-/// icon follows the layout on screen. Persisting and haptics stay with the
-/// caller's binding, so each view keeps its own preference.
+/// Checkmarks follow the stored choice, so Automatic stays checked whichever layout it
+/// resolves to; the icon follows the layout on screen.
 struct LayoutPickerMenu<AdditionalItems: View>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @Binding var layout: LibraryLayoutPreference
     let resolvedLayout: LibraryLayout
     let title: String
-    /// Further menu items below the layout picker, such as the Library's Sort By.
     let additionalItems: AdditionalItems
 
     init(

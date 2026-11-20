@@ -1,9 +1,8 @@
 import RealityKit
 import SwiftUI
 
-/// Tracks when a `RealityView` has started drawing. Its placeholder goes away
-/// when the make closure returns, but the first frame still waits on shader
-/// compilation, so the 2D image underneath stays until the scene has ticked.
+/// A `RealityView` drops its placeholder when the make closure returns, but the first frame
+/// still waits on shader compilation, so the 2D image underneath stays until the scene ticks.
 @Observable
 final class SettingsAboutHeroFirstFrame {
     private(set) var hasRendered = false

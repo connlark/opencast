@@ -1,22 +1,13 @@
-/// Honest progress phases for a remote transcription request (parent plan's
-/// list, including the exact-device upload fallback leg).
 nonisolated enum RemoteTranscriptionRequestPhase: Equatable {
     case preparing
     case downloadingBoth
     case verifying
-    /// The server requested the device's exact copy (fallback only): never
-    /// shown on the normal simultaneous-download path.
     case uploadingExactCopy(completedParts: Int, totalParts: Int)
     case waitingForCredits
     case processing(RemoteTranscriptionActiveProgress)
     case saving
-    /// Local polling stopped while the server keeps working on the same
-    /// job. Not terminal: Resume re-attaches the persisted reference and a
-    /// user cancel is still available.
     case parkedOnServer(RemoteTranscriptionJobExit)
     case completed
-    /// The server proved it fetched different bytes; the existing local
-    /// transcription path is the way forward.
     case mismatchLocalFallback
     case failed(RemoteTranscriptionFailureCategory)
     case cancelled

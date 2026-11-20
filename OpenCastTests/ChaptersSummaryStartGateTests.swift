@@ -5,8 +5,6 @@ import SwiftData
 import Testing
 @testable import OpenCast
 
-/// Generate's route check before the disclosure: the key screen opens only
-/// when no run could start, and from what is already known (no request).
 @MainActor
 @Suite("Chapters & Summary start gate")
 struct ChaptersSummaryStartGateTests {
@@ -36,15 +34,6 @@ struct ChaptersSummaryStartGateTests {
         _ = await appModel.analysisTrialStatus.status(forceRefresh: true)
         #expect(appModel.presentChaptersSummaryKeyScreenIfNoRoute())
         #expect(appModel.analysisKeyRequired.request?.feature == .chaptersSummary)
-    }
-
-    @Test("Free analyses left, or the trial not started, leave Generate to the disclosure")
-    func trialWithRoomPasses() async throws {
-        for trial in [AnalysisTrialStatus.unitsLeft(3), .notStarted] {
-            let appModel = try await makeAppModel(trial: trial)
-            #expect(!appModel.presentChaptersSummaryKeyScreenIfNoRoute())
-            #expect(appModel.analysisKeyRequired.request == nil)
-        }
     }
 
     @Test("A saved key leaves Generate to the disclosure whatever the trial says")

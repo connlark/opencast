@@ -8,8 +8,6 @@ struct PlaybackSpeedView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var errorMessage: String?
 
-    /// The playing episode's show when it is subscribed; a one-off play has
-    /// no show to give a speed of its own.
     private var subscribedPodcastID: String? {
         guard let podcastID = appModel.playback.currentEpisode?.podcastID.rawValue,
               appModel.library.isActivelySubscribed(to: podcastID)
@@ -72,8 +70,6 @@ struct PlaybackSpeedView: View {
         }
     }
 
-    /// On, the show takes the speed playing now, so nothing audible changes;
-    /// off, it returns to the global speed at once.
     private func setCustomForShow(_ isOn: Bool) {
         guard let subscribedPodcastID else {
             return

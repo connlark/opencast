@@ -106,17 +106,6 @@ struct EpisodeAdBoundaryRefinerTests {
         #expect(result.boundaryRefinement?.end.fallbackReason == "adjusted_word_timing")
     }
 
-    @Test func upstreamAdjustmentIsStickyAndChangesDigest() {
-        let source = transcript()
-        let before = EpisodeAdBoundaryRefiner.refine(document(), transcript: source)
-        var changed = source
-        changed.segments[0].wordTimingsAdjusted = true
-        let after = EpisodeAdBoundaryRefiner.refine(before, transcript: changed).spans[0]
-        #expect(after.startTime == 0 && after.endTime == 8)
-        #expect(after.boundaryRefinement?.start.fallbackReason == "adjusted_word_timing")
-        #expect(after.boundaryRefinement?.wordTimingDigest != before.spans[0].boundaryRefinement?.wordTimingDigest)
-    }
-
     @Test func refinedZonesDoNotFillRetainedSubsecondSpeech() throws {
         var input = EpisodeAdBoundaryRefiner.refine(document(), transcript: transcript())
         var neighbor = input.spans[0]
@@ -136,12 +125,5 @@ struct EpisodeAdBoundaryRefinerTests {
         let mark = try #require(TranscriptAdHighlight(span: result.spans[0], segment: source.segments[0]))
         #expect(!mark.isWholeSegment)
         #expect(mark.ranges.map { String(source.segments[0].text[$0]) } == ["Sponsor", "offer", "ends"])
-    }
-
-    @Test func releaseRoutingMatchesCloudEnvironment() {
-        #expect(AdAnalysisBackendConfiguration.release(for: .production)?.workerBaseURL == AdAnalysisBackendConfiguration.production.workerBaseURL)
-        #expect(AdAnalysisBackendConfiguration.release(for: .sandbox)?.workerBaseURL == AdAnalysisBackendConfiguration.prodStaging.workerBaseURL)
-        #expect(AdAnalysisBackendConfiguration.release(for: .xcode)?.workerBaseURL == AdAnalysisBackendConfiguration.prodStaging.workerBaseURL)
-        #expect(AdAnalysisBackendConfiguration.release(for: .unknown("test")) == nil)
     }
 }

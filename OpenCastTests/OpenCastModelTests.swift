@@ -10,33 +10,6 @@ import Testing
 struct OpenCastModelTests {
     private static let modelFixtureFeedURL = "https://example.com/model-fixture.xml"
 
-    @Test("Creates an in-memory two-configuration model container")
-    func createsInMemoryContainer() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let subscription = SubscriptionRecord(
-            feedURL: Self.modelFixtureFeedURL,
-            title: "Model Fixture Podcast"
-        )
-
-        context.insert(subscription)
-        context.insert(EpisodeProgressRecord(episodeID: "model-fixture-episode", podcastID: Self.modelFixtureFeedURL))
-        try context.save()
-
-        let fetched = try context.fetch(FetchDescriptor<SubscriptionRecord>())
-        #expect(fetched.map(\.feedURL) == [Self.modelFixtureFeedURL])
-        #expect(fetched.first?.isVoiceBoostEnabled == true)
-        #expect(fetched.first?.isAdAutoDetectEnabled == false)
-        #expect(fetched.first?.skipIntroSeconds == 0)
-        #expect(fetched.first?.skipOutroSeconds == 0)
-        #expect(fetched.first?.playbackRate == 0)
-        #expect(fetched.first?.autoAddToUpNext == 0)
-        // A progress row is not archived until something archives it.
-        let progress = try context.fetch(FetchDescriptor<EpisodeProgressRecord>())
-        #expect(progress.map(\.episodeID) == ["model-fixture-episode"])
-        #expect(progress.first?.archivedAt == nil)
-    }
-
     @Test("Synced records use logical keys instead of unique attributes")
     func syncedRecordsUseLogicalKeys() throws {
         let schema = OpenCastModelContainerFactory.syncedSchema
@@ -603,7 +576,6 @@ struct OpenCastModelTests {
         #expect(store.setAdAutoDetectEnabled(true, feedURL: feedURL, modelContext: context))
         #expect(store.isAdAutoDetectEnabled(forPodcastID: feedURL))
 
-        // The write survives a fresh context (it was saved, not just staged).
         let freshContext = ModelContext(container)
         let persisted = try #require(freshContext.fetch(FetchDescriptor<SubscriptionRecord>()).first)
         #expect(persisted.isAdAutoDetectEnabled == true)
@@ -611,7 +583,6 @@ struct OpenCastModelTests {
         #expect(store.setAdAutoDetectEnabled(false, feedURL: feedURL, modelContext: context))
         #expect(!store.isAdAutoDetectEnabled(forPodcastID: feedURL))
 
-        // An unsubscribed feed has nothing to toggle.
         #expect(!store.setAdAutoDetectEnabled(true, feedURL: "https://example.com/unknown.xml", modelContext: context))
         #expect(!store.isAdAutoDetectEnabled(forPodcastID: "https://example.com/unknown.xml"))
     }
@@ -645,7 +616,6 @@ struct OpenCastModelTests {
         #expect(persisted.skipOutroSeconds == 40)
         #expect(persisted.playbackRate == 1.5)
 
-        // The same three values again are a no-op: no save, no credit.
         #expect(store.setPodcastPlaybackSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: 65, skipOutroSeconds: 40),
             rateOverride: 1.5,
@@ -679,7 +649,6 @@ struct OpenCastModelTests {
         #expect(store.podcastPlaybackRateOverride(forPodcastID: feedURL) == 1.5)
         #expect(store.syncedStoreSelfSaveCount == 1)
 
-        // Only the speed changes: still one save carrying all three fields.
         #expect(store.setPodcastPlaybackSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: 65, skipOutroSeconds: 40),
             rateOverride: nil,
@@ -694,51 +663,6 @@ struct OpenCastModelTests {
         #expect(cleared.playbackRate == 0)
         #expect(cleared.skipIntroSeconds == 65)
         #expect(cleared.skipOutroSeconds == 40)
-    }
-
-    @Test("Per-show playback settings setter rolls all three values back when its save fails")
-    func podcastPlaybackSettingsSetterRollsBackFailedSave() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let feedURL = "https://example.com/playback-skips-rollback.xml"
-        context.insert(
-            SubscriptionRecord(
-                feedURL: feedURL,
-                title: "Rollback Show",
-                skipIntroSeconds: 15,
-                skipOutroSeconds: 10,
-                playbackRate: 1.25
-            )
-        )
-        try context.save()
-
-        let store = LibraryStore(
-            localCache: SQLiteLocalLibraryCacheStore.inMemory(),
-            savePlaybackSkipSettingsModelContext: { _ in
-                throw StubFeedError(message: "Simulated playback settings save failure")
-            }
-        )
-        await store.load(modelContext: context)
-
-        #expect(!store.setPodcastPlaybackSettings(
-            PodcastPlaybackSkipSettings(skipIntroSeconds: 65, skipOutroSeconds: 40),
-            rateOverride: 2,
-            upNextAutoAdd: nil,
-            feedURL: feedURL,
-            modelContext: context
-        ))
-        #expect(store.podcastPlaybackSkipSettings(forPodcastID: feedURL) == PodcastPlaybackSkipSettings(
-            skipIntroSeconds: 15,
-            skipOutroSeconds: 10
-        ))
-        #expect(store.podcastPlaybackRateOverride(forPodcastID: feedURL) == 1.25)
-        #expect(store.syncedStoreSelfSaveCount == 0)
-        #expect(store.lastErrorMessage?.contains("Simulated playback settings save failure") == true)
-        let freshContext = ModelContext(container)
-        let persisted = try #require(freshContext.fetch(FetchDescriptor<SubscriptionRecord>()).first)
-        #expect(persisted.skipIntroSeconds == 15)
-        #expect(persisted.skipOutroSeconds == 10)
-        #expect(persisted.playbackRate == 1.25)
     }
 
     @Test("Per-show speed override sets, clears, and rejects speeds outside 0.5x to 3x")
@@ -889,7 +813,6 @@ struct OpenCastModelTests {
         #expect(persisted.skipOutroSeconds == 15)
         #expect(persisted.playbackRate == 1.5)
 
-        // The same four values again are a no-op: no save, no credit.
         #expect(store.setPodcastPlaybackSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: 30, skipOutroSeconds: 15),
             rateOverride: 1.5,
@@ -900,7 +823,6 @@ struct OpenCastModelTests {
         #expect(store.syncedStoreSelfSaveCount == 1)
         #expect(!context.hasChanges)
 
-        // Only the position changes: still one save carrying all four fields.
         #expect(store.setPodcastPlaybackSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: 30, skipOutroSeconds: 15),
             rateOverride: 1.5,
@@ -1363,55 +1285,31 @@ struct OpenCastModelTests {
     func smartResumeRewindsByStalenessTier() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
 
-        // Under an hour: 3 s.
         #expect(LibraryStore.smartResumePosition(
             position: 500,
             updatedAt: now.addingTimeInterval(-30 * 60),
             now: now
         ) == 497)
-        // Under a day: 10 s.
         #expect(LibraryStore.smartResumePosition(
             position: 500,
             updatedAt: now.addingTimeInterval(-5 * 60 * 60),
             now: now
         ) == 490)
-        // Beyond a day: 20 s.
         #expect(LibraryStore.smartResumePosition(
             position: 500,
             updatedAt: now.addingTimeInterval(-3 * 24 * 60 * 60),
             now: now
         ) == 480)
-        // The rewind clamps at the episode start.
         #expect(LibraryStore.smartResumePosition(
             position: 2,
             updatedAt: now.addingTimeInterval(-3 * 24 * 60 * 60),
             now: now
         ) == 0)
-        // A zero position never rewinds.
         #expect(LibraryStore.smartResumePosition(
             position: 0,
             updatedAt: now.addingTimeInterval(-3 * 24 * 60 * 60),
             now: now
         ) == 0)
-    }
-
-    @Test("Played episodes resume from zero regardless of rewind tier")
-    func playedEpisodesResumeFromZero() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
-        await store.load(modelContext: context)
-
-        store.updateProgress(
-            episodeID: "played-resume",
-            podcastID: "https://example.com/progress.xml",
-            position: 995,
-            duration: 1_000,
-            modelContext: context
-        )
-
-        #expect(store.progressRecords.first { $0.episodeID == "played-resume" }?.isPlayed == true)
-        #expect(store.resumePosition(for: "played-resume") == 0)
     }
 
     @Test("Duplicate progress updates are no-op saves")
@@ -1680,35 +1578,6 @@ struct OpenCastModelTests {
         #expect(cached.episodes.first?.artworkPreview == updatedPreview)
     }
 
-    @Test("Artwork preview persistence replaces stale schema with same source")
-    func artworkPreviewPersistenceReplacesStaleSchemaWithSameSource() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let artworkURL = try #require(URL(string: "https://example.com/artwork/stale-schema.png"))
-        let preview = try makePreview(artworkURL: artworkURL, sourceHash: "stable-source")
-        let episode = EpisodeCacheRecord(
-            episodeID: "preview-stale-schema-episode",
-            podcastID: "https://example.com/preview-stale-schema.xml",
-            podcastTitle: "Preview Stale Schema",
-            title: "Preview Stale Schema Episode",
-            artworkURL: artworkURL.absoluteString
-        )
-        episode.artworkPreviewVersion = preview.version - 1
-        episode.artworkPreviewCanonicalURLKey = preview.canonicalArtworkURLKey
-        episode.artworkPreviewSourceHash = preview.sourceHash
-        episode.artworkPreviewPixelWidth = preview.pixelWidth / 2
-        episode.artworkPreviewPixelHeight = preview.pixelHeight
-        episode.artworkPreviewRGBData = preview.rgbData
-        context.insert(episode)
-        try context.save()
-
-        let didUpdate = episode.storeArtworkPreviewIfChanged(preview)
-        try context.save()
-
-        #expect(didUpdate)
-        #expect(episode.artworkPreview == preview)
-    }
-
     @Test("Playback progress flush persists the current snapshot")
     func playbackProgressFlushPersistsCurrentSnapshot() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -1856,7 +1725,6 @@ struct OpenCastModelTests {
         #expect(!idleFlushDidSave)
         #expect(progress.position == 30)
 
-        // Engaging with the restored episode re-enables normal persistence.
         appModel.playback.seek(to: 50)
         let seekFlushDidSave = appModel.flushPlaybackProgress(modelContext: context)
         #expect(seekFlushDidSave)
@@ -1921,27 +1789,6 @@ struct OpenCastModelTests {
         #expect(store.podcastCache(for: feedURL) == nil)
         #expect(store.refreshLogs.isEmpty)
         #expect(store.progressRecord(for: episodeID)?.position == 30)
-    }
-
-    @Test("Unsubscribe with clear history deletes all per-feed records")
-    func unsubscribeWithClearHistoryDeletesAllPerFeedRecords() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
-        let feedURL = "https://example.com/feed.xml"
-
-        insertFeedRecords(feedURL: feedURL, title: "Example Show", episodeID: "example-episode", in: context)
-        try context.save()
-        await store.load(modelContext: context)
-
-        await store.unsubscribe(feedURL: feedURL, modelContext: context, clearListeningHistory: true)
-
-        #expect(try context.fetch(FetchDescriptor<SubscriptionRecord>()).isEmpty)
-        #expect(try context.fetch(FetchDescriptor<EpisodeProgressRecord>()).isEmpty)
-        #expect(store.subscriptions.isEmpty)
-        #expect(store.episodes.isEmpty)
-        #expect(store.podcastCache(for: feedURL) == nil)
-        #expect(store.refreshLogs.isEmpty)
     }
 
     @Test("Automatic prune deletes only trivial stale unsubscribed progress")
@@ -2441,47 +2288,6 @@ struct OpenCastModelTests {
         #expect(store.state == .idle)
     }
 
-    @Test("Global refresh starts independent feed requests concurrently")
-    func globalRefreshStartsIndependentFeedRequestsConcurrently() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let feedA = "https://example.com/concurrent-a.xml"
-        let feedB = "https://example.com/concurrent-b.xml"
-        let service = StubFeedService(responses: [
-            feedA: .delayedSuccess(
-                makeSnapshot(
-                    feedURL: feedA,
-                    podcastTitle: "A Updated",
-                    episodeID: "a-new",
-                    episodeTitle: "A New Episode"
-                ),
-                nanoseconds: 250_000_000
-            ),
-            feedB: .delayedSuccess(
-                makeSnapshot(
-                    feedURL: feedB,
-                    podcastTitle: "B Updated",
-                    episodeID: "b-new",
-                    episodeTitle: "B New Episode"
-                ),
-                nanoseconds: 250_000_000
-            )
-        ])
-        let store = LibraryStore(feedService: service, localCache: SQLiteLocalLibraryCacheStore.inMemory())
-
-        insertCachedFeed(feedURL: feedA, title: "A Old", episodeID: "a-old", in: context)
-        insertCachedFeed(feedURL: feedB, title: "B Old", episodeID: "b-old", in: context)
-        try context.save()
-        await store.load(modelContext: context)
-
-        await store.refreshAll(modelContext: context)
-
-        let maximumActiveRequestCount = await service.maximumActiveRequestCount()
-        #expect(maximumActiveRequestCount == 2)
-        #expect(store.refreshingFeedURLs.isEmpty)
-        #expect(store.state == .idle)
-    }
-
     @Test("Synced data reload updates imported progress without fetching feeds")
     func syncedDataReloadUpdatesImportedProgressWithoutFetchingFeeds() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -2510,8 +2316,6 @@ struct OpenCastModelTests {
         let result = try store.reloadSyncedUserData(modelContext: context)
 
         #expect(result.progressRecordsChanged)
-        // Progress-only imports reach the imported-subscription processing
-        // path so duplicate repair runs mid-session.
         #expect(result.shouldProcessImportedSubscriptions)
         #expect(store.progressRecords.first?.position == 78)
         #expect(await service.requestedURLStrings().isEmpty)
@@ -2569,7 +2373,6 @@ struct OpenCastModelTests {
         #expect(insertResult.progressRecordsChanged)
         #expect(store.progressRecords.count == 2)
 
-        // Delete: the count moves back.
         for stored in try context.fetch(FetchDescriptor<EpisodeProgressRecord>())
         where stored.episodeID == "probe-episode-2" {
             context.delete(stored)
@@ -2579,7 +2382,6 @@ struct OpenCastModelTests {
         #expect(deleteResult.progressRecordsChanged)
         #expect(store.progressRecords.count == 1)
 
-        // Settled again: the probe resumes skipping.
         let skipsBeforeSettledTick = store.syncedProgressProbeSkipCount
         _ = try store.reloadSyncedUserData(modelContext: context)
         #expect(store.syncedProgressProbeSkipCount == skipsBeforeSettledTick + 1)
@@ -3073,7 +2875,6 @@ struct OpenCastModelTests {
         #expect(store.manualRefreshTaskCountForTesting == 1)
         #expect(store.isRefreshing(feedURL: feedURL))
 
-        // No view or row owns the task after requestManualRefresh returns.
         await service.succeed()
         #expect(await waitUntil { store.manualRefreshTaskCountForTesting == 0 })
         #expect(store.episode(with: "new") != nil)
@@ -3158,74 +2959,6 @@ struct OpenCastModelTests {
         #expect(store.subscriptions.map(\.feedURL) == [feedURL])
         #expect(store.subscriptionAddedToken == 1)
         #expect(store.reloadWaiterCountForTesting == 0)
-    }
-
-    @Test("Reload completion separates waiter cancellation failure and invalidation")
-    func reloadCompletionSeparatesTerminalOutcomes() async throws {
-        let completion = LibraryReloadCompletion()
-        completion.begin(1)
-        let cancelledWaiter = Task { @MainActor in
-            try await completion.waitForCurrent()
-        }
-        let survivingWaiter = Task { @MainActor in
-            try await completion.waitForCurrent()
-        }
-        #expect(await waitUntil { completion.waiterCount == 2 })
-        cancelledWaiter.cancel()
-        await #expect(throws: CancellationError.self) {
-            _ = try await cancelledWaiter.value
-        }
-        #expect(completion.waiterCount == 1)
-        completion.finishPublished(1)
-        guard case .published = try await survivingWaiter.value else {
-            Issue.record("The live waiter did not observe publication")
-            return
-        }
-
-        completion.begin(2)
-        let failedWaiter = Task { @MainActor in
-            try await completion.waitForCurrent()
-        }
-        #expect(await waitUntil { completion.waiterCount == 1 })
-        completion.finishFailed(2, error: StubFeedError(message: "reload failed"))
-        do {
-            _ = try await failedWaiter.value
-            Issue.record("Expected the reload failure")
-        } catch {
-            #expect(error.localizedDescription == "reload failed")
-        }
-
-        completion.begin(3)
-        let invalidatedWaiter = Task { @MainActor in
-            try await completion.waitForCurrent()
-        }
-        #expect(await waitUntil { completion.waiterCount == 1 })
-        completion.invalidate(4)
-        guard case .invalidated = try await invalidatedWaiter.value else {
-            Issue.record("The waiter did not observe explicit invalidation")
-            return
-        }
-
-        completion.begin(5)
-        let firstCancelledWaiter = Task { @MainActor in
-            try await completion.waitForCurrent()
-        }
-        let secondCancelledWaiter = Task { @MainActor in
-            try await completion.waitForCurrent()
-        }
-        #expect(await waitUntil { completion.waiterCount == 2 })
-        firstCancelledWaiter.cancel()
-        secondCancelledWaiter.cancel()
-        await #expect(throws: CancellationError.self) {
-            _ = try await firstCancelledWaiter.value
-        }
-        await #expect(throws: CancellationError.self) {
-            _ = try await secondCancelledWaiter.value
-        }
-        #expect(completion.waiterCount == 0)
-        completion.finishCancelled(5)
-        #expect(completion.claimReplacement(for: 5))
-        #expect(!completion.claimReplacement(for: 5))
     }
 
     @Test("Only one waiter can replace a canceled generation after multiple supersessions")

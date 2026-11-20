@@ -1,11 +1,7 @@
 import SwiftUI
 
-/// A provider chip's visible label on a glass capsule, the same shape as the
-/// smart playlist rule chips: the capsule stays text-sized and the 44 pt
-/// frame outside the glass takes the tap. At accessibility sizes the glass
-/// becomes a rounded rectangle so a wrapped label stays inside it. The
-/// label style is set by the container: set inside a menu label, it crashed
-/// SwiftUI on iOS 27.
+/// The capsule stays text-sized and the 44 pt frame outside the glass takes the tap. The label
+/// style is set by the container: set inside a menu label, it crashed SwiftUI on iOS 27.
 struct AnalysisProviderChipLabel: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 

@@ -1,5 +1,6 @@
 import Foundation
 import OpenCastCore
+import Synchronization
 import Testing
 
 @Suite("Composite podcast directory service")
@@ -85,21 +86,31 @@ struct CompositePodcastDirectoryServiceTests {
     }
 
     @Test("Cancellation propagates into providers")
-    func cancellationPropagates() async throws {
+    func cancellationPropagates() async {
+        let cancelled = Mutex(0)
         let service = CompositePodcastDirectoryService(
-            apple: StubDirectoryProvider(searchResult: .success([appleResult]), delay: .seconds(30)),
-            podcastIndex: StubDirectoryProvider(searchResult: .success([podcastIndexResult]), delay: .seconds(30))
+            apple: StubDirectoryProvider(
+                searchResult: .success([appleResult]),
+                delay: .seconds(30),
+                onCancel: { cancelled.withLock { $0 += 1 } }
+            ),
+            podcastIndex: StubDirectoryProvider(
+                searchResult: .success([podcastIndexResult]),
+                delay: .seconds(30),
+                onCancel: { cancelled.withLock { $0 += 1 } }
+            ),
+            providerTimeout: .seconds(60)
         )
 
         let task = Task {
             try await service.search(query: "shows")
         }
-        try await Task.sleep(for: .milliseconds(20))
         task.cancel()
 
-        await #expect(throws: (any Error).self) {
+        await #expect(throws: CancellationError.self) {
             try await task.value
         }
+        #expect(cancelled.withLock { $0 } == 2)
     }
 
     @Test("Lookup goes to the Podcast Index provider")
@@ -122,10 +133,16 @@ private struct StubDirectoryProvider: PodcastDirectoryService {
     var searchResult: Result<[DirectoryPodcastResult], StubProviderError>
     var lookupResult: Result<DirectoryPodcastResult?, StubProviderError> = .success(nil)
     var delay: Duration = .zero
+    var onCancel: @Sendable () -> Void = {}
 
     func search(query: String) async throws -> [DirectoryPodcastResult] {
         if delay > .zero {
-            try await Task.sleep(for: delay)
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                onCancel()
+                throw error
+            }
         }
         return try searchResult.get()
     }

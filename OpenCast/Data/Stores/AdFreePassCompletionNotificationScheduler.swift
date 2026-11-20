@@ -2,10 +2,7 @@ import Foundation
 import OSLog
 import UserNotifications
 
-/// Posts the local "ad detection finished" notification when a queue drain
-/// ends while the scene is not active. Suppression happens at scheduling
-/// time — `willPresent` banners everything, so an active-scene drain must
-/// never reach `add`.
+/// `willPresent` banners everything, so an active-scene drain must never reach `add`.
 struct AdFreePassCompletionNotificationScheduler {
     static let threadIdentifier = "opencast-ad-free-pass-completion"
 
@@ -60,8 +57,7 @@ struct AdFreePassCompletionNotificationScheduler {
         notification.sound = .default
         notification.categoryIdentifier = OpenCastNotificationCategory.adFreePass
         notification.threadIdentifier = threadIdentifier
-        // The delegate's kind router only recognizes "episode" and
-        // "diagnostic"; this kind is a deliberate routing no-op.
+        // Deliberately a kind the notification delegate does not route.
         notification.userInfo = ["opencast": ["kind": "ad-free-pass"]]
         return notification
     }

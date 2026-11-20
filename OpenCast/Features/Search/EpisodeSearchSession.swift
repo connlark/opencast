@@ -6,9 +6,7 @@ final class EpisodeSearchSession {
     private(set) var results: [EpisodeSearchResult] = []
     private(set) var isSearching = false
     private(set) var isLoadingVisible = false
-    /// True while results come from the bounded fallback because the derived
-    /// index could not answer (not ready, rebuilding, or store failure).
-    /// Surfaces let the user know results are temporarily title-only.
+    /// True while results come from the bounded title-only fallback: the index could not answer.
     private(set) var isIndexedSearchUnavailable = false
     private var resultsKey: EpisodeSearchRequestKey?
 
@@ -20,10 +18,8 @@ final class EpisodeSearchSession {
     @ObservationIgnored private var cachedEpisodeCorpus: EpisodeSearchCorpusKey?
     @ObservationIgnored private var loadingPresentationTask: Task<Void, Never>?
 
-    /// `unindexedEpisodes` are episodes in `episodes` that the derived index
-    /// cannot serve (orphaned downloads whose podcast was unsubscribed and
-    /// whose cache rows are gone). When the indexed path answers, these are
-    /// matched with the legacy matcher and appended so they stay findable.
+    /// `unindexedEpisodes`, a subset of `episodes` the index cannot serve, are matched by the
+    /// legacy matcher and appended to indexed results.
     func update(
         episodes: [EpisodeListItemSnapshot],
         query: String,
@@ -55,8 +51,7 @@ final class EpisodeSearchSession {
             isSearching = true
             scheduleLoadingPresentation(for: key, delay: .zero)
         } else if !hasAnswer(compatibleWith: key) {
-            // Nothing has answered in this corpus and mode yet, so the
-            // debounce is part of the search: an empty list now means "not
+            // Nothing has answered in this corpus and mode yet, so an empty list now means "not
             // searched yet", not "no results".
             isSearching = true
         }
@@ -120,21 +115,16 @@ final class EpisodeSearchSession {
             return
         }
 
-        // An indexed provider reports cancellation as no result so the
-        // derived-index failure path can share the legacy fallback. Do not let
-        // a cancelled superseded request turn that nil into an expensive
-        // fallback scan.
+        // An indexed provider reports cancellation as nil, the same as an index failure; a
+        // superseded request must not turn that nil into a fallback scan.
         guard !Task.isCancelled, currentKey == key else {
             finishInterruptedSearch(for: key)
             return
         }
 
-        // A present provider answering nil means the derived index cannot
-        // serve right now. The plan's index-not-ready contract is a *bounded*
-        // fallback: match visible fields only and skip the show-notes corpus
-        // fetch — the full six-bucket scan is exactly the per-keystroke cost
-        // the index exists to eliminate. Callers with no indexed provider at
-        // all keep the complete legacy semantics.
+        // A provider answering nil cannot serve right now: fall back to visible fields only and
+        // skip the show-notes fetch, whose full scan is the per-keystroke cost the index removes.
+        // Callers with no provider keep the complete legacy search.
         let isBoundedFallback = indexedSearchProvider != nil
         isIndexedSearchUnavailable = isBoundedFallback
 
@@ -203,10 +193,9 @@ final class EpisodeSearchSession {
         episodes: [EpisodeListItemSnapshot],
         corpus: EpisodeSearchCorpusKey
     ) -> [String: EpisodeListItemSnapshot] {
-        // Without a caller-supplied revision the corpus key is a shape probe
-        // (count + boundary IDs + newest cachedAt) that a middle-of-list
-        // membership change can collide with, and a stale lookup silently
-        // drops index hits. Cache only when the key carries a real revision.
+        // Without a caller-supplied revision the corpus key is only a shape probe that a mid-list
+        // membership change can collide with, and a stale lookup drops index hits silently.
+        // Cache only with a real revision.
         if corpus.sourceRevision != nil,
            let cachedEpisodesByID,
            cachedEpisodeCorpus == corpus {

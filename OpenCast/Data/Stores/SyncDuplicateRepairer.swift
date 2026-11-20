@@ -2,23 +2,11 @@ import Foundation
 import OpenCastCore
 import SwiftData
 
-/// Repairs the CloudKit-synced store after imports: enforces deletion
-/// tombstones, merges logical duplicates, and garbage-collects spent
-/// tombstones. Winner selection follows Apple's CloudKit dedupe pattern —
-/// the copy with the smallest synced `dedupeUUID` survives (playlist items
-/// keep the newest `addedAt` instead; see `PlaylistSyncRepairer.keptItem`),
-/// so every device independently keeps the same record instead of
-/// cross-deleting each other's picks. The synced models have no
-/// relationships, so losing copies are hard-deleted.
 enum SyncDuplicateRepairer {
-    /// Tombstones older than this are garbage collected. A device offline
-    /// longer than the horizon can resurrect records the tombstone would have
-    /// killed; repeating the delete still converges, so a long horizon is
-    /// enough without tracking per-device sync watermarks.
+    /// A device offline longer than this can resurrect what a tombstone killed; repeating the
+    /// delete still converges, so no per-device sync watermark is needed.
     static let tombstoneRetentionPeriod: TimeInterval = 180 * 24 * 60 * 60
 
-    /// `save` is the caller's synced-store save (the self-save ledger in
-    /// production); it runs only when the pass changed the store.
     static func repair(
         modelContext: ModelContext,
         claimedFeedURLsByEpisodeID: [String: String] = [:],
@@ -49,14 +37,11 @@ enum SyncDuplicateRepairer {
 
     // MARK: - Tombstones
 
-    /// Per-key latest deletion instants, keyed by canonical identifiers so
-    /// records with drifted raw URLs still match.
     private struct TombstoneIndex {
         var subscriptionClearsByFeedURL: [String: Date] = [:]
         var progressClearsByFeedURL: [String: Date] = [:]
-        // Keyed by episode ID alone: episode identity can come from fallback
-        // hashes (audio URL, title+date) that are shared across raw feed-URL
-        // variants of the same show, and the progress index unifies on it.
+        // Episode ID alone: fallback episode IDs are shared across raw feed-URL variants of a
+        // show, and the progress index unifies on it.
         var progressClearsByEpisodeID: [String: Date] = [:]
 
         init(_ tombstones: [SyncTombstoneRecord]) {
@@ -73,11 +58,8 @@ enum SyncDuplicateRepairer {
                     }
                     merge(&progressClearsByEpisodeID, key: episodeID, deletedAt: tombstone.deletedAt)
                 case .playlist, .playlistItem:
-                    // Reserved and never written (playlist deletes use
-                    // `PlaylistTombstoneRecord`): known so hygiene never
-                    // deletes a stray one as unknown, and nothing indexes,
-                    // matches or supersedes them; only the retention horizon
-                    // collects them.
+                    // Reserved and never written; known so hygiene does not delete a stray one as
+                    // malformed. Only the retention horizon collects them.
                     continue
                 case nil:
                     continue
@@ -126,9 +108,6 @@ enum SyncDuplicateRepairer {
         }
     }
 
-    /// Deletes tombstones that no longer protect anything: ones superseded by
-    /// a newer tombstone with the same scope and key, and ones past the
-    /// retention horizon.
     private static func collectSpentTombstones(
         _ tombstones: [SyncTombstoneRecord],
         index: TombstoneIndex,
@@ -205,25 +184,19 @@ enum SyncDuplicateRepairer {
             title: bestTitle(in: sortedRecords),
             author: bestOptionalText(in: sortedRecords, keyPath: \.author),
             artworkURL: bestOptionalText(in: sortedRecords, keyPath: \.artworkURL),
-            // Newest, not earliest: `subscribedAt` gates subscription
-            // tombstones, and a merge that inherited a stale twin's old date
-            // would drag a legitimate resubscribe behind an in-flight
-            // tombstone and get it killed.
+            // Newest, not earliest: `subscribedAt` gates subscription tombstones, and a stale
+            // twin's date would drag a resubscribe behind an in-flight tombstone.
             subscribedAt: records.map(\.subscribedAt).max() ?? sortedRecords[0].subscribedAt,
             lastRefreshAt: records.compactMap(\.lastRefreshAt).max(),
             isArchived: records.allSatisfy(\.isArchived),
             isVoiceBoostEnabled: records.allSatisfy(\.isVoiceBoostEnabled),
             // Auto-detect defaults off, so an explicit opt-in on any duplicate wins.
             isAdAutoDetectEnabled: records.contains(where: \.isAdAutoDetectEnabled),
-            // Same OR-merge: the opt-in defaults off, so any duplicate that
-            // carries an explicit consent wins the merge.
             isTranscriptAnalysisEnabled: records.contains(where: \.isTranscriptAnalysisEnabled),
             skipIntroSeconds: mergedSkipSettings.skipIntroSeconds,
             skipOutroSeconds: mergedSkipSettings.skipOutroSeconds,
-            // Greatest valid speed, the skips' rule: order-independent, so
-            // every peer merges the group to the same value.
+            // Order-independent merges, so every peer merges the group to the same value.
             playbackRate: PodcastPlaybackRateOverride.merged(records.map(\.playbackRate)),
-            // Top over bottom over off: order-independent, like the speed.
             autoAddToUpNext: UpNextAutoAddPosition.merged(records.map(\.autoAddToUpNext))
         )
 
@@ -247,11 +220,9 @@ enum SyncDuplicateRepairer {
                 modelContext.delete(record)
             }
         } else {
-            // Legacy copies without dedupe identities: peers could pick
-            // opposite survivors and cross-delete both. Replace the whole
-            // group with one freshly identified record; if another peer
-            // inserts its own replacement, the next pass converges on the
-            // smaller UUID.
+            // Without dedupe identities peers could pick opposite survivors and cross-delete
+            // both, so one freshly identified record replaces the group; if another peer does
+            // the same, the next pass converges on the smaller UUID.
             modelContext.insert(
                 SubscriptionRecord(
                     feedURL: merged.feedURL,
@@ -292,11 +263,8 @@ enum SyncDuplicateRepairer {
         var survivors: [EpisodeProgressRecord] = []
         survivors.reserveCapacity(records.count)
         for record in records {
-            // Re-key variant records first: a progress row written under a
-            // raw feed-URL variant (http vs https, bare host) of the show
-            // that unambiguously claims its episode would otherwise dodge
-            // every feed-scoped delete, tombstone, and duplicate group while
-            // still surfacing through the episode-keyed progress index.
+            // Re-key before the tombstone check: a row under a raw feed-URL variant would
+            // otherwise dodge every feed-scoped delete, tombstone and duplicate group.
             var canonicalFeedURL = URLCanonicalizer.canonicalString(forRawString: record.podcastID)
             if let claimedFeedURL = claimedFeedURLsByEpisodeID[record.episodeID],
                claimedFeedURL != canonicalFeedURL {
@@ -333,9 +301,6 @@ enum SyncDuplicateRepairer {
         }
     }
 
-    /// Internal (not private): episode-identity reconciliation re-keys an
-    /// old-ID progress record onto its successor ID and reuses this merge
-    /// when a record already exists under the new ID.
     static func mergeProgressGroup(
         _ records: [EpisodeProgressRecord],
         key: EpisodeKey,
@@ -381,11 +346,8 @@ enum SyncDuplicateRepairer {
 
     // MARK: - Winner selection and merge helpers
 
-    /// The surviving copy must be a pure function of synced immutable
-    /// identity, never of mutable content: peers can transiently see
-    /// different field values for the same records and would cross-delete
-    /// each other's content-based picks. Returns nil when no copy carries an
-    /// identity (all predate the field).
+    /// The survivor must depend only on synced immutable identity, never on content: peers can
+    /// transiently see different field values and would cross-delete each other's picks.
     static func deterministicWinner<Record: AnyObject>(
         in records: [Record]
     ) -> Record? where Record: DedupeIdentified {
@@ -517,8 +479,6 @@ enum SyncDuplicateRepairer {
     }
 }
 
-/// Shared shape for `deterministicWinner`; every synced record model that
-/// repair merges carries a stable dedupe identity.
 protocol DedupeIdentified {
     var dedupeUUID: String { get }
 }

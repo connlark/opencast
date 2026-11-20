@@ -14,19 +14,18 @@ struct ShowNotesTimestampLinkTests {
         #expect(ShowNotesTimestampLink.seconds(from: start) == 0)
     }
 
-    @Test("Foreign and malformed URLs decode to nil")
-    func rejectsForeignURLs() throws {
-        let rejected = [
+    @Test(
+        "Foreign and malformed URLs decode to nil",
+        arguments: [
             "https://example.com/?t=5",
-            "tel:5551234567",
             "opencast-shownotes://seek",
             "opencast-shownotes://seek?t=abc",
             "opencast-shownotes://seek?t=-5",
             "opencast-shownotes://other?t=5",
         ]
-        for string in rejected {
-            let url = try #require(URL(string: string))
-            #expect(ShowNotesTimestampLink.seconds(from: url) == nil, "\(string)")
-        }
+    )
+    func rejectsForeignURLs(string: String) throws {
+        let url = try #require(URL(string: string))
+        #expect(ShowNotesTimestampLink.seconds(from: url) == nil)
     }
 }

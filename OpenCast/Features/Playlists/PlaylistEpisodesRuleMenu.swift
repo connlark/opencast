@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// The Episodes chip: the played-state filter, then Downloaded Only as its
-/// own clause, so "unplayed and downloaded" is one rule.
 struct PlaylistEpisodesRuleMenu: View {
     let rule: PlaylistRule
     let onChange: (PlaylistRule) -> Void

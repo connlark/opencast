@@ -1,10 +1,5 @@
 import SwiftUI
 
-/// Floating notice shown while the current player item is not proven to be
-/// the audio asset the transcript describes. Follow-along stays suspended in
-/// this state so karaoke never fakes synchronization against a different
-/// audio assembly, and the switch action restarts playback from the exact
-/// downloaded copy the transcript was generated from when it still exists.
 struct TranscriptSourceMismatchBanner: View {
     let canSwitchToTranscribedCopy: Bool
     let switchToTranscribedCopy: () -> Void

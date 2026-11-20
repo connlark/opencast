@@ -1,9 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// The queue as the sheet and the Now Playing pane show it: its own stack
-/// around `UpNextQueueContent`, a row plays its episode, and the sheet
-/// closes after it does.
 struct UpNextQueueView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss

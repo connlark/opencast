@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// One note as both the episode detail card and the Now Playing sheet row
-/// show it: the timestamp (which seeks) above a button holding everything
-/// else, which opens the editor.
 struct EpisodeNoteRowContent: View {
     let note: EpisodeNoteRecord
     let onSeek: (TimeInterval) -> Void

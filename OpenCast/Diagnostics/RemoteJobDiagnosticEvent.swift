@@ -1,16 +1,8 @@
 import Foundation
 import OpenCastTranscription
 
-/// One typed, privacy-safe Release diagnostic record for the remote job
-/// lanes (Transcribe Remotely and the cloud ad-detection pass).
-///
-/// Every field is a closed vocabulary value, an opaque identifier, a count
-/// or a duration. There is no free-form string: the server state encodes
-/// through the wire enum with unknown values reduced to `unknown`, and
-/// errors enter only through `RemoteJobDiagnosticError`, which keeps a
-/// domain and code and drops the description. The sink that persists these
-/// events is separate from the DEBUG-only pass run log, which records
-/// titles.
+/// No free-form string: every field is a closed vocabulary value, an opaque identifier, a
+/// count or a duration.
 nonisolated struct RemoteJobDiagnosticEvent: Codable, Sendable, Equatable {
     enum Component: String, Codable, Sendable, CaseIterable {
         case runner
@@ -54,7 +46,6 @@ nonisolated struct RemoteJobDiagnosticEvent: Codable, Sendable, Equatable {
         case notificationSuppressed
     }
 
-    /// The request leg or local step an event describes.
     enum Leg: String, Codable, Sendable, CaseIterable {
         case bootstrap
         case create
@@ -72,11 +63,9 @@ nonisolated struct RemoteJobDiagnosticEvent: Codable, Sendable, Equatable {
         case importTranscript
     }
 
-    /// What happened to the persisted reference as a result of the event.
-    /// The `skipped…` values carry a `reattachSkipped` event's reason; the
-    /// reference is retained in every one of them. The `suppressed…` values
-    /// and `deliveryFailed` carry a `notificationSuppressed` event's reason
-    /// and say nothing about the reference.
+    /// `skipped…` values give a `reattachSkipped` reason, and the reference is retained;
+    /// `suppressed…` values and `deliveryFailed` give a `notificationSuppressed` reason and say
+    /// nothing about the reference.
     enum Disposition: String, Codable, Sendable, CaseIterable {
         case retained
         case attached
@@ -108,8 +97,7 @@ nonisolated struct RemoteJobDiagnosticEvent: Codable, Sendable, Equatable {
     let attempt: Int?
     let elapsedMilliseconds: Int?
     let httpStatus: Int?
-    /// The server's poll state. A state this client does not know encodes
-    /// as `unknown`, never as the server's raw string.
+    /// An unknown state encodes as `unknown`, never as the server's raw string.
     let serverState: OpenCastRemoteTranscriptionJobState?
     let error: RemoteJobDiagnosticError?
     let disposition: Disposition?
@@ -146,16 +134,13 @@ nonisolated struct RemoteJobDiagnosticEvent: Codable, Sendable, Equatable {
         self.disposition = disposition
     }
 
-    /// The complete set of top-level keys an encoded event may carry. A sink
-    /// or test can reject anything else.
+    /// A new field must be listed here, or the log drops every event that carries it.
     static let allowedFieldNames: Set<String> = [
         "timestamp", "component", "kind", "episodeID", "jobID", "clientRequestID",
         "purpose", "leg", "attempt", "elapsedMilliseconds", "httpStatus",
         "serverState", "error", "disposition",
     ]
 
-    /// The encoded form of a server state: known wire values verbatim,
-    /// anything else collapsed to `unknown`.
     static func encodedServerState(_ state: OpenCastRemoteTranscriptionJobState) -> String {
         if case .unknown = state {
             return "unknown"
@@ -208,8 +193,8 @@ nonisolated struct RemoteJobDiagnosticEvent: Codable, Sendable, Equatable {
     }
 }
 
-/// A sink for typed remote-job diagnostics. Implementations must be safe to
-/// call from any isolation and must not block the caller on file I/O.
+/// Implementations must be safe from any isolation and must not block the caller on file
+/// I/O.
 nonisolated protocol RemoteJobDiagnosticSink: Sendable {
     func record(_ event: RemoteJobDiagnosticEvent)
 }

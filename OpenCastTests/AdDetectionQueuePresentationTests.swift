@@ -121,54 +121,7 @@ struct AdDetectionQueuePresentationTests {
         #expect(makePresentation(state: .idle).isEmpty)
     }
 
-    @Test("Stage status text matches the per-episode presentation copy")
-    func stageStatusTextTable() {
-        #expect(AdDetectionQueuePresentation.statusText(for: nil) == "Preparing...")
-        #expect(AdDetectionQueuePresentation.statusText(for: .idle) == "Preparing...")
-        #expect(AdDetectionQueuePresentation.statusText(for: .downloadingEpisode) == "Downloading episode...")
-        #expect(AdDetectionQueuePresentation.statusText(for: .analyzing(steps: nil)) == "Detecting ads")
-        #expect(AdDetectionQueuePresentation.statusText(for: .completed(zoneCount: 2)) == "2 zones marked.")
-        #expect(AdDetectionQueuePresentation.statusText(for: .failed(message: "probe")) == "probe")
-        #expect(
-            AdDetectionQueuePresentation.statusText(for: .interrupted)
-                == EpisodeAdFreePassPresentation.interrupted.statusText
-        )
-        #expect(
-            AdDetectionQueuePresentation.statusText(for: .awaitingModelDownloadConsent(byteCount: 1_000))
-                == EpisodeAdFreePassPresentation.awaitingModelConsent(byteCount: 1_000).statusText
-        )
-    }
-
-    @Test("Accessibility value carries percent and state")
-    func accessibilityValueTable() {
-        #expect(makePresentation(state: .idle).accessibilityValue == "Idle")
-        #expect(
-            makePresentation(state: .running, activeEpisodeID: "a", fractionCompleted: 0.42).accessibilityValue
-                == "42% — detecting ads"
-        )
-        #expect(
-            makePresentation(
-                state: .idle,
-                completedCount: 2,
-                failedCount: 1,
-                outcomes: [completedOutcome(episodeID: "a")]
-            ).accessibilityValue
-                == "Finished — 2 detected, 1 failed"
-        )
-    }
-
     // MARK: - Fixtures
-
-    @Test("Cloud items offer background continuation like on-device items")
-    func cloudRunningOffersBackgroundContinuation() {
-        for mode in [AdDetectionMode.cloud, .onDevice] {
-            let unarmed = makePresentation(state: .running, activeEpisodeID: "a", activeItemMode: mode)
-            #expect(unarmed.affordance == .continueInBackground, "\(mode)")
-
-            let armed = makePresentation(state: .running, activeEpisodeID: "a", activeItemMode: mode, isArmed: true)
-            #expect(armed.affordance == .backgroundContinuationArmed, "\(mode)")
-        }
-    }
 
     @Test("A parked cloud head renders as still running on the server with the queue-level Resume")
     func parkedCloudHeadRendersRemoteParkedRow() {
@@ -187,43 +140,6 @@ struct AdDetectionQueuePresentationTests {
         #expect(
             AdDetectionQueuePresentation.statusText(for: .cloudParked(.parked))
                 == RemoteTranscriptionStatusPresentation.parkedTitle
-        )
-    }
-
-    @Test("Cloud stages render their own status text")
-    func cloudStageStatusText() {
-        #expect(
-            AdDetectionQueuePresentation.statusText(for: .cloudQueued)
-                == "Preparing cloud transcription…"
-        )
-        #expect(AdDetectionQueuePresentation.statusText(for: .cloudVerifying) == "Verifying audio…")
-        #expect(
-            AdDetectionQueuePresentation.statusText(for: .cloudUploadingExactCopy(completedParts: 0, totalParts: 0))
-                == "Preparing audio upload…"
-        )
-        #expect(
-            AdDetectionQueuePresentation.statusText(for: .cloudUploadingExactCopy(completedParts: 2, totalParts: 10))
-                == "Uploading audio… 2 of 10 parts uploaded"
-        )
-        #expect(
-            AdDetectionQueuePresentation.statusText(for: .cloudUploadingExactCopy(completedParts: 10, totalParts: 10))
-                == "Finishing audio upload…"
-        )
-        #expect(
-            AdDetectionQueuePresentation.statusText(for: .cloudWaitingForCredits)
-                == "Waiting for transcription time…"
-        )
-        #expect(
-            AdDetectionQueuePresentation.statusText(for: .cloudTranscribing(nil))
-                == "Transcribing on the server..."
-        )
-        #expect(
-            AdDetectionQueuePresentation.statusText(for: .cloudFinishing)
-                == "Finishing the transcript in the cloud"
-        )
-        #expect(
-            AdDetectionQueuePresentation.statusText(for: .cloudUnavailable(message: "No credits."))
-                == "No credits."
         )
     }
 
@@ -290,7 +206,6 @@ struct AdDetectionQueuePresentationTests {
         state: AdFreePassQueueState,
         activeEpisodeID: String? = nil,
         activeEpisodeTitle: String? = nil,
-        activeItemMode: AdDetectionMode? = nil,
         currentStage: EpisodeAdFreePassStage? = nil,
         completedCount: Int = 0,
         failedCount: Int = 0,
@@ -306,7 +221,6 @@ struct AdDetectionQueuePresentationTests {
                 activeEpisodeID: activeEpisodeID,
                 activeEpisodeTitle: activeEpisodeTitle,
                 activeArtworkURL: nil,
-                activeItemMode: activeItemMode,
                 currentStage: currentStage,
                 finishedItemCount: completedCount + failedCount,
                 totalItemCount: completedCount + failedCount

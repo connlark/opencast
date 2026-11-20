@@ -1,30 +1,23 @@
 import DeviceCheck
 import Foundation
 
-/// How this build signs requests to the trial service.
 nonisolated enum TrialProxyAuthentication: Sendable, Equatable {
     #if DEBUG
-    /// The service's operator bearer, for simulators, which cannot attest.
+    /// For simulators, which cannot attest.
     case bearer(clientToken: String)
     #endif
     case appAttest(keychainService: String)
 }
 
-/// The trial service this build talks to, chosen the way the other
-/// analysis services are: Debug builds use the development deployment (or
-/// an override), internal builds and TestFlight use prod-staging, and App
-/// Store builds use the bundle's trial endpoint. An unknown StoreKit
-/// environment has no trial route.
 nonisolated struct TrialProxyBackendConfiguration: Sendable, Equatable {
     let baseURL: URL
     let authentication: TrialProxyAuthentication
 
-    /// Whether this device can sign for the service right now.
     var canAuthenticate: Bool {
         canAuthenticate(appAttestSupported: DCAppAttestService.shared.isSupported)
     }
 
-    func canAuthenticate(appAttestSupported: Bool) -> Bool {
+    private func canAuthenticate(appAttestSupported: Bool) -> Bool {
         switch authentication {
         #if DEBUG
         case .bearer: true
@@ -41,9 +34,6 @@ nonisolated struct TrialProxyBackendConfiguration: Sendable, Equatable {
         authentication: .appAttest(keychainService: TrialProxyAppAttestKeychainServices.prodStaging)
     )
 
-    /// The configuration for this build. `trialEndpoint` is the bundle's
-    /// `trial.endpoint`; normal build routing reads `storeEnvironment` only
-    /// in App Store and TestFlight builds.
     static func resolve(
         trialEndpoint: URL,
         routing: AnalysisBackendRouting = .currentBuild,
@@ -86,8 +76,7 @@ nonisolated struct TrialProxyBackendConfiguration: Sendable, Equatable {
         }
     }
 
-    /// An absolute http(s) URL with a host and no path, query, fragment or
-    /// user info: the request binding signs the bare route path.
+    /// No path, query or user info: the request binding signs the bare route path.
     static func originURL(_ value: String) -> URL? {
         guard let trimmed = value.trimmedNonEmpty,
               let components = URLComponents(string: trimmed),

@@ -1,6 +1,5 @@
 import Foundation
 
-/// The trial service's answer to `POST /v1/trial/status`.
 nonisolated struct AnalysisTrialProxyStatus: Codable, Sendable, Hashable {
     enum Mode: String, Codable, Sendable, Hashable {
         /// Before the trial starts: every install is served without a count.
@@ -20,7 +19,6 @@ nonisolated struct AnalysisTrialProxyStatus: Codable, Sendable, Hashable {
         case monthPaused = "month_paused"
     }
 
-    /// The status the key notice and key screen show.
     var trialStatus: AnalysisTrialStatus {
         switch mode {
         case .open: .notStarted

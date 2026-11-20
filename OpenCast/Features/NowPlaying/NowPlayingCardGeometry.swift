@@ -1,57 +1,31 @@
 import SwiftUI
 
-/// Where the Now Playing card and its fixed chrome sit, with each window
-/// inset applied once. The inputs, an allocation and `cardFrame` are in the
-/// window reader's space; every other value is card-local. x is measured
-/// from the leading edge throughout: the reserved regions' default `.mirrors`
-/// behaviour and SwiftUI's leading padding agree on it, so a right-to-left
-/// layout mirrors the whole card.
+/// `cardFrame` and the allocation are in the window reader's space; every other value is
+/// card-local. x is leading-relative, so a right-to-left layout mirrors the whole card.
 nonisolated struct NowPlayingCardGeometry: Equatable {
-    /// The More button's frame (`NowPlayingMoreMenu`).
     static let moreDiameter: CGFloat = 44
-    /// The fold band's clearance from the title block and the progress section.
     static let foldClearance: CGFloat = 16
 
-    /// A full-screen card's More row starts 62 pt below the window's top edge,
-    /// or at the safe top when that is lower.
     private static let compactMoreTop: CGFloat = 62
-    /// The regular card sits below the window's top inset, so its More counts
-    /// from its own safe top.
     private static let regularMoreClearance: CGFloat = 18
     private static let moreSideClearance: CGFloat = 20
-    /// The toasts start this far below More's top.
     private static let toastBelowMore: CGFloat = 48
     private static let toastSideClearance: CGFloat = 16
 
     let cardFrame: CGRect
-    /// The part of the window's safe area the card overlaps. A compact card's
-    /// content keeps the card's full width, so its sides are zero there.
     let contentInsets: EdgeInsets
-    /// Where the content's stack starts: the safe top, then the content's own
-    /// top clearance.
     let contentTopPadding: CGFloat
-    /// Today's top padding, measured from the card's top edge: the basis of the
-    /// artwork's upper bound, which the safe area does not move.
+    /// From the card's top edge, not the safe top: the safe area does not move the artwork bound.
     let artworkBoundTopPadding: CGFloat
-    /// The safe bottom (or a bottom occlusion region), then
-    /// `contentBottomClearance`.
     let contentBottomPadding: CGFloat
-    /// The content's own bottom clearance.
     let contentBottomClearance: CGFloat
-    /// More sits top-trailing as it always has, and moves to the top-leading
-    /// corner only where an active occlusion region covers the top-trailing
-    /// one (the iPhone Duo's outer display, where the status cluster sits).
     let moreIsLeading: Bool
-    /// More's top-left corner in leading-relative coordinates.
     let moreOrigin: CGPoint
     let toastLeadingPadding: CGFloat
     let toastTrailingPadding: CGFloat
-    /// The active occlusion regions that reach the card, card-local.
     let occlusions: [CGRect]
-    /// No interactive control in the stack starts above this: the lowest
-    /// bottom edge of the occlusion regions over the top of the content.
+    /// No interactive control in the stack starts above this.
     let controlsMinY: CGFloat
-    /// Laptop's band across the card, as card-local y.
     let horizontalFold: ClosedRange<CGFloat>?
 
     init(
@@ -73,10 +47,6 @@ nonisolated struct NowPlayingCardGeometry: Equatable {
         )
     }
 
-    /// The player in a window-sized surface: the whole window for one card,
-    /// or the half a split gives it. Regular metrics inside the allocation;
-    /// a vertical band across it confines the card to the band's leading side
-    /// (its trailing side when nothing of the allocation is leading).
     init(
         allocation: CGRect,
         windowSize: CGSize,
@@ -131,10 +101,8 @@ nonisolated struct NowPlayingCardGeometry: Equatable {
             moreTop = safe.top + Self.regularMoreClearance
         } else {
             let isShort = card.height < (isAccessibilitySize ? 700 : 720)
-            // Today's 92 / 150 were measured from the window's top with the
-            // status bar inside them; below the safe top the tall phone's 150
-            // is 88 (its 62 pt inset). The accessibility values were already
-            // meant below the safe top.
+            // The clearance counts from the safe top and the artwork bound from the card's top:
+            // the tall phone's 150 below its 62 pt inset is 88.
             let clearance: CGFloat = if isAccessibilitySize {
                 isShort ? 14 : 28
             } else {
@@ -177,8 +145,6 @@ nonisolated struct NowPlayingCardGeometry: Equatable {
         }
     }
 
-    /// The toasts' top edge for a toast of the measured height: 48 pt below
-    /// More's top, moved below any occlusion region the toast would overlap.
     func toastTop(height: CGFloat) -> CGFloat {
         Self.below(
             occlusions,
@@ -191,9 +157,6 @@ nonisolated struct NowPlayingCardGeometry: Equatable {
         ).minY
     }
 
-    /// A compact card is the window. A regular card keeps today's size,
-    /// bottom-aligned and centred in the window, or in Book in the band's
-    /// leading side.
     private static func placeCard(windowSize: CGSize, isRegular: Bool, pose: WindowPose) -> CGRect {
         guard isRegular else {
             return CGRect(origin: .zero, size: windowSize)
@@ -214,8 +177,6 @@ nonisolated struct NowPlayingCardGeometry: Equatable {
         )
     }
 
-    /// The part of an allocation clear of a vertical band: the leading side,
-    /// or the trailing side when the allocation has nothing leading of it.
     private static func confine(_ allocation: CGRect, pose: WindowPose) -> CGRect {
         guard case .foldedVertical(let band) = pose,
               overlaps(allocation.minX...allocation.maxX, band.minX...band.maxX)
@@ -233,8 +194,6 @@ nonisolated struct NowPlayingCardGeometry: Equatable {
         )
     }
 
-    /// The window's safe insets as they fall on the card: zero where the card
-    /// already sits inside the safe rectangle.
     private static func safeInsets(card: CGRect, windowSize: CGSize, safeAreaInsets: EdgeInsets) -> EdgeInsets {
         EdgeInsets(
             top: max(0, safeAreaInsets.top - card.minY),
@@ -244,7 +203,6 @@ nonisolated struct NowPlayingCardGeometry: Equatable {
         )
     }
 
-    /// Moves `frame` down below every region it overlaps.
     private static func below(_ regions: [CGRect], _ frame: CGRect) -> CGRect {
         var frame = frame
         while let region = regions.first(where: { overlaps($0, frame) }) {

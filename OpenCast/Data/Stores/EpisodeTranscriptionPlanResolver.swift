@@ -1,28 +1,16 @@
 import Foundation
 import OpenCastTranscription
 
-/// Product engine resolution: Apple Speech whenever the device
-/// and the podcast's locale support it — installing assets on demand — with
-/// whisper tiny.en as the automatic fallback. Explicit DEBUG overrides stay
-/// engine-strict.
 struct EpisodeTranscriptionPlanResolver {
     static let fallbackLanguageCode = "en-US"
     static let whisperRunLanguageCode = "en"
 
     let transcriptionModels: TranscriptionModelStore
     let appleSpeechAssets: AppleSpeechAssetStore
-    /// Armed pass drains run under a
-    /// continued-processing task the system may revoke at any time — no
-    /// documented budget, no background resubmission (DTS-confirmed). Apple
-    /// Speech restarts from zero after revocation, so on devices without
-    /// background GPU an armed pass could lose the whole transcript every
-    /// revocation. Callers on that path set this to prefer whisper tiny,
-    /// whose window checkpoints survive revocation.
+    /// Whisper tiny's window checkpoints survive the system revoking a continued-processing task;
+    /// Apple Speech restarts from zero.
     var prefersRevocationDurableEngine = false
 
-    /// Throws `EpisodeTranscriptionError.missingSpeechModel` when the
-    /// resolution lands on whisper and no model is installed — callers route
-    /// that into the existing model-consent/install flow and re-resolve.
     func resolve(
         requestedEngine: AdFreePassTranscriptionEngine,
         podcastLanguageCode: String?
@@ -58,7 +46,6 @@ struct EpisodeTranscriptionPlanResolver {
 
         if prefersRevocationDurableEngine {
             guard let tinySummary = try? transcriptionModels.installedSummary(for: .fastTinyEnglish) else {
-                // Routes into the existing model-consent/install stage.
                 throw EpisodeTranscriptionError.missingSpeechModel
             }
             AdFreePassBackgroundRunLog.record(
@@ -96,8 +83,6 @@ struct EpisodeTranscriptionPlanResolver {
             throw EpisodeTranscriptionError.missingSpeechModel
         }
 
-        // Fallback documents keep the honest podcast language while tiny.en
-        // decodes as English.
         return whisperPlan(
             summary: tinySummary,
             languageCode: languageCode,

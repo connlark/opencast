@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Other's legend entry: the shows past the bar's fifth segment, listed
-/// when expanded.
 struct DownloadsStorageOtherRow: View {
     let segment: DownloadsStorageGraphSegment
     let onDelete: (DownloadsPodcastBreakdown) -> Void

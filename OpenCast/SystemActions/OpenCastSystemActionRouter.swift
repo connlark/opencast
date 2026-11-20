@@ -8,9 +8,8 @@ final class OpenCastSystemActionRouter {
         self.appModel = appModel
     }
 
-    /// All system adapters join the same app-owned hydration task. Resolution
-    /// happens after the await so deletion during a cold launch cannot replay
-    /// a stale entity, and cancellation cannot start playback afterward.
+    /// Resolution happens after the hydration await, so a deletion during a cold launch cannot
+    /// replay a stale entity and cancellation cannot start playback afterward.
     func perform(_ action: OpenCastSystemAction, modelContext: ModelContext) async throws {
         try Task.checkCancellation()
         await appModel.ensurePlaybackSurfaceHydrated(modelContext: modelContext)
@@ -57,11 +56,9 @@ final class OpenCastSystemActionRouter {
             let before = playbackIdentity()
             let upNextErrorBefore = appModel.lastUpNextError
             guard appModel.playPlaylist(playlistID, mode: .replace, shuffle: false, presentsNowPlaying: false, modelContext: modelContext) else {
-                // A false return after the first episode started means the queue
-                // clear or pour failed; the listener hears the episode either way.
-                // A start that happened moved the episode or the source, or, when
-                // it reloaded the episode already playing from this playlist,
-                // only the pour could have written the Up Next error.
+                // A false return after a start means the clear or pour failed; the episode plays.
+                // A start changes the playback identity, unless it reloaded the episode already
+                // playing from this playlist; then only the pour can have set the Up Next error.
                 let after = playbackIdentity()
                 let pourFailed = after != before || appModel.lastUpNextError != upNextErrorBefore
                 if after.episodeID != nil, after.sourcePlaylistID == playlistID, pourFailed {

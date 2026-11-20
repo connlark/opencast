@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// One container for the per-tab `NavigationStack` paths. The subscript
-/// tolerates any section by holding an empty path for it.
 struct AppNavigationPaths: Equatable {
     private var pathsBySection: [AppSection: [AppRoute]] = [:]
 

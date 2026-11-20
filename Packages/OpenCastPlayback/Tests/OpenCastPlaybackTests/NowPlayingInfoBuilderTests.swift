@@ -77,8 +77,6 @@ struct NowPlayingInfoBuilderTests {
 
         #expect(doubleValue(info[MPNowPlayingInfoPropertyElapsedPlaybackTime]) == 45)
         #expect(floatValue(info[MPNowPlayingInfoPropertyPlaybackRate]) == 0)
-        // The chosen speed survives the pause, so the rate control keeps
-        // reporting 2x instead of falling back to 1x.
         #expect(floatValue(info[MPNowPlayingInfoPropertyDefaultPlaybackRate]) == 2)
     }
 
@@ -110,8 +108,6 @@ struct NowPlayingInfoBuilderTests {
 
         let info = try #require(builder.info(for: snapshot, resolvedDuration: nil, artwork: nil))
 
-        // A zero default rate would tell the system this item has no normal
-        // speed at all.
         #expect(floatValue(info[MPNowPlayingInfoPropertyDefaultPlaybackRate]) == 1)
         #expect(floatValue(info[MPNowPlayingInfoPropertyPlaybackRate]) == 1)
     }

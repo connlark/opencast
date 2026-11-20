@@ -1,9 +1,7 @@
 import Foundation
 import OpenCastCore
 
-/// Opt-in, Release-capable scaling harness for the production search engines.
-///
-/// Corpus construction and report writes occur outside the timed interval.
+/// Corpus construction and report writes stay outside the timed interval.
 /// Each engine receives the same documents, query order, warmups, and repeats.
 nonisolated struct SearchBenchmarkRunner: Sendable {
     static let requestArgument = "--opencast-run-search-benchmark"

@@ -37,7 +37,6 @@ struct NotificationRegistrationService {
             throw NotificationRegistrationServiceError.permissionDenied(status)
         }
 
-        // APNs is always asked for the current token; only the redundant backend upload is skipped.
         let deviceToken = NotificationDeviceTokenStore.hexString(
             for: try await registrationBridge.registerForRemoteNotifications()
         )

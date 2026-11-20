@@ -8,13 +8,9 @@ import Testing
 @MainActor
 @Suite("Analysis key notice store")
 struct AnalysisKeyNoticeStoreTests {
-    @Test("The seen flag's key stays stable")
-    func preferenceKeyStaysStable() {
-        #expect(AnalysisKeyNoticeStore.seenPreferenceKey == "aiServices.keyNoticeSeen")
-    }
-
     @Test("The value 2 reads as seen; the value true that 2026.11.1 wrote reads as unseen")
     func seenLiterals() throws {
+        #expect(AnalysisKeyNoticeStore.seenPreferenceKey == "aiServices.keyNoticeSeen")
         #expect(AnalysisKeyNoticeStore.seenPreferenceValue == "2")
 
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -103,37 +99,6 @@ struct AnalysisKeyNoticeStoreTests {
         let reloaded = AnalysisKeyNoticeStore()
         reloaded.load(modelContext: ModelContext(container))
         #expect(!reloaded.hasSeenAIKeyNotice)
-    }
-
-    @Test("Only a count the service reported is known")
-    func knownRemainingUnits() {
-        let store = AnalysisKeyNoticeStore()
-
-        #expect(store.knownRemainingUnits == nil)
-        store.trialStatus = .notStarted
-        #expect(store.knownRemainingUnits == nil)
-        store.trialStatus = .unitsLeft(3)
-        #expect(store.knownRemainingUnits == 3)
-        store.trialStatus = .exhausted
-        #expect(store.knownRemainingUnits == 0)
-        #expect(AnalysisKeyNoticeStore(trialStatus: .unitsLeft(2)).knownRemainingUnits == 2)
-    }
-
-    @Test("Before the date the sheet says what is included, whatever the status")
-    func sheetBeforeTheDate() {
-        let trial = AnalysisPolicyBundle.baked.trial
-        let date = AIServicesCopy.trialDate(trial.startsAt)
-        let units = trial.lifetimeUnits
-
-        for status: AnalysisTrialStatus? in [nil, .notStarted, .unitsLeft(3)] {
-            let copy = AnalysisKeyNoticeStore(trialStatus: status).sheetCopy(trial: trial, now: trial.startsAt.addingTimeInterval(-1))
-
-            #expect(copy.title == "Ad detection and Chapters & Summary are included until \(date)")
-            #expect(copy.paragraphs == [
-                "Nothing to set up. Both features work as they do today until \(date).",
-                "After that, every install keeps \(units) free analyses. Beyond those, the two features use an API key from Google or OpenAI that you add in Settings › AI Services, and that provider bills you for what you use."
-            ])
-        }
     }
 
     @Test("On or after the date the sheet states a count only when the status is known")

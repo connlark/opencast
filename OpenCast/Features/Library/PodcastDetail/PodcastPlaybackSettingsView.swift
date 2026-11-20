@@ -13,8 +13,6 @@ struct PodcastPlaybackSettingsView: View {
     @State private var isCustomSpeedOn = false
     @State private var customSpeed: Float = 1
     @State private var isAutoAddOn = false
-    /// Bottom until the show has a position of its own, so a show turned
-    /// on here starts at Bottom.
     @State private var autoAddPosition: UpNextAutoAddPosition = .bottom
     @State private var introText = "0:00"
     @State private var outroText = "0:00"
@@ -148,8 +146,7 @@ struct PodcastPlaybackSettingsView: View {
         autoAddPosition = savedAutoAddPosition ?? .bottom
     }
 
-    /// A show with no saved speed starts from the global speed as it is
-    /// now, which may have changed since the sheet opened.
+    /// Reads the global speed now: it may have changed since the sheet opened.
     private func seedCustomSpeedFromGlobal(isOn: Bool) {
         guard isOn, appModel.library.podcastPlaybackRateOverride(forPodcastID: feedURL) == nil else {
             return

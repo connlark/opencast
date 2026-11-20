@@ -1,8 +1,6 @@
 import SwiftUI
 
-/// The layout the key notice and the key screen share: a scrolling title and
-/// paragraphs above two full-width glass buttons that stay in view at the
-/// medium detent and at accessibility sizes.
+/// The buttons stay in view at the medium detent and at accessibility sizes.
 struct AnalysisKeyPromptLayout: View {
     let title: String
     let paragraphs: [String]

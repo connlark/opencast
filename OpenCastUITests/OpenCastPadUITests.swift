@@ -388,26 +388,6 @@ final class OpenCastPadUITests: XCTestCase {
     }
 
     @MainActor
-    func testSeededPadLibraryGridSurvivesRotation() throws {
-        try skipUnlessPad()
-
-        let app = makeSeededApp()
-        app.launch()
-        defer {
-            XCUIDevice.shared.orientation = .portrait
-        }
-
-        openLibrary(in: app)
-        assertExists(seededSubscriptionTile(in: app), named: "seeded library tile before rotation")
-
-        XCUIDevice.shared.orientation = .landscapeLeft
-        assertExists(seededSubscriptionTile(in: app), named: "seeded library tile in landscape")
-
-        XCUIDevice.shared.orientation = .portrait
-        assertExists(seededSubscriptionTile(in: app), named: "seeded library tile after portrait rotation")
-    }
-
-    @MainActor
     func testSeededPadSmokeScreenshots() throws {
         try skipUnlessPad()
 

@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// A playlist in the collection's grid layout, sized by the same metrics as
-/// the Library's show tiles so both grids line up.
 struct PlaylistTileView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 

@@ -1,9 +1,6 @@
 import SwiftUI
 
 struct NowPlayingSoundLabPanel: View {
-    /// Over the artwork from the panel's inline floor up; below it, the same
-    /// controls in the player's utility sheet. Inline rows are the square's
-    /// (`rowMetrics`) unless the panel opened beyond it with `titledRows`.
     enum Presentation: Equatable {
         case inline(revealProgress: CGFloat, titledRows: NowPlayingSoundLabOpenPanel.TitledRows? = nil)
         case sheet
@@ -135,8 +132,6 @@ struct NowPlayingSoundLabPanel: View {
         .accessibilityIdentifier("Now Playing Sound Lab")
     }
 
-    /// The heading as an inline panel lays it out, whose height the open
-    /// rectangle counts once.
     static var paddedHeader: some View {
         header
             .padding(.bottom, NowPlayingSoundLabLayout.headingBottomPadding)

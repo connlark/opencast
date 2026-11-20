@@ -6,13 +6,11 @@ struct PodcastEpisodeSwipeActionsModifier: ViewModifier {
     @Environment(\.modelContext) private var modelContext
 
     let episode: EpisodeListItemSnapshot
-    /// Archive / Unarchive, for the rows the Inbox membership applies to.
     var showsArchiveAction = false
 
     func body(content: Content) -> some View {
-        // State reads live inside the swipe-action builders, which SwiftUI
-        // evaluates on reveal — the row body never pays the record lookup or
-        // the completed-download file stat (perf 21 / sync-data I).
+        // State reads stay inside the swipe-action builders, which SwiftUI evaluates on reveal, so
+        // the row body never pays the record lookup or the download file stat.
         content
             .swipeActions(edge: .leading) {
                 let isPlayed = appModel.library.progressRecord(for: episode.episodeID)?.isPlayed == true
@@ -23,9 +21,8 @@ struct PodcastEpisodeSwipeActionsModifier: ViewModifier {
                 )
                 .tint(isPlayed ? .blue : .green)
             }
-            // A swipe action draws a disabled button exactly like an enabled
-            // one, so an action that cannot run is left out, never disabled:
-            // the row's context menu keeps the greyed item.
+            // A swipe action draws a disabled button exactly like an enabled one, so an action
+            // that cannot run is left out rather than disabled.
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 if appModel.playback.currentEpisode?.id.rawValue != episode.episodeID {
                     Button(

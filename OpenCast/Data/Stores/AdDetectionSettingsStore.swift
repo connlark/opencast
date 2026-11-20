@@ -1,9 +1,7 @@
 import Observation
 import SwiftData
 
-/// Device-local Detect Ads mode preference. Absent means unset: the first
-/// manual detect tap asks, and the choice lands here. `setMode(nil)` deletes
-/// the record, returning Settings to "Ask First Time".
+/// Device-local. A nil mode is unset: the next manual Detect Ads tap asks.
 @Observable
 final class AdDetectionSettingsStore {
     static let modePreferenceKey = "adDetection.mode"

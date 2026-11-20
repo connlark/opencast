@@ -30,61 +30,30 @@ struct OpenCastLaunchConfiguration {
     var resetsAdAnalysisAppAttestCredential: Bool
     var adFreePassPresentationOverride: EpisodeAdFreePassPresentation?
     var adFreePassQueueOverride: AdFreePassQueueUITestOverride?
-    /// UI-test seam: scripts PCC eligibility so the recap entries and the
-    /// sheet's unavailable state can be exercised on a simulator.
     var uiTestTranscriptIntelligenceAvailability: TranscriptIntelligenceModelAvailability?
-    /// App Store screenshot pins: keep the "Skipped promo" pill on screen, and
-    /// seed the Sound Lab reveal at a fixed progress for a mid-slide still.
     var pinsAppStoreAutoSkipPill: Bool
     var appStoreSoundLabRevealProgress: Double?
-    var uiTestLibraryLoadDelayMilliseconds: Int?
     var uiTestCloudKitAccountStatus: SyncAccountStatus?
-    /// UI-test seam: holds the fixed account status back, so a test can show
-    /// what the app does while a slow iCloud account check is outstanding.
     var uiTestCloudKitAccountStatusDelayMilliseconds: Int?
-    /// UI-test seam: replaces how long launch work waits for that answer.
     var uiTestCloudKitAccountStatusPatienceMilliseconds: Int?
     var usesUITestSeedFeedRefreshService: Bool
-    /// UI-test seam: that refresh salvages a partial feed
-    /// (`OPENCAST_UI_TEST_REFRESH_SEED_FEED=partial`).
     var salvagesUITestSeedFeedRefresh: Bool
-    /// UI-test seam: every feed fetch fails with this transport error.
     var uiTestFeedTransportFailure: URLError.Code?
-    /// UI-test seams for AI Services: the providers whose fixture key the
-    /// in-memory key storage holds (synced unless local-only), the policy
-    /// variant, the trial status, the key test's answer and a key screen
-    /// presented at launch.
     var seededAnalysisKeyProviders: [AnalysisProvider]
     var seedsAnalysisKeysLocalOnly: Bool
     var uiTestAnalysisPolicy: AnalysisPolicySnapshot?
     var uiTestAnalysisTrialStatus: AnalysisTrialStatus?
-    /// The key test's answers: call n answers the n-th (the last repeats).
+    /// Call n gets the n-th answer; the last one repeats.
     var uiTestAnalysisKeyTestResults: [AnalysisKeyTestResult]?
-    /// How long the key test takes to answer, so a test can change the draft
-    /// while it runs.
     var uiTestAnalysisKeyTestDelayMilliseconds: Int?
-    /// Each key test waits until the UI test releases it
-    /// (`AnalysisKeyTestReleaseGate`).
     var uiTestAnalysisKeyTestGated: Bool
-    /// Keychain calls the in-memory key storage fails, each once: turning
-    /// sync off can stop after its local write, a replacement key's write
-    /// can fail.
     var uiTestAnalysisKeyStorageFailures: [AnalysisUITestFixtures.KeyStorageFailure]?
     var uiTestAnalysisKeyRequiredFeature: AnalysisFeature?
-    /// How the fixture transport answers analysis runs; every UI-test run
-    /// uses it, `fixture` unless a test picks a failure.
     var uiTestAnalysisTransport: AnalysisUITestTransportMode?
-    /// The Chapters & Summary card: armed at once, or refused; `nil` uses
-    /// the system scheduler.
     var uiTestChaptersSummarySession: UITestAnalysisContinuedTaskScheduler.Mode?
-    /// Seen unless a test forces the notice, so the Detect Ads and Generate
-    /// flows run as before.
     var seedsAnalysisKeyNoticeSeen: Bool
-    /// UI-test seam: the Up Next Tab switch stored on before launch, so a
-    /// test sees the launch a listener with it on gets.
     var seedsUpNextTab = false
-    // Search cold-start probe flags are Release-capable benchmark seams, so
-    // unlike the seams above they are deliberately not gated on UI testing.
+    // Release benchmark seams, deliberately not gated on UI testing.
     var runsSearchColdStartProbe = false
     var seedsSearchColdStartCorpus = false
     var disablesSearchIndexPreparation = false
@@ -221,9 +190,6 @@ struct OpenCastLaunchConfiguration {
         let adFreePassQueueOverride = isUITesting
             ? AdFreePassQueueUITestOverride.resolve(environment: environment)
             : nil
-        let uiTestLibraryLoadDelayMilliseconds = isUITesting
-            ? Self.uiTestLibraryLoadDelayMilliseconds(environment: environment)
-            : nil
         #if DEBUG
         let uiTestTranscriptIntelligenceAvailability = isUITesting
             ? UITestTranscriptIntelligenceClient.resolve(environment: environment)
@@ -298,7 +264,6 @@ struct OpenCastLaunchConfiguration {
             uiTestTranscriptIntelligenceAvailability: uiTestTranscriptIntelligenceAvailability,
             pinsAppStoreAutoSkipPill: isUITesting && shouldPinAppStoreAutoSkipPill,
             appStoreSoundLabRevealProgress: appStoreSoundLabRevealProgress,
-            uiTestLibraryLoadDelayMilliseconds: uiTestLibraryLoadDelayMilliseconds,
             uiTestCloudKitAccountStatus: uiTestCloudKitAccountStatus,
             uiTestCloudKitAccountStatusDelayMilliseconds: uiTestCloudKitAccountStatusDelayMilliseconds,
             uiTestCloudKitAccountStatusPatienceMilliseconds: uiTestCloudKitAccountStatusPatienceMilliseconds,
@@ -351,10 +316,6 @@ struct OpenCastLaunchConfiguration {
         )
     }
 
-    private static func uiTestLibraryLoadDelayMilliseconds(environment: [String: String]) -> Int? {
-        positiveMilliseconds(environment["OPENCAST_UI_TEST_LIBRARY_LOAD_DELAY_MILLISECONDS"])
-    }
-
     private static func positiveMilliseconds(_ rawValue: String?) -> Int? {
         guard let rawValue,
               let milliseconds = Int(rawValue),
@@ -366,10 +327,8 @@ struct OpenCastLaunchConfiguration {
         return milliseconds
     }
 
-    // UI testing runs on an in-memory store that never syncs, so the account
-    // status is fixed instead of asked of CloudKit: launch setup waits for
-    // that answer, and on a freshly booted simulator the real check has taken
-    // over 30 seconds. "system" opts back into the real check.
+    // Fixed by default: launch setup waits for the status, and the real
+    // CloudKit check has taken over 30 seconds on a freshly booted simulator.
     private static func uiTestCloudKitAccountStatus(environment: [String: String]) -> SyncAccountStatus? {
         guard let rawValue = environment["OPENCAST_UI_TEST_CLOUDKIT_ACCOUNT_STATUS"]?.lowercased()
         else {

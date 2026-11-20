@@ -1,8 +1,6 @@
 import Foundation
 import OpenCastPlayback
 
-/// The sleep timer's one-line state, shared by the Sleep utility button and
-/// the sheet so the two surfaces cannot drift.
 enum SleepTimerRemainingText {
     static func text(for playback: AVFoundationPlaybackController, at date: Date) -> String {
         text(mode: playback.sleepTimerMode, remaining: playback.sleepTimerRemaining(at: date))

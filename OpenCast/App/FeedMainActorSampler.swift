@@ -1,8 +1,6 @@
 import Foundation
 import Synchronization
 
-/// Opt-in feed benchmark: measure delays in actually reaching the main actor.
-/// Samples supplement the Instruments trace used for the release stall gate.
 nonisolated final class FeedMainActorSampler: Sendable {
     private let maximumDelay = Mutex<Double>(0)
     private let samplingTask = Mutex<Task<Void, Never>?>(nil)

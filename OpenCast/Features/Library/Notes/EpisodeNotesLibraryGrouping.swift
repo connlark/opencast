@@ -1,14 +1,8 @@
 import Foundation
 
-/// Groups every Private Note by episode for the Notes library, then filters
-/// by the search and orders the sections.
 enum EpisodeNotesLibraryGrouping {
     private typealias Section = (group: EpisodeNotesLibraryGroup, hasShowTitle: Bool, hasTitle: Bool)
 
-    /// A header shows the note's stored details first, so a show the listener
-    /// left keeps its titles, then the resolved episode's, then a placeholder.
-    /// A search matches note text and the real titles, not the placeholders;
-    /// a title match keeps all of the episode's notes.
     static func groups(
         from notes: [EpisodeNoteRecord],
         resolve: (String) -> EpisodeListItemSnapshot?,
@@ -55,8 +49,6 @@ enum EpisodeNotesLibraryGrouping {
         return (group, showTitle != nil, showTitle != nil || episodeTitle != nil)
     }
 
-    /// The order episode detail shows: the episode note, then the timestamped
-    /// notes by position and creation.
     private static func timelineOrdered(_ notes: [EpisodeNoteRecord]) -> [EpisodeNoteRecord] {
         let ordered = notes.sorted { lhs, rhs in
             if lhs.timestamp != rhs.timestamp { return lhs.timestamp < rhs.timestamp }
@@ -66,10 +58,6 @@ enum EpisodeNotesLibraryGrouping {
         return ordered.filter(\.isEpisodeWide) + ordered.filter { !$0.isEpisodeWide }
     }
 
-    /// Show sorts by show title, then newest episode (undated last), then
-    /// episode title. Episodes with no show title follow, by date and episode
-    /// title, so a placeholder never sorts among the real show titles. Those
-    /// with no title at all go last, with only the ID to order them.
     private static func precedes(_ lhs: Section, _ rhs: Section, by order: EpisodeNotesLibrarySortOrder) -> Bool {
         let (left, right) = (lhs.group, rhs.group)
         switch order {
@@ -111,7 +99,6 @@ enum EpisodeNotesLibraryGrouping {
         note.updatedAt ?? note.createdAt
     }
 
-    /// The first non-empty stored value, else the resolved episode's.
     private static func detail(_ stored: [String?], fallback: String?) -> String? {
         (stored + [fallback]).lazy.compactMap { $0 }.first { !$0.isEmpty }
     }

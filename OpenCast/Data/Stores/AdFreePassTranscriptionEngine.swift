@@ -1,9 +1,6 @@
 import Foundation
 
-/// The requested transcription engine for an Ad-Free Pass run.
-/// `.productDefault` resolves Apple-first via `EpisodeTranscriptionPlanResolver`
-/// by default; the explicit cases are the permanent DEBUG benchmark/control
-/// surface and stay engine-strict.
+/// The explicit cases are a DEBUG benchmark surface and stay engine-strict, with no fallback.
 enum AdFreePassTranscriptionEngine: String, Sendable, Equatable {
     case productDefault
     case selectedWhisperModel

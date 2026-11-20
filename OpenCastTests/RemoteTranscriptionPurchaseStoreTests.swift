@@ -3,10 +3,6 @@ import OpenCastTranscription
 import Testing
 @testable import OpenCast
 
-/// StoreKit outcome matrix for the purchase store via the injectable seams:
-/// pending/cancelled/unverified/verified purchases, finish-only-after-ack,
-/// launch reconciliation, duplicate-redeem idempotency, catalog-mismatch
-/// fail-closed, gating, and the consumption preview's overdraft arithmetic.
 @MainActor
 struct RemoteTranscriptionPurchaseStoreTests {
     private static let hours20 = "com.connor.opencast.transcription.hours20.v1"
@@ -158,7 +154,6 @@ struct RemoteTranscriptionPurchaseStoreTests {
         #expect(api.redeemedJWS.sorted() == ["jws-11", "jws-12"])
         #expect(storeKit.finishedIDs.sorted() == [11, 12])
 
-        // A second prepare() is idempotent: nothing re-redeems.
         await store.prepare()
         #expect(api.redeemedJWS.count == 2)
     }
@@ -175,7 +170,6 @@ struct RemoteTranscriptionPurchaseStoreTests {
         #expect(storeKit.syncCalls == 1)
         #expect(api.redeemedJWS == ["jws-21"])
 
-        // Sweeping again within the session is a no-op for the same id.
         await store.refreshPurchases()
         #expect(api.redeemedJWS.count == 1)
     }
@@ -247,7 +241,6 @@ struct RemoteTranscriptionPurchaseStoreTests {
             Issue.record("expected storeDisabled, got \(store.availability)")
         }
         #expect(store.products.isEmpty)
-        // Balance surfaces still work — money display is untouched.
         #expect(store.balance?.availableSeconds == 3600)
     }
 
@@ -415,9 +408,7 @@ struct RemoteTranscriptionPurchaseStoreTests {
     func launchEnvironmentLookupIsBounded() async {
         let storeKit = FakeStoreKitClient()
         storeKit.environmentValue = .production
-        // Parked far beyond any load stall: the 30 ms timeout must win this
-        // race deterministically (a 500 ms delay lost it once under full-suite
-        // load, 2026-07-29).
+        // Parked far beyond any load stall so the 30 ms timeout wins deterministically.
         storeKit.environmentDelay = .seconds(3600)
 
         let environment = await RemoteTranscriptionPurchaseStore.resolvedEnvironment(
@@ -557,9 +548,6 @@ struct RemoteTranscriptionPurchaseStoreTests {
         api.bootstrapDelay = .milliseconds(150)
         let store = Self.makeStore(api: api, storeKit: FakeStoreKitClient())
 
-        // The launch caller starts preparation and parks on the slow
-        // bootstrap; a transient surface then joins mid-flight and its .task
-        // is cancelled (sheet dismissed, card scrolled away).
         let launchPrepare = Task { await store.prepare() }
         let bootstrapDeadline = ContinuousClock.now + .seconds(60)
         while api.bootstrapCalls == 0, ContinuousClock.now < bootstrapDeadline {
@@ -572,9 +560,6 @@ struct RemoteTranscriptionPurchaseStoreTests {
         await transientWaiter.value
         await launchPrepare.value
 
-        // The launch preparation must survive the waiter's cancellation and
-        // resolve availability; a cancelled shared task would strand it at
-        // .unknown and hide every purchase surface for the session.
         #expect(store.availability == .available)
         #expect(store.isSurfaceVisible)
     }
@@ -700,15 +685,11 @@ struct RemoteTranscriptionPurchaseStoreTests {
         let store = Self.makeStore(api: api, storeKit: storeKit)
         await store.prepare()
 
-        // One analyzed audio-hour charges the full flat rate (7,850 s),
-        // which overdrafts a fresh 3,600 s grant but fits inside the debt
-        // headroom — the H7 worked example.
         let hour = store.analysisEstimate(durationSeconds: 3600)
         #expect(hour?.estimatedSeconds == 7850)
         #expect(hour?.overdraftSeconds == 4250)
         #expect(hour?.fitsWithinHeadroom == true)
 
-        // A 3.454 h episode outprices new-account headroom entirely (H7).
         let long = store.analysisEstimate(durationSeconds: 12_434.5)
         #expect(long?.estimatedSeconds == 27_115)
         #expect(long?.fitsWithinHeadroom == false)
@@ -730,17 +711,12 @@ struct RemoteTranscriptionPurchaseStoreTests {
         await store.purchase(store.products[0])
         #expect(balanceIncreaseCount == 1)
 
-        // An unchanged already-credited replay must not re-probe deferred
-        // work just because the server echoes the original positive grant.
         api.redeemOutcome = .alreadyCredited
         storeKit.purchaseResult = .success(Self.transaction(id: 22))
         await store.purchase(store.products[0])
         #expect(balanceIncreaseCount == 1)
 
-        // If the first credited response was lost, the retry is
-        // `alreadyCredited`, but its authoritative balance is new to this
-        // process. That observed headroom increase must wake the deferred run
-        // instead of requiring a force quit and launch reconciliation.
+        // A lost credited response: this `alreadyCredited` retry brings a new balance.
         api.balance = OpenCastRemoteTranscriptionBalance(
             availableSeconds: 147_600,
             reservedSeconds: 0,
@@ -750,8 +726,6 @@ struct RemoteTranscriptionPurchaseStoreTests {
         await store.purchase(store.products[0])
         #expect(balanceIncreaseCount == 2)
 
-        // A refund acknowledgement also echoes the original grant while the
-        // balance went DOWN — it must not fire either.
         api.redeemOutcome = .refunded
         api.balance = OpenCastRemoteTranscriptionBalance(
             availableSeconds: 75_600,
@@ -770,7 +744,6 @@ struct RemoteTranscriptionPurchaseStoreTests {
         var observedBalances: [OpenCastRemoteTranscriptionBalance?] = []
         store.onBalanceIncreased = { observedBalances.append(store.balance) }
 
-        // The first balance of the session is not evidence of a top-up.
         #expect(await store.refreshBalance())
         #expect(store.balance?.availableSeconds == 3600)
         #expect(observedBalances.isEmpty)
@@ -778,8 +751,7 @@ struct RemoteTranscriptionPurchaseStoreTests {
         #expect(await store.refreshBalance())
         #expect(observedBalances.isEmpty)
 
-        // A purchase on another device or a grant: the callback runs after
-        // the new balance is applied, so its sweep reads that balance.
+        // The callback must run after the new balance is applied.
         let toppedUp = OpenCastRemoteTranscriptionBalance(
             availableSeconds: 10_000,
             reservedSeconds: 0,
@@ -789,7 +761,6 @@ struct RemoteTranscriptionPurchaseStoreTests {
         #expect(await store.refreshBalance())
         #expect(observedBalances == [toppedUp])
 
-        // Spending lowers headroom: no wake.
         api.balance = OpenCastRemoteTranscriptionBalance(
             availableSeconds: 4_000,
             reservedSeconds: 1_000,
@@ -834,9 +805,6 @@ struct RemoteTranscriptionPurchaseStoreTests {
         store.onBalanceIncreased = { balanceIncreaseCount += 1 }
         #expect(await store.refreshBalance())
 
-        // The answer carries MORE headroom and arrives after the refresh's
-        // task was cancelled (a data nuke mid-sweep): neither the balance
-        // nor the wake-up may leak out of a cancelled refresh.
         api.balance = OpenCastRemoteTranscriptionBalance(
             availableSeconds: 50_000,
             reservedSeconds: 0,
@@ -896,8 +864,6 @@ private final class FakePurchaseAPI: RemoteTranscriptionAPI, @unchecked Sendable
     var redeemError: Error?
     var redeemOutcome: OpenCastRemoteTranscriptionRedeemOutcome = .credited
     var bootstrapDelay: Duration?
-    /// A transport that completes regardless of cancellation: the delay's
-    /// cancellation is swallowed and the answer still arrives.
     var bootstrapSurvivesCancellation = false
     var bootstrapError: Error?
 
@@ -947,8 +913,7 @@ private final class FakePurchaseAPI: RemoteTranscriptionAPI, @unchecked Sendable
         if let redeemError {
             throw redeemError
         }
-        // Like the real PurchaseWorker: every acknowledgement echoes the
-        // original positive grant, but only `credited` moves the balance.
+        // Every outcome echoes the original grant; only `credited` moves the balance.
         let credited = Int64(72_000)
         lock.withLock {
             recordedRedeemedJWS.append(transactionJWS)
@@ -969,7 +934,6 @@ private final class FakePurchaseAPI: RemoteTranscriptionAPI, @unchecked Sendable
         )
     }
 
-    // Unused by the purchase store.
     func createJob(_ request: OpenCastRemoteTranscriptionJobCreateRequest) async throws -> OpenCastRemoteTranscriptionJobResponse {
         throw RemoteTranscriptionHTTPError(statusCode: -1, code: "unused", detail: nil)
     }

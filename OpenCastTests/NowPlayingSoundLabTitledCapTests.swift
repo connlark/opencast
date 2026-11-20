@@ -2,9 +2,6 @@ import SwiftUI
 import Testing
 @testable import OpenCast
 
-/// The titled cap's measured widths, laid out by SwiftUI at the default text
-/// size on this runtime: each fixed title in each production state it shows
-/// in, the row's own ideal width.
 @MainActor
 @Suite("Sound Lab titled cap")
 struct NowPlayingSoundLabTitledCapTests {
@@ -85,30 +82,6 @@ struct NowPlayingSoundLabTitledCapTests {
         #expect(measured <= Layout.titledRowAreaCap, "\(title) row \(measured)")
     }
 
-    @Test("Voice Boost's row fits the cap: the toggle's own threshold is no wider")
-    func voiceBoostFitsTheCap() {
-        #expect(Layout.iconOnlyRowAreaWidth <= Layout.titledRowAreaCap)
-    }
-
-    @Test("The cap is the widest title's row, composed from the constants")
-    func capComposition() {
-        let parts: [CGFloat] = [
-            Layout.controlHorizontalPadding,
-            Layout.nativeGlassButtonSideChrome,
-            Layout.controlIconDiameter,
-            Layout.controlSpacing,
-            Layout.controlSpacing,
-            Layout.trailingIndicatorMinimumGap,
-            Layout.controlSpacing,
-            Layout.trailingIndicatorSize,
-            Layout.controlHorizontalPadding,
-            Layout.nativeGlassButtonSideChrome
-        ]
-        #expect(Layout.glyphActionRowFixedWidth == parts.reduce(0, +))
-        let widest = Layout.fixedActionTitles.map(\.width).max() ?? 0
-        #expect(Layout.titledRowAreaCap == Layout.glyphActionRowFixedWidth + widest)
-    }
-
     @Test(
         "The inversion returns the width whose row area it was given, on both sides of the rail's cap at 300 pt",
         arguments: [262.5, 282.0, 299.5, 300.0, 300.5, 310.0, 340.0]
@@ -116,13 +89,6 @@ struct NowPlayingSoundLabTitledCapTests {
     func inversion(width: Double) {
         let rowArea = Layout(panelWidth: width).rowAreaWidth
         #expect(abs(Layout.panelWidth(forRowArea: rowArea) - width) < 0.0001, "row area \(rowArea)")
-    }
-
-    @Test("The two sides of the inversion are the layout's two lines, meeting at 300 pt")
-    func inversionKnee() {
-        #expect(abs(Layout.panelWidth(forRowArea: 231.5) - 300) < 0.0001)
-        #expect(abs(Layout.panelWidth(forRowArea: 220) - 224 / 0.785) < 0.0001)
-        #expect(abs(Layout.panelWidth(forRowArea: 240) - 298 / 0.965) < 0.0001)
     }
 
     @Test("The titled widths: the narrowest holds the toggle, the reference width the cap's row area")

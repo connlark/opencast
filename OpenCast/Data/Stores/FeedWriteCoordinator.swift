@@ -3,31 +3,18 @@ import Observation
 import OpenCastCore
 import SwiftData
 
-/// The library's feed-write path: cache upserts with episode-identity
-/// reconciliation, subscription migration onto a relocated feed, redirect
-/// and https-upgrade advice, and the duplicate-episode merge sweep. Both the
-/// core store's add flows and the refresh flow write through this type; it
-/// never calls back into either, only into the injected publication
-/// closures. Every synced save goes through the ledger, and every await
-/// that precedes a write is fenced by the shared write generation.
+/// Every synced save goes through the ledger, and every await that precedes a write is fenced by
+/// the shared write generation.
 @Observable
 final class FeedWriteCoordinator {
-    /// Feeds whose refreshes keep landing on a different host: the podcast
-    /// page offers "Update Feed Address" instead of migrating automatically,
-    /// because redirects are routinely CDN noise. Session-scoped state.
+    /// Suggested rather than migrated, because redirects are routinely CDN noise. Session-scoped.
     private(set) var suggestedFeedMigrationURLsByFeedURL: [String: URL] = [:]
 
-    /// Episode-keyed device-local stores (downloads, transcripts, ad
-    /// analyses) that identity reconciliation carries across an ID change;
-    /// wired by OpenCastAppModel at composition.
     @ObservationIgnored var sidecarMigrators: [any EpisodeIdentitySidecarMigrating] = []
-    /// Republication after a migration or merge sweep, wired by LibraryStore:
-    /// the full library reload and the progress-projection refetch.
     @ObservationIgnored var reloadLibrary: (ModelContext) async throws -> Void = { _ in }
     @ObservationIgnored var reloadProgress: (ModelContext) throws -> Void = { _ in }
 
-    // Deliberately survives resetAfterDataNuke — observed session-scoped
-    // behavior, decision deferred.
+    // Deliberately survives `resetAfterDataNuke`.
     @ObservationIgnored private var relocationAdvisor = FeedRelocationAdvisor()
     @ObservationIgnored private let feedService: any FeedService
     @ObservationIgnored private let localCache: any LocalLibraryCacheStore
@@ -96,13 +83,9 @@ final class FeedWriteCoordinator {
         do {
             try writeGeneration.ensureCurrent(generation)
         } catch {
-            // The nuke ran while the cache write was in flight; the rows it
-            // just wrote would outlive the wipe as orphans. Ownership check
-            // before the sweep (2026-09-04 review): a subscription that
-            // exists now was added after the reset, and its own upsert owns
-            // this feed's cache — sweeping here would empty a live
-            // subscription until its next refresh. A failed fetch keeps the
-            // conservative sweep.
+            // The nuke ran during the cache write, so the rows just written would outlive it as orphans.
+            // A subscription that exists now was added after the reset and owns this cache; sweeping
+            // would empty it until its next refresh. A failed fetch keeps the conservative sweep.
             let ownedByNewSubscription =
                 (try? modelContext.fetch(subscriptionDescriptor))?.isEmpty == false
             if !ownedByNewSubscription {
@@ -122,12 +105,9 @@ final class FeedWriteCoordinator {
         // subscription behind for an unrelated save to commit.
         try writeGeneration.ensureCurrent(generation)
 
-        // Synced-record writes are held to actual changes: every dirtied
-        // field exports a CKRecord and round-trips through every device, and
-        // routine refreshes used to re-write identical metadata for the whole
-        // library. Refresh recency itself is deliberately device-local (the
-        // refresh logs) — syncing it starved other devices' own refreshes and
-        // kept every subscription record permanently churning.
+        // Synced writes are held to actual changes: every dirtied field exports a CKRecord to every
+        // device. Refresh recency stays device-local in the refresh logs; syncing it starved other
+        // devices' refreshes and kept every subscription record churning.
         var hasSyncedChanges = false
         if let existingSubscription = try modelContext.fetch(subscriptionDescriptor).first {
             if !snapshot.isSalvaged { hasSyncedChanges = update(existingSubscription, from: snapshot) }
@@ -155,25 +135,8 @@ final class FeedWriteCoordinator {
         return true
     }
 
-    /// Re-keys departed episode IDs onto their re-identified successors after
-    /// a cache write: publishers that add or change GUIDs (or a GUID-less
-    /// feed that moves hosts) mint a whole new catalog, and without this the
-    /// old rows linger as duplicates while progress, downloads, transcripts,
-    /// and ad analyses stay orphaned on the dead IDs forever.
-    ///
-    /// Refresh passes only consider successors whose IDs are new to the cache
-    /// (`includesEstablishedSuccessors: false`) so a merely-removed episode
-    /// can never be folded into a long-stable one; the manual merge sweep
-    /// passes `true` because its departed rows are historic duplicates whose
-    /// successors are already cached. Unmatched departed rows are retained as
-    /// off-feed back-catalog — deletion happens only for migrated rows.
-    ///
-    /// The old-ID progress rows re-key (merging when the successor already
-    /// has progress) and an `episode-progress` tombstone for each old ID
-    /// lands in the same save, so old-ID twins on other devices die instead
-    /// of resurrecting. Tombstones index by episode ID alone, so they can
-    /// never touch the migrated new-ID rows; recency is deliberately left
-    /// untouched so a peer's genuinely newer progress still wins its merge.
+    /// With `includesEstablishedSuccessors` false only successors new to the cache match, so a merely
+    /// removed episode is never folded into a long-stable one.
     @discardableResult
     private func reconcileEpisodeIdentities(
         preexisting: [EpisodeListItemSnapshot],
@@ -225,9 +188,6 @@ final class FeedWriteCoordinator {
         return matches.count
     }
 
-    /// Runs one identity migration and its save as a unit and tells every
-    /// sidecar migrator whether it committed, so a store that mirrors rows
-    /// into value copies never publishes a re-key the save did not land.
     private func commitIdentityMigration(_ migrate: () throws -> Void) throws {
         do {
             try migrate()
@@ -254,9 +214,8 @@ final class FeedWriteCoordinator {
 
         if let newFeedURL = outcome.newFeedURL,
            URLCanonicalizer.canonicalString(for: newFeedURL) != canonicalFeedURL {
-            // The tag is the publisher's explicit instruction; migration
-            // performs its own fetch of the new URL and only commits when
-            // that fetch succeeds.
+            // The tag is the publisher's explicit instruction, so it migrates; the migration commits only
+            // if its own fetch of the new URL succeeds.
             do {
                 try await migrateSubscription(
                     from: feedURLString,
@@ -293,9 +252,8 @@ final class FeedWriteCoordinator {
         }
     }
 
-    /// `http://` feeds stay supported and are never rewritten blindly; when
-    /// the https twin demonstrably serves the same show (identity overlap),
-    /// the subscription upgrades onto it. One probe per feed per launch.
+    /// Upgrades only when the https twin demonstrably serves the same show; an `http://` feed is never
+    /// rewritten blindly.
     private func probeHTTPSUpgradeIfNeeded(
         feedURLString: String,
         generation: Int,
@@ -329,15 +287,8 @@ final class FeedWriteCoordinator {
         }
     }
 
-    /// Moves a subscription onto a new canonical feed URL: fetches the new
-    /// URL (the migration only commits when that fetch succeeds), re-keys
-    /// episode identities through the reconciliation machinery and the
-    /// feed-keyed sidecars (smart playlist shows) onto the new URL, writes the
-    /// old URL's subscription tombstone and the fresh SubscriptionRecord in
-    /// the same save, then drops the old URL's local cache.
-    ///
-    /// `generation` is the refresh flow's captured write generation; the
-    /// public path captures its own at entry.
+    /// Commits only when its fetch of the new URL succeeds. A refresh flow passes its captured
+    /// `generation`.
     func migrateSubscription(
         from oldFeedURLString: String,
         toFeedURL newFeedURL: URL,
@@ -426,9 +377,8 @@ final class FeedWriteCoordinator {
                 oldSubscriptionRecords.map(\.autoAddToUpNext)
             )
             if !hasNewSubscription {
-                // subscribedAt must postdate the old URL's tombstone only if the
-                // keys collided — they don't — but a strictly newer stamp keeps
-                // the record safe under any future canonicalization drift.
+                // A stamp strictly newer than the old URL's tombstone keeps the record safe if
+                // canonicalization ever maps both URLs to one key.
                 modelContext.insert(
                     SubscriptionRecord(
                         feedURL: newCanonicalFeedURL,
@@ -470,9 +420,8 @@ final class FeedWriteCoordinator {
         if suggestedFeedMigrationURLsByFeedURL[oldFeedURLString] != nil {
             suggestedFeedMigrationURLsByFeedURL[oldFeedURLString] = nil
         }
-        // The migration is committed; only the republication is at stake. A
-        // nuke that landed during the cache delete must not have its reset
-        // store repopulated from a cache it is about to clear.
+        // The migration is committed; a nuke that landed during the cache delete must not have its
+        // reset store repopulated from a cache it is about to clear.
         try writeGeneration.ensureCurrent(generation)
         try await reloadLibrary(modelContext)
         try reloadProgress(modelContext)
@@ -500,8 +449,6 @@ final class FeedWriteCoordinator {
         return changed
     }
 
-    /// A record at the new URL keeps its own speed; one that follows the
-    /// global speed takes the moved subscription's. Returns whether it wrote.
     @discardableResult
     static func mergePodcastPlaybackRate(
         _ incoming: Double,
@@ -517,8 +464,6 @@ final class FeedWriteCoordinator {
         return true
     }
 
-    /// A record at the new URL keeps its own Add to Up Next position; one
-    /// that is off takes the moved subscription's.
     private static func mergeUpNextAutoAdd(_ incoming: Int, into record: SubscriptionRecord) {
         guard UpNextAutoAddPosition(stored: record.autoAddToUpNext) == nil,
               UpNextAutoAddPosition(stored: incoming) != nil
@@ -529,10 +474,6 @@ final class FeedWriteCoordinator {
         record.autoAddToUpNext = incoming
     }
 
-    /// Diagnostics sweep for libraries duplicated before reconciliation
-    /// existed: refetches every subscribed feed and reconciles departed rows
-    /// against the feed's full current catalog (successors may already be
-    /// cached, which routine refreshes deliberately skip).
     func mergeDuplicateEpisodes(
         feedURLStrings: [String],
         modelContext: ModelContext

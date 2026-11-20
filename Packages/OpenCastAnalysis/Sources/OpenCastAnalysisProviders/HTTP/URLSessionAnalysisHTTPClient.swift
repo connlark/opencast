@@ -1,11 +1,5 @@
 import Foundation
 
-/// Provider exchanges over a plain `URLSession` that keeps nothing: no
-/// response cache, no cookies, no credential storage, and never follows a
-/// redirect (a redirect would carry the key's header to another host; the
-/// 3xx answer comes back as is). Each request carries its timeout as the
-/// task's idle timeout, and the whole exchange races an overall deadline of
-/// the same length.
 public struct URLSessionAnalysisHTTPClient: AnalysisHTTPClient {
     public let session: URLSession
 
@@ -13,8 +7,6 @@ public struct URLSessionAnalysisHTTPClient: AnalysisHTTPClient {
         self.session = session
     }
 
-    /// An ephemeral session for provider calls. `protocolClasses` lets tests
-    /// serve canned exchanges.
     public static func makeSession(protocolClasses: [AnyClass]? = nil) -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.urlCache = nil
@@ -50,6 +42,7 @@ public struct URLSessionAnalysisHTTPClient: AnalysisHTTPClient {
         let session = session
         let prepared = urlRequest
         do {
+            // `timeoutInterval` is only an idle timeout; the sleep enforces the overall deadline.
             return try await withThrowingTaskGroup(of: AnalysisHTTPResponse?.self) { group in
                 group.addTask {
                     try await Self.exchange(session, prepared, maximumBodyBytes: maximumBodyBytes)
@@ -97,9 +90,8 @@ public struct URLSessionAnalysisHTTPClient: AnalysisHTTPClient {
     }
 }
 
-/// Refuses every redirect, so a request only ever reaches the URL it was
-/// built for. (The completion-handler form: Swift 6.4's SILGen crashes on
-/// the async form of this delegate method in this package's settings.)
+/// A redirect would carry the key's header to another host, so the 3xx comes back as is.
+/// Completion-handler form: Swift 6.4's SILGen crashes on the async form in this package.
 private final class RedirectRefusal: NSObject, URLSessionTaskDelegate, Sendable {
     func urlSession(
         _ session: URLSession,

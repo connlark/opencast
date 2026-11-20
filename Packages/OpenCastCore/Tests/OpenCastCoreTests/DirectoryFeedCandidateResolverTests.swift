@@ -10,8 +10,6 @@ struct DirectoryFeedCandidateResolverTests {
 
     @Test("Serial-shaped 33/124 candidates promote the fuller current feed")
     func serialShapedCandidatesPromoteFullerCurrentFeed() async throws {
-        // Live counts measured 2026-08-22: the Apple feed served 33
-        // items, the current full feed 124, same newest episode.
         let resolver = makeResolver([
             windowedURL: makeSnapshot(feedURL: windowedURL, episodeCount: 33, newest: Self.newestEpisodeDate),
             fullURL: makeSnapshot(feedURL: fullURL, episodeCount: 124, newest: Self.newestEpisodeDate),

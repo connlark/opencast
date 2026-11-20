@@ -1,4 +1,3 @@
-/// The container the Library renders its shows in.
 nonisolated enum LibraryLayout: String, CaseIterable, Identifiable, Sendable {
     case list
     case grid

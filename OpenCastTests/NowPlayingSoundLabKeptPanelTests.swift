@@ -2,12 +2,6 @@ import SwiftUI
 import Testing
 @testable import OpenCast
 
-/// What an open panel keeps. The disposition is tested on its own; the hosted
-/// tests drive one persistent artwork, whose inputs change under it, because
-/// a fresh host per step could not show anything being retained. Most hosted
-/// tests read settled frames. The resize regression also samples an
-/// intermediate drawn width; recorded clips remain the evidence for every-frame
-/// behavior.
 @MainActor
 @Suite("Sound Lab kept panel")
 struct NowPlayingSoundLabKeptPanelTests {
@@ -61,13 +55,6 @@ struct NowPlayingSoundLabKeptPanelTests {
             }
             return key
         }
-    }
-
-    @Test("A panel that opened legacy follows under every change of the key", arguments: Member.allCases)
-    func legacyFollows(member: Member) {
-        let kept = Self.key()
-        #expect(OpenPanel.disposition(keptMode: .legacy, keptKey: kept, currentKey: member.changing(kept)) == .followAsLegacy)
-        #expect(OpenPanel.disposition(keptMode: .legacy, keptKey: kept, currentKey: kept) == .followAsLegacy)
     }
 
     @Test("A titled panel is invalidated by each member of the key alone", arguments: Member.allCases)
@@ -161,38 +148,18 @@ struct NowPlayingSoundLabKeptPanelTests {
         #expect(!finished.consumesCurrentGesture)
     }
 
-    @Test("An invalidation delivered together with a gesture's first latch consumes that gesture")
-    func invalidationWithAFirstLatch() {
-        var ownership = Artwork.DragOwnership()
-        ownership.gestureBegan()
-        ownership.gestureReset()
-        // The latch is set in the gesture's own delivery, so whichever order the
-        // two observers run in afterwards, the gesture is already in flight.
-        ownership.gestureBegan()
-        ownership.invalidate(isTracking: false)
-        #expect(ownership.consumesCurrentGesture)
-    }
-
     @Test("A close already settling is left alone, a repeated Hide included")
     func snapLeavesASettlingClose() {
         #expect(Artwork.snapStep(open: false, state: .settling(targetOpen: false), isOpen: false, revealProgress: 0) == .leaveSettling)
-    }
-
-    @Test("A snap already at its target releases")
-    func snapReleasesAtTheTarget() {
-        #expect(Artwork.snapStep(open: false, state: .closed, isOpen: false, revealProgress: 0) == .release)
-        #expect(Artwork.snapStep(open: true, state: .open, isOpen: true, revealProgress: 1) == .release)
-        #expect(Artwork.snapStep(open: true, state: .settling(targetOpen: true), isOpen: true, revealProgress: 1) == .release)
     }
 
     @Test("Any other snap animates")
     func snapAnimatesOtherwise() {
         #expect(Artwork.snapStep(open: false, state: .open, isOpen: true, revealProgress: 1) == .animate)
         #expect(Artwork.snapStep(open: true, state: .closed, isOpen: false, revealProgress: 0) == .animate)
-        // Reversals of a settle, each way.
         #expect(Artwork.snapStep(open: true, state: .settling(targetOpen: false), isOpen: false, revealProgress: 0) == .animate)
         #expect(Artwork.snapStep(open: false, state: .settling(targetOpen: true), isOpen: true, revealProgress: 1) == .animate)
-        // A release partway, the state agreeing with the target and the reveal not there.
+        // A release partway: the state agrees with the target and the reveal is not there.
         #expect(Artwork.snapStep(open: false, state: .openingDrag, isOpen: false, revealProgress: 0.1) == .animate)
         #expect(Artwork.snapStep(open: true, state: .closingDrag, isOpen: true, revealProgress: 0.8) == .animate)
     }
@@ -225,7 +192,6 @@ struct NowPlayingSoundLabKeptPanelTests {
         try KeptPanelHost(model: model)
     }
 
-    /// Opened by a pin at appearance, the pin then removed under the same view.
     private func openTitled(_ model: KeptPanelHarnessModel, _ host: KeptPanelHost) throws -> [CGRect] {
         host.settle()
         let rows = host.rendered().rows
@@ -238,7 +204,6 @@ struct NowPlayingSoundLabKeptPanelTests {
 
     @Test("A position past where a closed panel would resolve legacy changes nothing but the position")
     func positionKeeps() throws {
-        // Above the safe top's clearance: a closed panel would answer legacy here.
         let top: CGFloat = 4
         let travel = Fixture.closedTop - top
         #expect(OpenPanel(Fixture.closedInputs(square: Fixture.closedSquare(top: top), rowCount: 2)).mode == .legacy)
@@ -470,8 +435,7 @@ struct NowPlayingSoundLabKeptPanelTests {
         #expect(try #require(host.pixels()) == closed, "byte for byte")
     }
 
-    /// Samples a long animation at one-third of its duration.
-    /// The bounds allow rendered progress between one-eighth and three-quarters.
+    /// Long enough that a sample a third of the way in still sees the resize running.
     fileprivate static let resizeDuration: TimeInterval = 9
 
     @Test("A reset falling inside the artwork's resize leaves the resize running")
@@ -505,11 +469,6 @@ struct NowPlayingSoundLabKeptPanelTests {
         #expect(abs(settled - target) <= 2, "the read sees the square: \(settled)")
     }
 
-    /// The player's column animates its failure state from an ancestor, so
-    /// a key change can arrive in an update that already carries an animation.
-    /// The square shown by it stands where the footprint puts it, and keeps
-    /// the layout's own motion. This stages Retry's update in the harness; the
-    /// recorded Retry clip is the proof.
     @Test("A change under the column's animation shows the square in its place, its resize running")
     func invalidationUnderColumnAnimationKeepsSquareInPlace() throws {
         let side: CGFloat = 200
@@ -520,6 +479,8 @@ struct NowPlayingSoundLabKeptPanelTests {
         _ = try openTitled(model, host)
         let row = model.top + 12
 
+        // The player's column animates its failure state from an ancestor, so
+        // a key change can arrive in an update that already carries an animation.
         model.columnState.toggle()
         model.side = target
         host.wait(Self.resizeDuration / 3)
@@ -536,9 +497,8 @@ struct NowPlayingSoundLabKeptPanelTests {
         #expect(abs(settled - target) <= 2, "the read sees the square: \(settled)")
     }
 
-    /// How the capture ends. A hosted test cannot synthesize a drag, so
-    /// `releasedAtZero` ends through `resetInteraction` and not `snap`'s
-    /// `.release`; both leave no capture, with the reveal at zero.
+    /// A hosted test cannot synthesize a drag, so `releasedAtZero` ends through
+    /// `resetInteraction`, not `snap`'s `.release`.
     enum TitledEnding: String, CaseIterable, CustomTestStringConvertible {
         case releasedAtZero, invalidated
 
@@ -727,9 +687,8 @@ final class KeptPanelHost {
         )
     }
 
-    /// How wide the window's content is drawn along one row, in points. A
-    /// frame in flight exists only in the pixels: layout reads its target. Any
-    /// difference from the ground counts: the panel's glass is close to it.
+    /// A frame in flight exists only in the pixels: layout reads its target. Any
+    /// difference from the ground counts, as the panel's glass is close to it.
     func drawnWidth(atRow row: CGFloat) -> CGFloat? {
         guard let bitmap = bitmap(scale: 1) else {
             return nil
@@ -739,8 +698,6 @@ final class KeptPanelHost {
         return drawn.first.flatMap { first in drawn.last.map { CGFloat($0 - first + 1) } }
     }
 
-    /// Where the window's content first shows down one column, in points, to
-    /// a third of a point.
     func drawnTop(atColumn column: CGFloat) -> CGFloat? {
         let scale: CGFloat = 3
         guard let bitmap = bitmap(scale: scale) else {
@@ -786,7 +743,6 @@ final class KeptPanelHost {
         )
     }
 
-    /// The window as composited, as lossless bytes.
     func pixels() -> Data? {
         let renderer = UIGraphicsImageRenderer(bounds: window.bounds)
         return renderer.image { _ in

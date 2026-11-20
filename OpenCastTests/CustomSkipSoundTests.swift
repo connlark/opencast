@@ -212,8 +212,6 @@ struct CustomSkipSoundTests {
         #expect(fixture.playback.autoSkipCalls.suffix(2) == [.cue(customURL), .enabled(true)])
         store.setAutoSkipPromosAndAdsEnabled(false, modelContext: fixture.context, playback: fixture.playback)
 
-        // With the file gone, a store loaded while Auto-Skip is off still
-        // reads the choice: it never looked for the file.
         try FileManager.default.removeItem(at: customURL)
         let offPlayback = PlaybackVoiceBoostControllerSpy()
         let offStore = fixture.makeStore()
@@ -429,16 +427,11 @@ struct CustomSkipSoundTests {
     }
 }
 
-/// Two ways a compressed file's audio fails to decode while its header
-/// still reports a length.
 enum BrokenAACFile: CaseIterable, Sendable {
-    /// The audio bytes overwritten.
     case corrupted
-    /// The file cut off halfway through its audio.
     case truncated
 }
 
-/// The three ways an import is refused.
 enum RefusedSkipSoundFile: CaseIterable, Sendable {
     case tooLong
     case overSize
@@ -465,7 +458,6 @@ enum RefusedSkipSoundFile: CaseIterable, Sendable {
         case .tooLong:
             return try fixture.writeTone(named: "Long.wav", seconds: 3.5)
         case .overSize:
-            // One byte over the cap; the duration loader would accept it.
             let url = fixture.sources.appending(path: "Huge.wav")
             #expect(FileManager.default.createFile(atPath: url.path, contents: nil))
             let handle = try FileHandle(forWritingTo: url)
@@ -500,7 +492,6 @@ private struct Fixture {
         files = CustomSkipSoundFiles(directory: directory)
     }
 
-    /// The real duration loader unless one is given.
     func makeStore(
         save: @escaping (ModelContext) throws -> Void = { try $0.save() },
         loadDuration: (@Sendable (URL) async throws -> TimeInterval)? = nil
@@ -517,7 +508,6 @@ private struct Fixture {
         return try #require(store.customSkipSound)
     }
 
-    /// A 440 Hz tone as 16-bit PCM WAV, closed before it returns.
     func writeTone(named name: String, seconds: Double) throws -> URL {
         let url = sources.appending(path: name)
         let file = try AVAudioFile(
@@ -535,8 +525,6 @@ private struct Fixture {
         return url
     }
 
-    /// The tone as AAC in an MPEG-4 file whose audio is then broken. Its
-    /// header still opens and reports the tone's length.
     func writeBrokenAAC(_ broken: BrokenAACFile, named name: String, seconds: Double) throws -> URL {
         let url = sources.appending(path: name)
         let file = try AVAudioFile(
@@ -584,14 +572,11 @@ private struct Fixture {
         return url
     }
 
-    /// The length the header reports, without decoding.
     func reportedDuration(of url: URL) throws -> TimeInterval {
         let file = try AVAudioFile(forReading: url)
         return Double(file.length) / file.processingFormat.sampleRate
     }
 
-    /// A file in the directory that no preference references, as a failed
-    /// delete leaves one.
     func writeStrayFile() throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = files.url(forFileName: "custom-\(UUID().uuidString).wav")
@@ -613,7 +598,6 @@ private struct Fixture {
         return buffer
     }
 
-    /// The byte range of the top-level `mdat` box's payload.
     private static func mediaDataPayload(in data: Data) -> Range<Int>? {
         var offset = 0
         while offset + 8 <= data.count {
@@ -640,8 +624,7 @@ private struct Fixture {
         try LocalPreferenceRecord.preference(forKey: key, modelContext: context)?.value
     }
 
-    /// The three preferences with their stamps, to show a failed write
-    /// restored them exactly.
+    /// The stamps are included so a rewrite of the same value still shows.
     func customPreferences() throws -> [String: String] {
         var stored: [String: String] = [:]
         for key in [
@@ -663,7 +646,6 @@ private struct Fixture {
     }
 }
 
-/// Counts the files the duration loader is asked about, and accepts each.
 private actor DurationLoadRecorder {
     private(set) var count = 0
 
@@ -677,9 +659,6 @@ private actor DurationLoadRecorder {
     }
 }
 
-/// A duration loader that, once entered, waits until the test releases it,
-/// so the test can act while an import is in flight. It then accepts the
-/// file.
 private actor DurationLoaderGate {
     private var isEntered = false
     private var isReleased = false

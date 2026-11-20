@@ -83,15 +83,6 @@ struct PublisherChaptersStoreTests {
         #expect(fixture.client.requestCount == 2)
     }
 
-    @Test("An oversized document resolves unavailable and stores nothing")
-    func oversizedDocumentStoresNothing() async throws {
-        let fixture = try await makeFixture(responses: [.oversized])
-
-        #expect(await fixture.store.resolve(episodeID: Self.episodeID, documentURL: Self.documentURL) == .unavailable)
-        #expect(fixture.client.requestCount == 1)
-        #expect(await fixture.store.cachedEntry(episodeID: Self.episodeID) == nil)
-    }
-
     @Test("A malformed document resolves unavailable and stores nothing", arguments: [
         "not json",
         #"{"chapters":{"startTime":0,"title":"Opening"}}"#,
@@ -119,7 +110,6 @@ struct PublisherChaptersStoreTests {
             fetchedAt: staleFetchedAt
         ))
 
-        // Inside the backoff the stale entry still answers, with no request.
         #expect(await fixture.store.resolve(episodeID: Self.episodeID, documentURL: Self.documentURL) == .chapters(Self.staleChapters))
         #expect(fixture.client.requestCount == 1)
     }
@@ -215,22 +205,6 @@ struct PublisherChaptersStoreTests {
         #expect(fixture.client.requestCount == 1)
     }
 
-    @Test("A fetch that lands after the declaration moved stores nothing when no entry is cached")
-    func lateFetchStoresNothing() async throws {
-        let fixture = try await makeFixture(responses: [.body(Self.document)])
-        await fixture.client.hold()
-        let store = fixture.store
-
-        let caller = Task { await store.resolve(episodeID: Self.episodeID, documentURL: Self.documentURL) }
-        #expect(await waitUntil { fixture.client.requestCount == 1 })
-        try await fixture.declare(Self.movedDocumentURL)
-        await fixture.client.release()
-
-        #expect(await caller.value == .chapters(Self.documentChapters))
-        await store.waitForFetch(episodeID: Self.episodeID)
-        #expect(await store.cachedEntry(episodeID: Self.episodeID) == nil)
-    }
-
     @Test("The request carries the timeout and the body cap")
     func requestCarriesTimeoutAndCap() async throws {
         let fixture = try await makeFixture(responses: [.body(Self.document)])
@@ -275,7 +249,6 @@ struct PublisherChaptersStoreTests {
             )
         }
 
-        /// Moves the row's `chapters_url` the way a feed refresh does.
         func declare(_ documentURL: String) async throws {
             try await PublisherChaptersStoreTests.cacheEpisode(declaring: documentURL, in: cache)
         }

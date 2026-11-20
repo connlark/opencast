@@ -1,7 +1,5 @@
 import Foundation
 
-/// What one Make a Playlist request produced, worded for this feature rather
-/// than through `TranscriptIntelligenceFailure.userMessage`.
 nonisolated enum PlaylistOrganizerOutcome: Equatable, Sendable {
     case proposals([PlaylistProposalDraft], scope: PlaylistOrganizerScope)
     case empty(scope: PlaylistOrganizerScope)
@@ -12,7 +10,6 @@ nonisolated enum PlaylistOrganizerOutcome: Equatable, Sendable {
     case timedOut
     case malformed
     case tooLong
-    /// Never shown; the sheet returns to the form.
     case cancelled
     case failed(String)
 
@@ -61,8 +58,6 @@ nonisolated enum PlaylistOrganizerOutcome: Equatable, Sendable {
         }
     }
 
-    /// The experimental indices-only retry. The outcome view also hides it
-    /// once the declined request was already the simpler one.
     var offersSimplerRetry: Bool {
         switch self {
         case .declined:

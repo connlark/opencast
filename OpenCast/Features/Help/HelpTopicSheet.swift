@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Footer-link presentation of one topic; related topics push inside the
-/// sheet's own stack.
 struct HelpTopicSheet: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss

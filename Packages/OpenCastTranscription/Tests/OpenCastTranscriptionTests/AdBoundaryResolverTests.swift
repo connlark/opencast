@@ -83,21 +83,6 @@ struct AdBoundaryResolverTests {
                 ["straße", "strasse", "σ", "ς", "οσ", "i̇stanbul"])
     }
 
-    @Test func adjustedProvenanceSurvivesRemoteAndLocalCoding() throws {
-        let remote = try JSONDecoder().decode(OpenCastRemoteTranscriptSegment.self, from: Data(
-            #"{"id":37,"start":111.16,"end":117.6,"text":"ad","word_timings_adjusted":true}"#.utf8
-        ))
-        #expect(remote.wordTimingsAdjusted == true)
-        var value = segment()
-        value.wordTimingsAdjusted = remote.wordTimingsAdjusted
-        let decoded = try JSONDecoder().decode(OpenCastTranscriptSegment.self, from: JSONEncoder().encode(value))
-        let result = OpenCastAdBoundaryResolver.resolve(
-            .init(segmentID: 37, quote: ".org."), in: decoded, isStart: false, fallback: 117.6
-        )
-        #expect(result.time == 117.6)
-        #expect(result.fallbackReason == "adjusted_word_timing")
-    }
-
     @Test func publishedSegmentStartAdjustmentKeepsCoarseFallback() throws {
         let url = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "Fixtures/RemoteSegmentStartAdjustment.json")
         let remote = try JSONDecoder().decode(OpenCastRemoteTranscriptSegment.self, from: Data(contentsOf: url))
@@ -111,10 +96,9 @@ struct AdBoundaryResolverTests {
         #expect(result.fallbackReason == "adjusted_word_timing")
     }
 
-    @Test func malformedOptionalAnchorBecomesUnresolvable() throws {
-        for json in ["{}", "12", "{\"segment_id\":\"bad\",\"quote\":[]}"] {
-            let value = try JSONDecoder().decode(OpenCastAdBoundary.self, from: Data(json.utf8))
-            #expect(value.quote.isEmpty)
-        }
+    @Test(arguments: ["{}", "12", #"{"segment_id":"bad","quote":[]}"#])
+    func malformedOptionalAnchorBecomesUnresolvable(json: String) throws {
+        let value = try JSONDecoder().decode(OpenCastAdBoundary.self, from: Data(json.utf8))
+        #expect(value.quote.isEmpty)
     }
 }

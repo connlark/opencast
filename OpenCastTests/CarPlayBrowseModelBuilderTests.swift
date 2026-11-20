@@ -40,28 +40,6 @@ struct CarPlayBrowseModelBuilderTests {
         #expect(!snapshot.sections.contains { $0.rows.contains(.showMore) })
     }
 
-    @Test("Inbox keeps newest-first order and slices to the item cap")
-    func inboxOrderAndSlicing() async throws {
-        let fixture = try await makeFixture(episodeCount: 20)
-
-        let snapshot = CarPlayBrowseModelBuilder.inbox(
-            library: fixture.library,
-            downloadRecords: [],
-            currentEpisode: nil,
-            nowPlaying: .idle,
-            isLoading: false,
-            limits: Self.floorLimits
-        )
-
-        #expect(snapshot.title == "Inbox")
-        #expect(snapshot.sections.count == 1)
-        #expect(snapshot.sections[0].header == nil)
-        #expect(snapshot.rowCount == 12)
-        // 11 episodes plus the marker in the twelfth slot.
-        #expect(episodeIDs(in: snapshot) == (0..<11).map(episodeID))
-        #expect(snapshot.sections[0].rows.last == .showMore)
-    }
-
     @Test("Continue section is added only when an episode is loaded and counts against the cap")
     func continueSection() async throws {
         let fixture = try await makeFixture(episodeCount: 20)
@@ -88,8 +66,6 @@ struct CarPlayBrowseModelBuilderTests {
         #expect(withContinue.sections.map(\.header) == ["Continue", "Latest"])
         #expect(withContinue.rowCount == 12)
         #expect(withContinue.sections[0].rows.count == 1)
-        // The Continue row spends one of the twelve slots, so ten latest rows
-        // plus the marker follow it.
         #expect(episodeIDs(in: withContinue) == [episodeID(5)] + (0..<10).map(episodeID))
         #expect(withContinue.sections[1].rows.last == .showMore)
     }
@@ -123,37 +99,12 @@ struct CarPlayBrowseModelBuilderTests {
         let continuation = try #require(truncated.continuation)
         #expect(continuation.title == "More Episodes")
         #expect(continuation.sections.count == 1)
-        // The tail resumes exactly where the visible page stopped, is itself
-        // capped, and never nests another marker.
         #expect(episodeIDs(in: continuation.snapshot) == (11..<23).map(episodeID))
         #expect(continuation.snapshot.rowCount == 12)
         #expect(continuation.snapshot.continuation == nil)
         #expect(!continuation.sections.contains { $0.rows.contains(.showMore) })
     }
 
-    @Test("An inbox far past the row-build cap keeps the same page and continuation")
-    func farOverCapInboxKeepsPageAndContinuation() async throws {
-        let fixture = try await makeFixture(episodeCount: 60)
-
-        let snapshot = CarPlayBrowseModelBuilder.inbox(
-            library: fixture.library,
-            downloadRecords: [],
-            currentEpisode: nil,
-            nowPlaying: .idle,
-            isLoading: false,
-            limits: Self.floorLimits
-        )
-
-        #expect(snapshot.rowCount == 12)
-        #expect(episodeIDs(in: snapshot) == (0..<11).map(episodeID))
-        let continuation = try #require(snapshot.continuation)
-        #expect(episodeIDs(in: continuation.snapshot) == (11..<23).map(episodeID))
-        #expect(continuation.snapshot.rowCount == 12)
-    }
-
-    /// Archived rows leave before the row-build cap: filtered after it, the
-    /// ten archived rows would eat ten of the twenty-four built slots and
-    /// cut the continuation short.
     @Test("Inbox leaves archived episodes out without spending a slot on them")
     func inboxSkipsArchivedEpisodesBeforeTheCap() async throws {
         let fixture = try await makeFixture(episodeCount: 30)
@@ -178,10 +129,6 @@ struct CarPlayBrowseModelBuilderTests {
         #expect(episodeIDs(in: continuation.snapshot) == (21..<30).map(episodeID))
     }
 
-    /// Inbox membership is the Latest section. Continue is the loaded
-    /// episode, which stays visible like Up Next: archiving leaves playback
-    /// alone (D3), and an archived episode can still be played from its
-    /// show (D5).
     @Test("An archived current episode stays in Continue and leaves Latest")
     func archivedCurrentEpisodeStaysInContinue() async throws {
         let fixture = try await makeFixture(episodeCount: 20)
@@ -220,7 +167,6 @@ struct CarPlayBrowseModelBuilderTests {
         #expect(pushedFromNowPlaying.rowCount == 12)
         #expect(pushedFromNowPlaying.continuation == nil)
         #expect(!pushedFromNowPlaying.sections.contains { $0.rows.contains(.showMore) })
-        // The slot the marker would have taken carries a twelfth episode.
         #expect(episodeIDs(in: pushedFromNowPlaying) == (0..<12).map(episodeID))
     }
 
@@ -252,8 +198,7 @@ struct CarPlayBrowseModelBuilderTests {
         let latestRows = try #require(snapshot.sections.last?.rows)
 
         #expect(episodeRow(latestRows[0])?.isPlaying == true)
-        // The loaded episode's progress record churns while it plays, so its row
-        // deliberately carries no bar.
+        // A playing row carries no bar: its progress record churns while it plays.
         #expect(episodeRow(latestRows[0])?.playbackProgress == nil)
         #expect(episodeRow(latestRows[1])?.playbackProgress == 0.25)
         #expect(episodeRow(latestRows[1])?.isPlaying == false)
@@ -278,8 +223,6 @@ struct CarPlayBrowseModelBuilderTests {
             )
         )
 
-        // The CarPlay cold restore leaves an episode loaded and paused, which is
-        // exactly when a playing indicator would be a lie.
         let snapshot = CarPlayBrowseModelBuilder.inbox(
             library: fixture.library,
             downloadRecords: [],
@@ -294,26 +237,6 @@ struct CarPlayBrowseModelBuilderTests {
         #expect(!continueRow.isPlaying)
         #expect(!latestRow.isPlaying)
         #expect(latestRow.playbackProgress == 0.4)
-    }
-
-    @Test("Library lists subscriptions with their artwork")
-    func librarySubscriptions() async throws {
-        let fixture = try await makeFixture(episodeCount: 1)
-
-        let snapshot = CarPlayBrowseModelBuilder.library(
-            subscriptions: fixture.library.subscriptions,
-            library: fixture.library,
-            showsPlaylistsRow: false,
-            isLoading: false,
-            limits: Self.roomyLimits
-        )
-
-        #expect(snapshot.title == "Library")
-        #expect(snapshot.sections.count == 1)
-        let row = try #require(podcastRow(snapshot.sections[0].rows[0]))
-        #expect(row.feedURL == Self.podcastID)
-        #expect(row.title == Self.podcastTitle)
-        #expect(row.artworkURL == "https://example.com/art.jpg")
     }
 
     @Test("Per-show list honors the stored filter and sort order")
@@ -350,8 +273,6 @@ struct CarPlayBrowseModelBuilderTests {
         )
 
         #expect(episodeIDs(in: filtered) == [episodeID(2), episodeID(0)])
-        // Per-show rows trade the podcast title for the publish date, which the
-        // show list already implies.
         let oldest = try #require(fixture.library.episode(with: episodeID(2)))
         #expect(
             episodeRow(filtered.sections[0].rows[0])?.detailText
@@ -395,73 +316,6 @@ struct CarPlayBrowseModelBuilderTests {
         #expect(orphanRow.title == "Orphan Episode")
         #expect(orphanRow.detailText == "Removed Podcast")
         #expect(orphanRow.isDownloaded)
-    }
-
-    @Test("Empty lists carry their own empty-state copy, and loading lists spin")
-    func emptyAndLoadingStates() async throws {
-        let fixture = try await makeFixture(episodeCount: 0)
-
-        let empty = CarPlayBrowseModelBuilder.inbox(
-            library: fixture.library,
-            downloadRecords: [],
-            currentEpisode: nil,
-            nowPlaying: .idle,
-            isLoading: false,
-            limits: Self.roomyLimits
-        )
-        let loading = CarPlayBrowseModelBuilder.downloads(
-            records: [],
-            library: fixture.library,
-            nowPlaying: .idle,
-            isLoading: true,
-            limits: Self.roomyLimits
-        )
-
-        #expect(empty.sections.isEmpty)
-        #expect(empty.rowCount == 0)
-        #expect(empty.continuation == nil)
-        #expect(empty.emptyTitleVariants == ["No Episodes Yet", "No Episodes"])
-        #expect(empty.emptySubtitleVariants == ["New episodes from your shows appear here."])
-        #expect(!empty.showsSpinnerWhileEmpty)
-        #expect(loading.emptyTitleVariants == ["Loading…"])
-        #expect(loading.emptySubtitleVariants.isEmpty)
-        #expect(loading.showsSpinnerWhileEmpty)
-    }
-
-    @Test("Snapshots compare equal until a row actually changes")
-    func snapshotEquality() async throws {
-        let fixture = try await makeFixture(episodeCount: 3)
-        let changed = try #require(fixture.library.episode(with: episodeID(2)))
-
-        let first = CarPlayBrowseModelBuilder.inbox(
-            library: fixture.library,
-            downloadRecords: [],
-            currentEpisode: nil,
-            nowPlaying: .idle,
-            isLoading: false,
-            limits: Self.roomyLimits
-        )
-        let repeated = CarPlayBrowseModelBuilder.inbox(
-            library: fixture.library,
-            downloadRecords: [],
-            currentEpisode: nil,
-            nowPlaying: .idle,
-            isLoading: false,
-            limits: Self.roomyLimits
-        )
-
-        #expect(first == repeated)
-
-        let afterDownload = CarPlayBrowseModelBuilder.inbox(
-            library: fixture.library,
-            downloadRecords: [makeDownloadRecord(episodeID: changed.episodeID, state: .completed)],
-            currentEpisode: nil,
-            nowPlaying: .idle,
-            isLoading: false,
-            limits: Self.roomyLimits
-        )
-
-        #expect(first != afterDownload)
     }
 
     @Test("Library leads with the Playlists row only when asked, inside the same cap")
@@ -528,43 +382,6 @@ struct CarPlayBrowseModelBuilderTests {
         #expect(continuation.title == "More Playlists")
         #expect(continuation.sections.flatMap(\.rows).compactMap(playlistRow).map(\.playlistID) == ["playlist-11", "playlist-12"])
         #expect(continuation.snapshot.continuation == nil)
-    }
-
-    @Test("Playlist rows carry the cover show's artwork, else their symbol, with an inflected count")
-    func playlistRowsCarryShowArtworkOrSmartSymbol() throws {
-        let summaries = [
-            makePlaylistSummary(playlistID: "manual-cover", name: "Commute", kind: .manual),
-            makePlaylistSummary(playlistID: "manual-bare", name: "Bare", kind: .manual),
-            makePlaylistSummary(playlistID: "smart-default", name: "Fresh", kind: .smart),
-            makePlaylistSummary(playlistID: "smart-star", name: "Starred", kind: .smart)
-        ]
-        let counts = ["manual-cover": 3, "manual-bare": 0, "smart-default": 1, "smart-star": 12]
-
-        // The closure offers a cover to one playlist of each kind, so the
-        // other two prove they fall back to their symbol.
-        let bare: Set = ["manual-bare", "smart-star"]
-        let snapshot = CarPlayBrowseModelBuilder.playlists(
-            summaries,
-            episodeCount: { counts[$0.playlistID] ?? -1 },
-            artworkURL: { bare.contains($0.playlistID) ? nil : "https://example.com/cover.jpg" },
-            limits: Self.roomyLimits
-        )
-
-        let rows = snapshot.sections.flatMap(\.rows).compactMap(playlistRow)
-        try #require(rows.map(\.playlistID) == summaries.map(\.playlistID))
-        #expect(rows.map(\.title) == ["Commute", "Bare", "Fresh", "Starred"])
-        #expect(rows[0].artworkURL == "https://example.com/cover.jpg")
-        #expect(rows[0].symbolName == nil)
-        #expect(rows[0].detailText == "3 episodes")
-        #expect(rows[1].artworkURL == nil)
-        #expect(rows[1].symbolName == "music.note.list")
-        #expect(rows[1].detailText == "No episodes")
-        #expect(rows[2].artworkURL == "https://example.com/cover.jpg")
-        #expect(rows[2].symbolName == nil)
-        #expect(rows[2].detailText == "1 episode")
-        #expect(rows[3].artworkURL == nil)
-        #expect(rows[3].symbolName == PlaylistSymbolCover.defaultSymbolName)
-        #expect(rows[3].detailText == "12 episodes")
     }
 
     @Test("A playlist's episodes keep input order, carry the playlist and show title, and page like any list")

@@ -1,9 +1,8 @@
-/// Sorted, non-overlapping inclusive scalar ranges with binary search.
 struct ScalarRanges: Sendable {
     private let starts: [UInt32]
     private let ends: [UInt32]
 
-    /// `pairs` is `first, last, first, last, …` in ascending order.
+    /// `pairs` is `first, last, first, last, …`: inclusive, ascending and non-overlapping.
     init(pairs: [UInt32]) {
         starts = stride(from: 0, to: pairs.count, by: 2).map { pairs[$0] }
         ends = stride(from: 1, to: pairs.count, by: 2).map { pairs[$0] }

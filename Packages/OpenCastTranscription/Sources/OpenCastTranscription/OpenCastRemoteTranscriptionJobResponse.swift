@@ -1,6 +1,3 @@
-/// Common response of job mutation routes (create, source, ack, cancel):
-/// the job snapshot, optionally with the account balance when the route
-/// changed or read it.
 public struct OpenCastRemoteTranscriptionJobResponse: Codable, Sendable, Equatable {
     public var schemaVersion: Int
     public var job: OpenCastRemoteTranscriptionJobStatus

@@ -7,8 +7,6 @@ struct MiniPlayerMetadataView: View {
     let podcastTitle: String
     var playlistSource: PlaylistPlaybackSource? = nil
     var playlistRemainingCount = 0
-    /// Off in the dense row: the title alone, on one line. The caller keeps
-    /// the second line's text in its accessibility value.
     var showsSecondaryLine = true
 
     var body: some View {
@@ -18,8 +16,7 @@ struct MiniPlayerMetadataView: View {
                     .font(dynamicTypeSize.isAccessibilitySize ? .caption : .subheadline)
                     .foregroundStyle(.primary)
             } else if dynamicTypeSize.isAccessibilitySize {
-                // The system accessory has a fixed height. A scaled single
-                // line stays readable; VoiceOver receives both full titles.
+                // The system accessory has a fixed height, so accessibility sizes get one line.
                 Text("\(title), \(podcastTitle)")
                     .font(.caption)
                     .foregroundStyle(.primary)
@@ -42,8 +39,6 @@ struct MiniPlayerMetadataView: View {
     @ViewBuilder
     private var secondaryLine: some View {
         if let playlistSource {
-            // The count keeps layout priority so a long playlist name
-            // truncates before "N left" does.
             HStack(alignment: .firstTextBaseline, spacing: 0) {
                 Text("\(Image(systemName: "music.note.list")) \(playlistSource.name)")
                 if playlistRemainingCount >= 1 {

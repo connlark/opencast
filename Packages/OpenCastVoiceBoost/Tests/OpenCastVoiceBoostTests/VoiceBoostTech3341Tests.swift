@@ -2,15 +2,6 @@ import Foundation
 import Testing
 @testable import OpenCastVoiceBoost
 
-/// EBU Tech 3341 "minimum requirements" compliance cases (Table 1),
-/// synthesized per the spec: stereo 1 kHz sines, in phase in both channels,
-/// at per-channel peak levels and durations defined per case. Cases 6 (5.0
-/// channel) and 7-8 (authentic programme files) are out of scope for a
-/// mono/stereo engine without the EBU reference media.
-///
-/// Both meters are exercised: the offline analyzer as the strict file-based
-/// meter, and the realtime engine's rolling gated model, whose 60 s window
-/// covers every case's gated material at full length.
 struct VoiceBoostTech3341Tests {
     private struct ToneSegment {
         var seconds: Double

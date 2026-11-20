@@ -1,6 +1,5 @@
 import OpenCastTranscription
 
-/// User-facing interpretation of the Worker's optional ETA metadata.
 nonisolated enum RemoteTranscriptionEstimate: Equatable {
     case onTrack(remainingSeconds: Int)
     case queued(remainingSeconds: Int?)

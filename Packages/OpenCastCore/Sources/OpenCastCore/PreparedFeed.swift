@@ -26,7 +26,6 @@ public struct PreparedFeed: Hashable, Sendable {
         self.episodes = episodes
     }
 
-    /// Compatibility/fixture API. Production imports replay bounded batches.
     public func materialized() throws -> FeedSnapshot {
         var result: [Episode] = []
         try episodes.forEachBatch { result.append(contentsOf: $0) }
@@ -34,8 +33,6 @@ public struct PreparedFeed: Hashable, Sendable {
                             isSalvaged: isSalvaged, newFeedURL: newFeedURL)
     }
 
-    /// Identity reconciliation needs IDs and identity material, never summaries
-    /// or show notes. Build that projection away from the main actor.
     @concurrent
     public func identitySnapshot() async throws -> FeedSnapshot {
         var result: [Episode] = []
@@ -64,8 +61,6 @@ public struct PreparedFeedOutcome: Sendable {
     }
 }
 
-/// Read-only, replayable SQLite source with independent readers and shared
-/// lifetime ownership. No catalog text is retained by this object.
 public final class PreparedEpisodeSource: Hashable, Sendable {
     public static func == (lhs: PreparedEpisodeSource, rhs: PreparedEpisodeSource) -> Bool { lhs.url == rhs.url }
     public func hash(into hasher: inout Hasher) { hasher.combine(url) }
@@ -101,10 +96,8 @@ public final class PreparedEpisodeSource: Hashable, Sendable {
                   newestPublishedAt: episodes.compactMap(\.publishedAt).max())
     }
 
-    /// Synchronous for use inside the cache actor's single import transaction.
-    /// Each callback owns at most 256 rows / approximately 1 MiB of text; a
-    /// single larger item runs alone. Throwing (including cancellation) stops
-    /// replay immediately and closes its reader.
+    /// Synchronous, for the cache actor's single import transaction. A batch holds at most 256
+    /// rows or about 1 MiB of text; a single larger item runs alone.
     public func forEachBatch(_ consume: ([Episode]) throws -> Void) throws {
         let db = try FeedStagingDatabase(url: url, readOnly: true)
         let select = try db.statement("SELECT payload FROM episodes ORDER BY position")

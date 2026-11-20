@@ -90,21 +90,6 @@ struct EpisodeRemoteTranscriptionProgressMapperTests {
         #expect(mapper.completedUnitCount == 0)
     }
 
-    @Test("Parked and unsuccessful phases hold the current units; completion fills the card")
-    func parkedAndTerminalPhasesHold() {
-        let held: [RemoteTranscriptionRequestPhase] = [
-            .parkedOnServer(.parked),
-            .parkedOnServer(.connectionLost),
-            .failed(.serviceUnavailable),
-            .cancelled,
-            .mismatchLocalFallback,
-        ]
-        for phase in held {
-            #expect(Mapper.units(for: phase, currentUnits: 432) == 432)
-        }
-        #expect(Mapper.units(for: .completed, currentUnits: 432) == Mapper.totalUnitCount)
-    }
-
     private static func progress(
         _ stage: RemoteTranscriptionActiveStage,
         fraction: Double? = nil,

@@ -38,9 +38,7 @@ final class OpenCastAppRuntime {
                 inMemory: launchConfiguration.usesInMemoryStore,
                 layout: stores.layout
             )
-            // Seeds write cache data through the same store the app reads, so
-            // harness data exercises upsertCache rather than the one-time
-            // legacy import (finding 49).
+            // Seeds write through the same cache store the app reads.
             let inMemoryCacheStore = launchConfiguration.usesInMemoryStore
                 ? SQLiteLocalLibraryCacheStore.inMemory()
                 : nil
@@ -100,10 +98,7 @@ final class OpenCastAppRuntime {
                 voiceBoostTapDiagnostics: voiceBoostDiagnostics,
                 nowPlayingArtworkLoader: SharedNowPlayingArtworkLoader()
             )
-            let localLibraryCacheStore = Self.localLibraryCacheStore(
-                launchConfiguration: launchConfiguration,
-                inMemoryStore: inMemoryCacheStore
-            )
+            let localLibraryCacheStore = Self.localLibraryCacheStore(inMemoryStore: inMemoryCacheStore)
             let library = Self.libraryStore(
                 launchConfiguration: launchConfiguration,
                 localCacheStore: localLibraryCacheStore
@@ -157,7 +152,9 @@ final class OpenCastAppRuntime {
                 uiTestSeededChapters: launchConfiguration.seedsChapters ? OpenCastUITestSeedData.seededChapters : nil,
                 legacyLocalPlaylists: stores.legacyLocalPlaylists
             )
-            Self.prepareFirstScene(appModel, modelContainer: modelContainer)
+            // Runs before the first scene is built: the launch's settings load waits
+            // for the root view, and the first tab bar needs the Up Next Tab switch.
+            appModel.appearanceSettings.loadShowsUpNextTab(modelContext: modelContainer.mainContext)
             #if DEBUG
             if launchConfiguration.seedsUITestData {
                 UITestNowPlayingCompletionFixture.installIfRequested(
@@ -171,19 +168,9 @@ final class OpenCastAppRuntime {
         }
     }
 
-    /// What the first scene needs from the stores before it is built: the
-    /// launch's settings load runs only after the root view appears, and the
-    /// first tab bar follows the Up Next Tab switch.
-    static func prepareFirstScene(_ appModel: OpenCastAppModel, modelContainer: ModelContainer) {
-        appModel.appearanceSettings.loadShowsUpNextTab(modelContext: modelContainer.mainContext)
-    }
-
-    /// Everything that must happen before the container opens, in order: the
-    /// relocation, one log line per store, then the legacy playlist read at
-    /// the local URL the relocation resolved, so the read sees the file the
-    /// container will open and never depends on what that open does to the
-    /// playlist tables it no longer maps. An in-memory launch does none of it;
-    /// its configurations never read the layout.
+    /// Runs before the container opens, in order: relocation, its log, then the
+    /// legacy playlist read at the relocated URL, so the read never depends on
+    /// what opening the container does to the playlist tables it no longer maps.
     static func resolveModelStores(
         layout: ModelStoreLayout,
         usesInMemoryStore: Bool,
@@ -202,11 +189,9 @@ final class OpenCastAppRuntime {
         )
     }
 
-    /// nil once the copy has completed. A store with nothing to copy yields an
-    /// empty snapshot so the migration records itself as done and later
-    /// launches skip the file check. A failed read must never reach the
-    /// launch's `fatalError`: it is logged, yields nil, and the next launch
-    /// tries again.
+    /// nil once the copy has completed, or when the read fails: a failure must
+    /// never reach the launch's `fatalError`, and the next launch retries. An
+    /// empty store yields an empty snapshot so the migration records itself done.
     private static func legacyLocalPlaylists(
         storeURL: URL,
         defaults: UserDefaults
@@ -237,8 +222,6 @@ final class OpenCastAppRuntime {
         return TranscriptIntelligenceStore()
     }
 
-    // UI tests never reach the Keychain or the network: the keys live in
-    // memory, the policy is a fixed variant and the key test answers at once.
     private static func analysisPolicyStore(
         launchConfiguration: OpenCastLaunchConfiguration
     ) -> AnalysisPolicySnapshotStore {
@@ -277,7 +260,6 @@ final class OpenCastAppRuntime {
         return presenter
     }
 
-    /// UI tests keep run records in a directory of their own launch.
     private static func analysisRunRecordStore(launchConfiguration: OpenCastLaunchConfiguration) -> AnalysisRunRecordStore {
         guard launchConfiguration.usesInMemoryStore else { return AnalysisRunRecordStore() }
         return AnalysisRunRecordStore(
@@ -285,8 +267,6 @@ final class OpenCastAppRuntime {
         )
     }
 
-    /// UI tests cache the trial status in a suite of their own launch, so a
-    /// status an earlier launch read never outlives it.
     private static func analysisTrialStatusDefaults(launchConfiguration: OpenCastLaunchConfiguration) -> UserDefaults {
         guard launchConfiguration.usesInMemoryStore,
               let suite = UserDefaults(suiteName: "opencast.uitest.trial-status.\(UUID().uuidString)")
@@ -296,8 +276,6 @@ final class OpenCastAppRuntime {
         return suite
     }
 
-    /// UI tests answer the trial status from the seeded one and never reach
-    /// the trial service.
     private static func analysisTrialConnection(launchConfiguration: OpenCastLaunchConfiguration) -> AnalysisTrialConnection {
         guard launchConfiguration.usesInMemoryStore else { return AnalysisTrialConnection() }
         let trial = (launchConfiguration.uiTestAnalysisPolicy ?? .baked).bundle.trial
@@ -357,24 +335,11 @@ final class OpenCastAppRuntime {
     #endif
 
     private static func localLibraryCacheStore(
-        launchConfiguration: OpenCastLaunchConfiguration,
         inMemoryStore: SQLiteLocalLibraryCacheStore?
     ) -> (any LocalLibraryCacheStore)? {
         if let databaseURL = SearchColdStartProbe.dedicatedDatabaseURL {
             return SQLiteLocalLibraryCacheStore(databaseURL: databaseURL)
         }
-        guard let inMemoryStore else {
-            return nil
-        }
-
-        #if DEBUG
-        if let delayMilliseconds = launchConfiguration.uiTestLibraryLoadDelayMilliseconds {
-            return UITestDelayedLocalLibraryCacheStore(
-                base: inMemoryStore,
-                loadDelay: .milliseconds(delayMilliseconds)
-            )
-        }
-        #endif
         return inMemoryStore
     }
 

@@ -1,30 +1,21 @@
 @preconcurrency import AVFoundation
 import Foundation
 
-/// The file behind the listener's own skip sound, under
-/// `Application Support/CustomSkipSounds/`, excluded from backup like the
-/// app's other Application Support stores, so it never leaves the device.
-/// An import is checked on a staged copy and moved in only when it passes,
-/// each time under a fresh name: the player ignores a cue URL it already
-/// holds, so a file replaced at the same path would keep the old sound.
+/// Each import gets a fresh file name: the player ignores a cue URL it already holds, so a file
+/// replaced at the same path would keep the old sound.
 nonisolated struct CustomSkipSoundFiles: Sendable {
     static let directoryName = "CustomSkipSounds"
     static let maximumDuration: TimeInterval = 3
-    /// 3 s of uncompressed PCM at 192 kHz, 32-bit, in 8 channels is
-    /// 18,432,000 bytes, so no 3-second sound in a common uncompressed form
+    /// 3 s of 192 kHz 32-bit PCM in 8 channels is 18,432,000 bytes, so no common 3-second sound
     /// reaches this; a larger file is refused before it is read in full.
     static let maximumFileSize = 20_000_000
-    /// Frames decoded per read; a file over the cap is decoded at most this
-    /// far past it.
+    /// A file over the duration cap is decoded at most this far past it.
     static let decodeChunkFrames: AVAudioFrameCount = 4096
 
     let directory: URL
     private let loadDuration: @Sendable (URL) async throws -> TimeInterval
     private let writeStagedCopy: @Sendable (Data, URL) throws -> Void
 
-    /// `loadDuration` reads a file's length in seconds and throws when the
-    /// file is not audio it can decode. `writeStagedCopy` is the test seam
-    /// for the staged copy's write.
     init(
         directory: URL = .applicationSupportDirectory.appending(path: directoryName, directoryHint: .isDirectory),
         loadDuration: @escaping @Sendable (URL) async throws -> TimeInterval = CustomSkipSoundFiles.audioDuration(of:),
@@ -43,10 +34,6 @@ nonisolated struct CustomSkipSoundFiles: Sendable {
         Self.isFileName(fileName) && FileManager.default.fileExists(atPath: url(forFileName: fileName).path)
     }
 
-    /// Copies `source` in when it is at most `maximumFileSize` bytes and
-    /// audio of at most `maximumDuration` seconds, reading it through its
-    /// security-scoped access. Its name is the file's name without the
-    /// extension. A refused file leaves nothing behind.
     @concurrent
     func importSound(from source: URL) async throws(CustomSkipSoundImportError) -> CustomSkipSound {
         let data = try Self.readSource(source)
@@ -69,7 +56,6 @@ nonisolated struct CustomSkipSoundFiles: Sendable {
         return CustomSkipSound(fileName: fileName, name: Self.displayName(for: source))
     }
 
-    /// A missing file is not an error.
     func removeFile(named fileName: String) throws {
         guard Self.isFileName(fileName) else {
             return
@@ -77,8 +63,6 @@ nonisolated struct CustomSkipSoundFiles: Sendable {
         try Self.removeItemIfPresent(at: url(forFileName: fileName))
     }
 
-    /// Deletes every file in the directory but `fileName` (none when nil). A
-    /// missing directory is not an error.
     func removeFiles(except fileName: String?) throws {
         let fileNames: [String]
         do {
@@ -91,16 +75,13 @@ nonisolated struct CustomSkipSoundFiles: Sendable {
         }
     }
 
-    /// Delete Data: the directory and everything in it.
     func removeAll() throws {
         try Self.removeItemIfPresent(at: directory)
     }
 
-    /// The length of the audio that actually decodes, in seconds: a header
-    /// can under-report the length, and a corrupt file can report one and
-    /// decode nothing. Decoding stops as soon as the length passes
-    /// `maximumDuration`, and a read that fails throws. Uses no
-    /// `AVAudioPlayer`, whose preparation would take the audio session.
+    /// Decodes rather than trusting the header: a header can under-report the length, and a corrupt
+    /// file can report one and decode nothing. No `AVAudioPlayer`: preparing one takes the audio
+    /// session.
     @concurrent
     static func audioDuration(of url: URL) async throws -> TimeInterval {
         let file = try AVAudioFile(forReading: url)
@@ -159,8 +140,7 @@ nonisolated struct CustomSkipSoundFiles: Sendable {
         }
     }
 
-    /// Reads at most one byte past the cap, so a large file is never read
-    /// whole.
+    /// Reads at most one byte past the cap, so a large file is never read whole.
     private static func readSource(_ source: URL) throws(CustomSkipSoundImportError) -> Data {
         let isAccessing = source.startAccessingSecurityScopedResource()
         defer {

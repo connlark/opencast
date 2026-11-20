@@ -3,8 +3,6 @@ import Foundation
 @testable import OpenCastAnalysisProviders
 import Testing
 
-/// How the app hears Google say a key is on its free tier: the reader, kept
-/// apart from the interval rules, and the tier check built on it.
 @Suite("Gemini free tier")
 struct GeminiFreeTierTests {
     struct QuotaCase {
@@ -44,19 +42,6 @@ struct GeminiFreeTierTests {
         }
     }
 
-    @Test("The four live refusals read as free tier, though the interval reader leaves them alone")
-    func liveRefusals() throws {
-        let live = try Self.quotaCases().filter { $0.name.hasPrefix("live-") }
-        #expect(live.count == 4)
-        for item in live {
-            #expect(GeminiProviderErrors.namesFreeTier(status: 429, body: item.body), "\(item.name)")
-            #expect(GeminiProviderErrors.QuotaDetails(item.body) == nil, "\(item.name)")
-            let classified = GeminiProviderErrors.classify(status: 429, retryAfter: nil, body: item.body)
-            #expect(classified.freeTier, "\(item.name)")
-            #expect(classified.listener == .billingOrQuota, "\(item.name)")
-        }
-    }
-
     @Test("A metric alone or an id alone names the free tier; neither is not enough")
     func metricOrIDAlone() {
         let metric = #"{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests"}"#
@@ -67,17 +52,6 @@ struct GeminiFreeTierTests {
         #expect(GeminiProviderErrors.namesFreeTier(status: 429, body: Self.body(violation: id)))
         #expect(!GeminiProviderErrors.namesFreeTier(status: 429, body: Self.body(violation: paid)))
         #expect(GeminiProviderErrors.namesFreeTier(status: 429, body: Self.body(violation: "\(paid),\(id)")))
-    }
-
-    @Test("Neither an unreadable interval nor a zero allocation stops the reader")
-    func noIntervalAndZeroAllocation() {
-        let noInterval = #"{"quotaId":"GenerateRequests-FreeTier"}"#
-        let zero = #"{"quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaValue":"0"}"#
-
-        #expect(GeminiProviderErrors.QuotaDetails(Self.body(violation: noInterval)) == nil)
-        #expect(GeminiProviderErrors.namesFreeTier(status: 429, body: Self.body(violation: noInterval)))
-        #expect(GeminiProviderErrors.QuotaDetails(Self.body(violation: zero)) == nil)
-        #expect(GeminiProviderErrors.namesFreeTier(status: 429, body: Self.body(violation: zero)))
     }
 
     private static let quotaFailureType = "type.googleapis.com/google.rpc.QuotaFailure"

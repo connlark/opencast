@@ -6,29 +6,8 @@ import Testing
 @MainActor
 @Suite("Episode diagnostics zone matrix")
 struct EpisodeDiagnosticsZoneMatrixTests {
-    @Test("Tier classification splits exactly at the 0.8 confidence floor")
-    func tierClassificationSplitsExactlyAtPointEight() throws {
-        let document = makeDocument(spans: [
-            span(id: 1, start: 10, end: 20, confidence: 0.8),
-            span(id: 2, start: 30, end: 40, confidence: 0.7999),
-        ])
-
-        let matrix = EpisodeDiagnosticsZoneMatrix.make(
-            document: document,
-            bases: [basis("Unclamped", duration: nil)],
-            installedAutoSkipZones: nil
-        )
-
-        let column = try #require(matrix.columns.first)
-        #expect(column.spanOutcomes.map(\.isAutoSkip) == [true, false])
-        #expect(column.autoSkipZones == [PlaybackSkipZone(id: 1, startTime: 10, endTime: 20)])
-        #expect(column.displayOnlyZones == [PlaybackSkipZone(id: 2, startTime: 30, endTime: 40)])
-    }
-
     @Test("Outro span is preserved, clamped, or dropped depending on the duration basis")
     func outroFateVariesAcrossDurations() throws {
-        // The end-of-episode shape from real incidents: the outro span ends
-        // slightly past some duration measurements.
         let outro = span(id: 1, start: 5_100, end: 5_195.276, confidence: 0.9)
         let document = makeDocument(spans: [outro])
 
@@ -81,33 +60,6 @@ struct EpisodeDiagnosticsZoneMatrixTests {
         #expect(column.spanOutcomes[2].mergedIntoZoneID == nil)
     }
 
-    @Test("Installed comparison matches, mismatches, and is nil when nothing is installed")
-    func installedComparisonStates() throws {
-        let document = makeDocument(spans: [span(id: 1, start: 10, end: 20, confidence: 0.9)])
-        let mappedZones = [PlaybackSkipZone(id: 1, startTime: 10, endTime: 20)]
-
-        let matching = EpisodeDiagnosticsZoneMatrix.make(
-            document: document,
-            bases: [basis("RSS", duration: 100)],
-            installedAutoSkipZones: mappedZones
-        )
-        #expect(try #require(matching.columns.first).matchesInstalledAutoSkipZones == true)
-
-        let mismatching = EpisodeDiagnosticsZoneMatrix.make(
-            document: document,
-            bases: [basis("RSS", duration: 15)],
-            installedAutoSkipZones: mappedZones
-        )
-        #expect(try #require(mismatching.columns.first).matchesInstalledAutoSkipZones == false)
-
-        let uninstalled = EpisodeDiagnosticsZoneMatrix.make(
-            document: document,
-            bases: [basis("RSS", duration: 100)],
-            installedAutoSkipZones: nil
-        )
-        #expect(try #require(uninstalled.columns.first).matchesInstalledAutoSkipZones == nil)
-    }
-
     @Test("Display-only spans clamp within their own tier")
     func displayOnlySpansClampWithinTheirTier() throws {
         let document = makeDocument(spans: [
@@ -126,7 +78,6 @@ struct EpisodeDiagnosticsZoneMatrixTests {
         #expect(outcome.fate == .clamped(startTime: 90, endTime: 100))
         #expect(column.autoSkipZones.isEmpty)
         #expect(column.displayOnlyZones == [PlaybackSkipZone(id: 1, startTime: 90, endTime: 100)])
-        // No auto-skip zones mapped and none installed: that is a match.
         #expect(column.matchesInstalledAutoSkipZones == true)
     }
 

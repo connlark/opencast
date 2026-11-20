@@ -1,10 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// Play, Play Next, Play Last, Rename and Delete for a playlist in the
-/// collection, shared by list rows and grid tiles. Play asks whether to
-/// replace Up Next when it already holds episodes. Tiles get the context menu
-/// only; swipes do not fit a narrow grid column.
 struct PlaylistCollectionActionsModifier: ViewModifier {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext

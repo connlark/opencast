@@ -1,9 +1,6 @@
 import Foundation
 import Observation
 
-/// The analysis stores' shared failure surface: the last error message,
-/// optionally scoped to one episode, plus the change notifier every store
-/// transition pulses so drain loops waiting on the store wake up.
 @Observable
 final class AnalysisFailureSurface {
     private(set) var lastErrorMessage: String?
@@ -35,8 +32,7 @@ final class AnalysisFailureSurface {
         stateChanges.notify()
     }
 
-    /// Clears the failure scoped to `episodeID` (any failure when nil); a
-    /// different episode's failure is left standing.
+    /// Leaves a different episode's failure standing.
     func clear(episodeID: String? = nil) {
         guard episodeID == nil || lastErrorEpisodeID == nil || lastErrorEpisodeID == episodeID else {
             return
@@ -49,8 +45,7 @@ final class AnalysisFailureSurface {
         }
     }
 
-    /// Silent reset for callers that republish the whole store afterwards
-    /// (load, nuke) and notify once themselves.
+    /// Does not notify: the caller republishes the whole store and notifies once.
     func reset() {
         lastErrorMessage = nil
         lastErrorEpisodeID = nil

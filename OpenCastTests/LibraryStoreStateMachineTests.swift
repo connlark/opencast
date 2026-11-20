@@ -28,11 +28,7 @@ struct LibraryStoreStateMachineTests {
 
         let hydration = Task { await store.refreshFeedsNeedingLocalCache(modelContext: context) }
         #expect(await service.waitForRequestCount(2))
-        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
-        while store.episode(with: "restore-fast") == nil, ContinuousClock.now < deadline {
-            await Task.yield()
-        }
-        let publishedBeforeSlowFeed = store.episode(with: "restore-fast") != nil
+        let publishedBeforeSlowFeed = await waitUntil { store.episode(with: "restore-fast") != nil }
         context.insert(SubscriptionRecord(feedURL: late, title: "Late"))
         try context.save()
         await gate.release()
@@ -205,8 +201,6 @@ struct LibraryStoreStateMachineTests {
         try context.save()
         await store.load(modelContext: context)
 
-        // Subscribe failures surface through state alone; lastErrorMessage
-        // stays untouched on this path.
         try? await store.subscribe(to: missingFeedURL, modelContext: context)
         #expect(store.state == .failed("No scripted response for \(missingFeedURL)"))
 
@@ -600,22 +594,18 @@ struct LibraryStoreStateMachineTests {
         await store.load(modelContext: context)
         #expect(store.syncedStoreSelfSaveCount == 0)
 
-        // upsert: subscription insert.
         try await store.subscribe(to: feedURL, modelContext: context)
         #expect(store.syncedStoreSelfSaveCount == 1)
 
-        // repairSyncDuplicates: merge a duplicated subscription record.
         context.insert(SubscriptionRecord(feedURL: feedURL, title: "Credit Duplicate"))
         try context.save()
         let repairResult = try await store.repairSyncDuplicates(modelContext: context)
         #expect(repairResult.hasChanges)
         #expect(store.syncedStoreSelfSaveCount == 2)
 
-        // setAdAutoDetectEnabled: synced flag flip.
         #expect(store.setAdAutoDetectEnabled(true, feedURL: feedURL, modelContext: context))
         #expect(store.syncedStoreSelfSaveCount == 3)
 
-        // setPodcastPlaybackSettings: both synced trims and the speed in one save.
         #expect(store.setPodcastPlaybackSettings(
             PodcastPlaybackSkipSettings(skipIntroSeconds: 20, skipOutroSeconds: 10),
             rateOverride: nil,
@@ -625,7 +615,6 @@ struct LibraryStoreStateMachineTests {
         ))
         #expect(store.syncedStoreSelfSaveCount == 4)
 
-        // updateProgress: progress row insert.
         #expect(store.updateProgress(
             episodeID: "credit-episode-1",
             podcastID: feedURL,
@@ -635,16 +624,13 @@ struct LibraryStoreStateMachineTests {
         ))
         #expect(store.syncedStoreSelfSaveCount == 5)
 
-        // markAllPlayed: batched progress save.
         #expect(store.markAllPlayed(forPodcastID: feedURL, modelContext: context))
         #expect(store.syncedStoreSelfSaveCount == 6)
 
-        // clearProgress: progress delete plus tombstone.
         let episode = try #require(store.episode(with: "credit-episode-1"))
         #expect(store.clearProgress(for: episode, modelContext: context))
         #expect(store.syncedStoreSelfSaveCount == 7)
 
-        // clearProgressForUnsubscribedShows: unsubscribed history sweep.
         context.insert(
             EpisodeProgressRecord(
                 episodeID: "credit-stray-episode",
@@ -658,13 +644,11 @@ struct LibraryStoreStateMachineTests {
         #expect(store.clearProgressForUnsubscribedShows(modelContext: context) == 1)
         #expect(store.syncedStoreSelfSaveCount == 8)
 
-        // reconcileEpisodeIdentities: refresh that re-keys an episode identity.
         await store.refresh(feedURL: feedURL, modelContext: context)
         #expect(store.state == .idle)
         #expect(store.episode(with: "credit-episode-2") != nil)
         #expect(store.syncedStoreSelfSaveCount == 9)
 
-        // migrateSubscription: relocation onto a new canonical feed URL.
         try await store.migrateSubscription(
             from: feedURL,
             toFeedURL: try #require(URL(string: migratedFeedURL)),
@@ -677,7 +661,6 @@ struct LibraryStoreStateMachineTests {
         #expect(migratedSubscription.skipIntroSeconds == 20)
         #expect(migratedSubscription.skipOutroSeconds == 10)
 
-        // unsubscribe: subscription delete plus tombstone.
         await store.unsubscribe(feedURL: migratedFeedURL, modelContext: context)
         #expect(store.state == .idle)
         #expect(store.syncedStoreSelfSaveCount == 11)

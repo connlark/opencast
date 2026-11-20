@@ -1,9 +1,6 @@
 import Foundation
 
-/// Okapi BM25 over each episode's title and kept description, with the
-/// Lucene-style non-negative idf, `log(1 + (N - df + 0.5) / (df + 0.5))`,
-/// k1 1.2 and b 0.75. Inverted postings, so a query touches only the lines
-/// that share one of its terms. Immutable once built.
+/// Okapi BM25 with Lucene's non-negative idf.
 nonisolated struct EpisodeMetadataIndex: Sendable {
     static let termSaturation = 1.2
     static let lengthNormalization = 0.75
@@ -44,7 +41,6 @@ nonisolated struct EpisodeMetadataIndex: Sendable {
         positions.count
     }
 
-    /// Lines with a positive score, best first, ties by position (newest first).
     func search(_ query: String, limit: Int) -> [EpisodeMetadataMatch] {
         guard limit > 0 else {
             return []
@@ -52,9 +48,7 @@ nonisolated struct EpisodeMetadataIndex: Sendable {
         return Array(ranked(EpisodeMetadataTokenizer.queryTerms(query), keeping: nil).prefix(limit))
     }
 
-    /// Query terms that appear in at least one line and in no more than half
-    /// of them. A term in nearly every line (the show's own name) cannot
-    /// narrow anything down; a term in no line matches nothing.
+    /// A term in more than half the lines (the show's own name) cannot narrow anything down.
     func informativeTerms(_ query: String) -> [String] {
         EpisodeMetadataTokenizer.queryTerms(query).filter { term in
             let frequency = postings[term]?.count ?? 0
@@ -66,8 +60,6 @@ nonisolated struct EpisodeMetadataIndex: Sendable {
         !informativeTerms(query).isEmpty
     }
 
-    /// The full ranking for `query`, kept where the line holds an informative
-    /// term: the lexical block of a candidate window, in BM25 order.
     func informativeMatches(_ query: String) -> [EpisodeMetadataMatch] {
         let informative = informativeTerms(query)
         guard !informative.isEmpty else {

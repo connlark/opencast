@@ -3,31 +3,12 @@ import Foundation
 import OpenCastTranscription
 import SwiftData
 
-/// Runs exactly one remote transcription job end to end: bootstrap →
-/// create/attach (purpose-keyed idempotency) while the explicit episode
-/// download starts/reuses → report exact local source identity → poll with
-/// the server's pacing plus jitter → drive the exact-device upload when (and
-/// only when) the server requests it → fetch/validate result → durable local
-/// import → ack → refresh balance. Progress surfaces through
-/// `RemoteTranscriptionJobEvent`; failures through
-/// `RemoteTranscriptionJobRunError`.
-///
-/// The persisted reference is the client half of the server's
-/// `(account, clientRequestID)` idempotency contract: it is marked
-/// `createAttempted` before a create can leave the process, attached as soon
-/// as the response lands, kept (with a recoverable exit) on every transport
-/// or local failure afterwards, and cleared only from terminal paths. No
-/// error or task cancellation ever sends `/cancel`; only `cancelServerJob`,
-/// called from user-cancel paths, does, and concurrent calls for one
-/// reference share a single resolution. A cancellation that lands after the
-/// durable import completes the run instead of parking it: the transcript is
-/// already saved, so there is nothing left to stop. The one documented
-/// exception to the cancel rule is a detect run observing `awaiting_credits`,
-/// an unfunded reservation the runner releases before any charge.
+/// Only `cancelServerJob` and the unfunded `awaiting_credits` release send `/cancel`, never an
+/// error or task cancellation. Once a create is attempted, the reference survives every
+/// transport or local failure and is cleared only on terminal paths.
 final class RemoteTranscriptionJobRunner {
     typealias UploadSessionFactory = (_ jobID: String, _ sourceFileURL: URL) -> RemoteTranscriptionUploadSession
 
-    /// How a user-authorized cancel resolved against the server.
     enum UserCancelResolution: Equatable {
         /// One `/cancel` reached the server (any landed answer counts); the
         /// reference is cleared.
@@ -35,15 +16,13 @@ final class RemoteTranscriptionJobRunner {
         /// No create ever left the process, so there is nothing to cancel;
         /// the reference is cleared without a `/cancel`.
         case noServerJob
-        /// The job could not be resolved or the cancel response was lost.
-        /// The persisted intent stays so the next recovery trigger retries
-        /// it; polling never re-attaches meanwhile.
+        /// The job could not be resolved or the cancel response was lost; the persisted intent
+        /// stays for the next recovery trigger, and polling never re-attaches meanwhile.
         case uncertain
     }
 
-    /// Grace for transient backend loss (≈2¼ minutes total): long enough to
-    /// ride out a Wi-Fi handoff mid-poll, short enough that a genuinely dead
-    /// backend still parks the run promptly.
+    /// About 2¼ minutes in all: rides out a Wi-Fi handoff mid-poll, yet a dead backend still parks
+    /// the run promptly.
     static let defaultTransportRetryDelays: [Duration] = [
         .seconds(2), .seconds(5), .seconds(10), .seconds(20), .seconds(40), .seconds(60),
     ]
@@ -60,12 +39,10 @@ final class RemoteTranscriptionJobRunner {
     private let transportRetryDelays: [Duration]
     private let localRetryDelays: [Duration]
     private let progressTracker = RemoteTranscriptionProgressTracker()
-    /// Create requests this process has sent, keyed by reference, so a user
-    /// cancel of a `createAttempted` reference can replay the same request
-    /// to learn its job id.
+    /// Lets a user cancel of a `createAttempted` reference replay the same request to learn its
+    /// job id.
     private var createRequests: [ReferenceKey: OpenCastRemoteTranscriptionJobCreateRequest] = [:]
-    /// User cancels in flight, keyed by reference, so a repeated tap or a
-    /// recovery trigger racing a tap joins the resolution already underway
+    /// A repeated tap, or a recovery trigger racing a tap, joins the resolution already underway
     /// instead of sending a second `/cancel`.
     private var userCancels: [ReferenceKey: Task<UserCancelResolution, Never>] = [:]
 
@@ -74,10 +51,8 @@ final class RemoteTranscriptionJobRunner {
         let purpose: RemoteTranscriptionJobPurpose
     }
 
-    /// Where a run is when a leg fails, which decides the exit disposition.
-    /// A re-run starts at the stage its persisted reference already reached,
-    /// so a failure ahead of the create leg (bootstrap) is judged against the
-    /// job that may already exist, never as "no attempt was made".
+    /// A re-run starts at the stage its persisted reference already reached, so a failure ahead of
+    /// the create leg is judged against the job that may already exist.
     private enum RunStage {
         /// Before `createAttempted` was persisted: no server job can exist.
         case beforeCreate
@@ -102,7 +77,6 @@ final class RemoteTranscriptionJobRunner {
         case none
     }
 
-    /// The opaque identifiers every diagnostic event of one run carries.
     private struct RunTrail {
         let episodeID: String
         let clientRequestID: String
@@ -192,8 +166,6 @@ final class RemoteTranscriptionJobRunner {
             // the create is honored, so the user-cancel path finds the job.
             try Task.checkCancellation()
 
-            // The explicit local download runs concurrently with the server's
-            // origin fetch; policy stays foreground/local-only.
             let download = try await trustedCompletedDownload(
                 episode: episode,
                 modelContext: modelContext
@@ -213,9 +185,8 @@ final class RemoteTranscriptionJobRunner {
                 onEvent: onEvent
             )
             if finalStatus.state == .exactUploadRequired || finalStatus.state == .exactUploading {
-                // The server could not stage or prove the origin bytes; the
-                // user already asked for this transcript, so the exact-copy
-                // upload engages without a second confirmation.
+                // The user already asked for this transcript, so the exact-copy upload engages
+                // without a second confirmation.
                 try await uploadExactCopy(
                     jobID: jobID,
                     localFileURL: localFileURL,
@@ -229,11 +200,9 @@ final class RemoteTranscriptionJobRunner {
                 )
             }
             if finalStatus.state == .awaitingCredits {
-                // Detect-only exception (D16): a detect pass never parks on
-                // credits, which would block the whole queue for the
-                // server's awaiting-credits deadline. The reservation is
-                // unfunded, so releasing it is a server-state bail before
-                // any charge, not an error cancellation.
+                // A detect pass never parks on credits, which would block the whole queue for the
+                // server's awaiting-credits deadline. The reservation is unfunded, so releasing it
+                // charges nothing.
                 try await releaseUnfundedReservation(trail: trail)
             }
             if finalStatus.state == .acknowledged {
@@ -266,12 +235,9 @@ final class RemoteTranscriptionJobRunner {
             try await transcriptions.importRemoteTranscript(document, modelContext: modelContext)
             emit(trail, .imported, leg: .importTranscript)
 
-            // Ack only after the durable local import; an ack failure is the
-            // server's recovery problem (result TTL), never a user failure.
-            // The run is committed from here: a local cancellation that lands
-            // this late has nothing left to stop (the transcript is saved),
-            // so it is recorded on the ack leg and the run still completes
-            // without any `/cancel`.
+            // Ack only after the durable import; an ack failure is the server's recovery problem
+            // (result TTL). The run is committed: a cancellation this late is recorded on the ack
+            // leg and the run still completes.
             do {
                 _ = try await api.ack(
                     jobID: jobID,
@@ -324,14 +290,9 @@ final class RemoteTranscriptionJobRunner {
         }
     }
 
-    /// The user-authorized cancel for a reference: persists the intent,
-    /// resolves the job id (letting a lost create response replay the same
-    /// client request ID), sends at most one `/cancel`, and clears the
-    /// reference only after that attempt is recorded. Never called from an
-    /// error or task-cancellation path. Concurrent calls for the same
-    /// reference await the resolution already in flight. `episode` lets a
-    /// recovery trigger replay a lost create after a relaunch, when this
-    /// process never built the original request.
+    /// Sends at most one `/cancel` and clears the reference only after that attempt is recorded.
+    /// Never call it from an error or task-cancellation path. `episode` lets a relaunched process
+    /// replay a lost create.
     func cancelServerJob(
         episodeID: String,
         purpose: RemoteTranscriptionJobPurpose,
@@ -408,9 +369,8 @@ final class RemoteTranscriptionJobRunner {
 
     // MARK: Legs
 
-    /// Every purpose asks the server for a transcript only: ad detection
-    /// runs on the device after delivery, so no create sets
-    /// `ad_analysis_requested`.
+    /// Ad detection runs on the device after delivery, so no create sets `ad_analysis_requested`,
+    /// whatever the purpose.
     private func createRequest(
         episode: EpisodeListItemSnapshot,
         enclosureURL: String,
@@ -427,9 +387,8 @@ final class RemoteTranscriptionJobRunner {
         )
     }
 
-    /// A create request for this reference, rebuilt from the episode with
-    /// the same client request ID. The server maps the ID to the job it
-    /// already has, whatever the first create asked for.
+    /// Safe to rebuild: the server maps the client request ID to the job it already has, whatever
+    /// the first create asked for.
     private func replayCreateRequest(
         for episode: EpisodeListItemSnapshot?,
         key: ReferenceKey,
@@ -449,10 +408,6 @@ final class RemoteTranscriptionJobRunner {
         )
     }
 
-    /// The download this job reports and may upload, made trusted first: an
-    /// unhashed one adopts the hash computed here, so the transcript this
-    /// job delivers attaches to it; a missing or size-drifted file downloads
-    /// again, once, before any failure maps to `.downloadFailed`.
     private func trustedCompletedDownload(
         episode: EpisodeListItemSnapshot,
         modelContext: ModelContext
@@ -469,9 +424,6 @@ final class RemoteTranscriptionJobRunner {
         }
     }
 
-    /// Drives the exact-device upload session and cleans its part files on
-    /// every exit: success, cancellation, or failure. A thrown error surfaces
-    /// through the normal failure mapping.
     private func uploadExactCopy(
         jobID: String,
         localFileURL: URL,
@@ -492,8 +444,6 @@ final class RemoteTranscriptionJobRunner {
         }
     }
 
-    /// A download hashed for this run reports what was measured, its audio
-    /// duration included; one already trusted reports its persisted identity.
     private func localSourceIdentity(
         of download: TrustedCompletedDownload
     ) -> OpenCastRemoteTranscriptionSourceIdentity {
@@ -507,11 +457,8 @@ final class RemoteTranscriptionJobRunner {
         )
     }
 
-    /// Polls until the job is terminal, has a result, or requests the
-    /// exact-device upload (which the caller drives, then resumes polling).
-    /// With `waitsForCredits` false, an `awaiting_credits` sighting returns
-    /// immediately so the caller can bail instead of parking on the server's
-    /// awaiting-credits deadline.
+    /// Also returns when the server requests the exact-device upload. With `waitsForCredits` false,
+    /// `awaiting_credits` returns at once so the caller can bail instead of parking.
     private func pollUntilResult(
         trail: RunTrail,
         waitsForCredits: Bool,
@@ -554,16 +501,12 @@ final class RemoteTranscriptionJobRunner {
             case .cancelling, .unknown:
                 break
             }
-            // Server-paced polling with client jitter; no duplicate submits
-            // on transient poll failures because the job ID is stable.
             let jitter = Double.random(in: 0...1)
             try await Task.sleep(for: .seconds(Double(response.pollAfterSeconds) + jitter))
         }
     }
 
-    /// The detect-only `awaiting_credits` bail: one `/cancel` on the
-    /// unfunded reservation, then the reference is cleared so the offered
-    /// device fallback is honest. Always throws.
+    /// Clears the reference so the offered device fallback is honest.
     private func releaseUnfundedReservation(trail: RunTrail) async throws -> Never {
         if let jobID = trail.jobID {
             do {
@@ -577,11 +520,6 @@ final class RemoteTranscriptionJobRunner {
         throw RemoteTranscriptionJobRunError.serverRejected(.insufficientCredits)
     }
 
-    /// A poll answering `acknowledged` is success when this device already
-    /// holds the transcript that job produced (import is idempotent by the
-    /// job's provenance token). Without that provenance the server has
-    /// already deleted its result, so nothing remains to fetch: the
-    /// reference is cleared and the distinct outcome is the evidence.
     private func reconcileAcknowledged(
         trail: RunTrail,
         completionDeliveryOwner: JobCompletionDeliveryOwner
@@ -606,11 +544,6 @@ final class RemoteTranscriptionJobRunner {
 
     // MARK: Retry ladder
 
-    /// Runs one request leg with the leg-aware ladder: transport errors use
-    /// the transport delays, local errors (App Attest, keychain, decode) the
-    /// short local delays, and landed HTTP, validation and download errors
-    /// do not retry. Cancellation propagates immediately. Every attempt is
-    /// recorded as a diagnostic event.
     private func performLeg<T>(
         _ leg: RemoteJobDiagnosticEvent.Leg,
         _ trail: RunTrail,
@@ -671,8 +604,7 @@ final class RemoteTranscriptionJobRunner {
         }
     }
 
-    /// True for a client-side transport shape: the request may have left
-    /// the process. Everything else is a local failure.
+    /// True when the request may have left the process.
     private static func isTransportExit(_ error: any Error) -> Bool {
         switch error {
         case is URLError:
@@ -694,9 +626,7 @@ final class RemoteTranscriptionJobRunner {
         code == "invalid_response" || code == "response_too_large"
     }
 
-    /// Client-side codes for configuration states (feature disabled, App
-    /// Attest or AppTransaction unavailable) and download outcomes, which a
-    /// retry cannot change.
+    /// Configuration states and download outcomes, which a retry cannot change.
     private static func isNonRetryableClientCode(_ code: String) -> Bool {
         switch OpenCastRemoteTranscriptionErrorCode(wireValue: code) {
         case .featureDisabled, .unauthorized, .invalidRequest:
@@ -708,8 +638,6 @@ final class RemoteTranscriptionJobRunner {
 
     // MARK: Exit disposition
 
-    /// Maps a leg's final error onto the reference's exit and the thrown run
-    /// error, by run stage (CONTRACTS §3 for the create leg, §5 afterwards).
     private func exitDisposition(
         for error: any Error,
         stage: RunStage,

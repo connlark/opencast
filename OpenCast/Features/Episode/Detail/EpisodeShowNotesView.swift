@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Show notes rendered one paragraph block per `Text` in a lazy stack, so
-/// arbitrarily long notes never exceed what a single text view can paint.
+/// One `Text` per paragraph block in a lazy stack: a single text view cannot paint
+/// arbitrarily long notes.
 struct EpisodeShowNotesView: View {
     let blocks: [AttributedString]
     let onSelectTimestamp: (TimeInterval) -> Void

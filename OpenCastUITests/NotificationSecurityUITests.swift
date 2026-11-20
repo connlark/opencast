@@ -188,6 +188,10 @@ final class NotificationSecurityUITests: XCTestCase {
 
     @MainActor
     func testSimulatorAdFreePassCompletionNotificationLookFixtureScreenshots() throws {
+        guard ProcessInfo.processInfo.environment["OPENCAST_RUN_NOTIFICATION_LOOK_UI_TESTS"] == "1" else {
+            throw XCTSkip("Set OPENCAST_RUN_NOTIFICATION_LOOK_UI_TESTS=1 to run the ad-free pass notification look screenshots.")
+        }
+
         let permissionMonitor = addUIInterruptionMonitor(withDescription: "Notification Permission") { alert in
             for buttonTitle in ["Allow", "Allow Notifications"] {
                 let button = alert.buttons[buttonTitle]

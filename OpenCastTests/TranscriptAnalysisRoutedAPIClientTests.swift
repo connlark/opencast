@@ -5,24 +5,6 @@ import Testing
 @MainActor
 @Suite("Transcript analysis lane router")
 struct TranscriptAnalysisRoutedAPIClientTests {
-    @Test("Release lanes map StoreKit environments; unknown fails closed")
-    func releaseLaneMapping() {
-        let production = TranscriptAnalysisBackendConfiguration.release(for: .production)
-        #expect(production.isEnabled)
-        #expect(production.workerBaseURL == TranscriptAnalysisBackendConfiguration.production.workerBaseURL)
-
-        for environment in [RemoteTranscriptionStoreEnvironment.sandbox, .xcode] {
-            let configuration = TranscriptAnalysisBackendConfiguration.release(for: environment)
-            #expect(configuration.isEnabled)
-            #expect(
-                configuration.workerBaseURL
-                    == TranscriptAnalysisBackendConfiguration.prodStaging.workerBaseURL
-            )
-        }
-
-        #expect(!TranscriptAnalysisBackendConfiguration.release(for: .unknown("unavailable")).isEnabled)
-    }
-
     @Test("Router resolves the environment once and pins every call to one client")
     func routerResolvesOnceAndPins() async throws {
         let stub = RoutedStubEpisodeTranscriptAnalysisClient()

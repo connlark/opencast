@@ -1,5 +1,4 @@
-/// How the playlist collection is ordered. The raw value is persisted as a
-/// view preference, never on the playlist rows.
+/// The raw value is persisted as a view preference.
 nonisolated enum PlaylistSortOrder: String, CaseIterable, Codable, Identifiable, Sendable {
     case name
     case recentlyUpdated

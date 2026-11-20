@@ -81,9 +81,8 @@ nonisolated extension SQLiteEpisodeSearchIndex {
                 )
             }
 
-            // This table stores only term membership. A duplicated summary
-            // and note body contributes the same terms; FTS and evidence
-            // still retain both fields with their existing ranking behavior.
+            // The spelling table stores only term membership, so show notes equal to the summary
+            // add nothing.
             var spellingFields: [(String, EpisodeSearchVocabularyField)] = [
                 (document.title, .title),
                 (document.podcastTitle, .podcastTitle),
@@ -214,9 +213,8 @@ nonisolated extension SQLiteEpisodeSearchIndex {
                 && $0.startSeconds.isFinite
                 && $0.endSeconds.isFinite
         }
-        // Reconciliation replays every completed transcript on each launch.
-        // An unchanged document (same version, same segment count) is already
-        // fully indexed; skip the delete/re-insert FTS churn entirely.
+        // Reconciliation replays every completed transcript at launch; an unchanged document is
+        // already indexed, so the FTS delete and re-insert are skipped.
         if try storedTranscriptMatches(
             document: document,
             segmentCount: segments.count,
@@ -916,9 +914,6 @@ nonisolated extension SQLiteEpisodeSearchIndex {
         return rowIDs
     }
 
-    /// Whether the stored segment rows already represent this document: one
-    /// distinct `transcript_version` equal to the document's, with the same
-    /// non-empty segment count.
     private static func storedTranscriptMatches(
         document: EpisodeSearchTranscriptDocument,
         segmentCount: Int,

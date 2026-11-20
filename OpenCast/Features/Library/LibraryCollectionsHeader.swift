@@ -1,9 +1,5 @@
 import SwiftUI
 
-/// The Playlists, Up Next and Notes rows above the Library's shows.
-/// Playlists and Notes push their screens (in a two-pane split they open as
-/// the detail and show the selection); Up Next opens the queue, so it has no
-/// chevron. A nil `notesCount` (Show Note Button is off) hides the Notes row.
 struct LibraryCollectionsHeader: View {
     @ScaledMetric(relativeTo: .title3) private var iconWidth = 30.0
 
@@ -15,9 +11,8 @@ struct LibraryCollectionsHeader: View {
     let onOpenNotes: () -> Void
 
     var body: some View {
-        // In the Library list these rows share one list row, so each is a
-        // button. A link there is the row's selection instead: the row fires
-        // every link in it, and a touch beside a button goes to the button.
+        // These rows share one List row, so each is a Button: a link there would fire with every
+        // other link in the row.
         VStack(spacing: 0) {
             Button(action: onOpenPlaylists) {
                 LibraryCollectionRow(

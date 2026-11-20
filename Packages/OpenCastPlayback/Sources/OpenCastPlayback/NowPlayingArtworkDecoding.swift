@@ -8,9 +8,7 @@ import AppKit
 import UIKit
 #endif
 
-/// ImageIO downsampling for Now Playing artwork: decodes straight to the
-/// largest pixel edge any Now Playing surface renders instead of
-/// constructing a full-size image first (security triage P1 #4).
+/// Decodes straight to the largest rendered edge, never to a full-size image first.
 enum NowPlayingArtworkDecoding {
     nonisolated static func downsampledImage(
         from data: Data,

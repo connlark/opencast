@@ -78,9 +78,8 @@ enum RSSFeedRecovery {
             return recovered
         }
 
-        // One forward pass appending untouched slices plus replacements:
-        // in-place replaceSubrange moves the tail per growing rewrite, which
-        // is quadratic over entity-heavy feeds (the ones that reach recovery).
+        // One forward pass: in-place replaceSubrange moves the tail on every rewrite, which is
+        // quadratic on the entity-heavy feeds that reach recovery.
         var rewritten = ""
         rewritten.reserveCapacity(recovered.count)
         var cursor = recovered.startIndex
@@ -132,9 +131,7 @@ enum RSSFeedRecovery {
         return String(data: data, encoding: encoding)
     }
 
-    /// The XML prolog's declared encoding, when one is present and known.
-    /// CDATA fallback decoding uses it: XMLParser hands CDATA blocks through
-    /// as raw bytes in the document's original encoding.
+    /// XMLParser hands CDATA over as raw bytes in this encoding.
     static func declaredEncoding(in data: Data) -> String.Encoding? {
         if let encoding = unicodeEncoding(in: data) { return encoding }
         let prefix = String(decoding: data.prefix(1_024), as: Unicode.ASCII.self)
@@ -148,9 +145,8 @@ enum RSSFeedRecovery {
         return stringEncoding(named: String(prefix[nameRange]))
     }
 
-    /// XML's BOM and initial '<' signature determine byte order before the
-    /// declaration can be decoded. Explicit endian encodings also avoid adding
-    /// a new BOM for every recovery chunk.
+    /// The BOM and the initial '<' fix the byte order before the declaration can be decoded.
+    /// Explicit endian encodings avoid adding a BOM to every recovery chunk.
     static func unicodeEncoding(in data: Data) -> String.Encoding? {
         let bytes = Array(data.prefix(4))
         if bytes.starts(with: [0, 0, 0xFE, 0xFF]) || bytes == [0, 0, 0, 0x3C] { return .utf32BigEndian }

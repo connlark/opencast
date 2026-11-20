@@ -1,11 +1,8 @@
 import Foundation
 import OpenCastPlayback
 
-/// Maps every raw ad span through `EpisodeAdAnalysisZoneMapper` once per
-/// candidate duration and records what happened to it — the primary evidence
-/// when an outro zone silently clamps or drops near the episode boundary.
-/// Span fates come from mapping each span alone through the real mapper, so
-/// this never re-derives the clamp rules.
+/// Span fates come from mapping each span alone through the real mapper, so this never
+/// re-derives the clamp rules.
 nonisolated struct EpisodeDiagnosticsZoneMatrix: Sendable, Equatable {
     nonisolated struct DurationBasis: Sendable, Equatable {
         var label: String
@@ -30,8 +27,7 @@ nonisolated struct EpisodeDiagnosticsZoneMatrix: Sendable, Equatable {
         var autoSkipZones: [PlaybackSkipZone]
         var displayOnlyZones: [PlaybackSkipZone]
         var spanOutcomes: [SpanOutcome]
-        /// nil when the episode isn't loaded in the player, so there is
-        /// nothing installed to compare against.
+        /// Nil when the episode isn't loaded in the player.
         var matchesInstalledAutoSkipZones: Bool?
     }
 

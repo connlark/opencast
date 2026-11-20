@@ -3,16 +3,12 @@ protocol EpisodeTranscribing: Sendable {
         _ request: EpisodeTranscriptionRunRequest
     ) -> AsyncThrowingStream<EpisodeTranscriptionRunEvent, Error>
 
-    /// Hard unload: drops the active service and any drain-retained runtime.
+    /// Drops the active service and any drain-retained runtime.
     func unload() async
 
-    /// End-of-item release after a successful run: leaves a drain-retained
-    /// runtime in place, unloads everything else.
+    /// Leaves a drain-retained runtime in place and unloads everything else.
     func releaseRunResources() async
 
-    /// Drain-scoped model retention (whisper-perf E1). Only the ad-free-pass
-    /// queue coordinator opens a retention window; outside one, every item
-    /// unloads its runtime as before.
     func beginDrainRetention()
     func endDrainRetention() async
 }

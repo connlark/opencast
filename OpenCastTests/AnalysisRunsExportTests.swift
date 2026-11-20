@@ -22,7 +22,7 @@ struct AnalysisRunsExportTests {
         let entry = AnalysisRunsExportEntry(handover)
         #expect(entry.freeTier == true)
         #expect(entry.handoverOf == "6F1C2A3B-0000-4000-8000-000000000004")
-        #expect(AnalysisRunsExportEntry(forged).handoverOf == AnalysisRunsExportGrammar.runID("https://example.com/feed?key=secret"))
+        #expect(AnalysisRunsExportEntry(forged).handoverOf == "invalid")
         #expect(AnalysisRunsExportEntry(forged).handoverOf?.contains("secret") == false)
         #expect(AnalysisRunsExportEntry(plain).freeTier == nil)
         #expect(AnalysisRunsExportEntry(plain).handoverOf == nil)

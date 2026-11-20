@@ -2,10 +2,8 @@ import OpenCastCore
 import SwiftData
 import SwiftUI
 
-/// Owns every body-level playback-position read on Now Playing — the 1 Hz
-/// tick re-evaluates only this section, keeping the parent (and its open "…"
-/// menu) stable while time advances. The chapter bar lives here for the same
-/// reason: the current chapter is a function of the position.
+/// Every body-level playback-position read on Now Playing belongs here, so the 1 Hz tick
+/// re-renders only this section and the parent's open menu stays stable.
 struct NowPlayingProgressSection: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext

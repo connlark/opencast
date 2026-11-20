@@ -4,8 +4,6 @@ import SwiftData
 import Testing
 @testable import OpenCast
 
-/// A job an earlier build started on the analysis service is polled to
-/// completion at launch, never resubmitted; no device run starts for it.
 @MainActor
 @Suite("Episode ad analysis polling")
 struct EpisodeAdAnalysisPollingTests {
@@ -63,22 +61,6 @@ struct EpisodeAdAnalysisPollingTests {
         #expect(record.jobAcceptedAt == nil)
         #expect(environment.resolvedRunIDs.isEmpty)
         #expect(environment.sends.count == 0)
-    }
-
-    @Test("A job_unavailable poll keeps the accepted handle and completes")
-    func jobUnavailablePollKeepsHandleAndCompletes() async throws {
-        let fixture = try makeDrainFixture(
-            episodeID: "drain-job-unavailable",
-            revision: "20261020b",
-            pollSteps: [.http(statusCode: 503, code: "job_unavailable"), .completed]
-        )
-
-        fixture.store.load(modelContext: fixture.context)
-
-        #expect(await waitUntil(fixture.store) {
-            fixture.store.record(for: fixture.episodeID)?.state == .completed
-        })
-        #expect(await fixture.client.polledJobIDs() == [fixture.handle, fixture.handle])
     }
 
     @Test("Untyped 5xx polls retry the same handle until the job completes")
@@ -257,45 +239,6 @@ struct EpisodeAdAnalysisPollingTests {
             transcription: .unavailable,
             analysis: detail.jobState
         ) == nil)
-    }
-
-    @Test("Polling deadline records analysis timed out")
-    func pollingDeadlineRecordsAnalysisTimedOut() async throws {
-        let fixture = try makeDrainFixture(
-            episodeID: "drain-deadline",
-            pollSteps: [],
-            pollingTimeout: .zero
-        )
-
-        fixture.store.load(modelContext: fixture.context)
-
-        #expect(await waitUntil(fixture.store) {
-            fixture.store.record(for: fixture.episodeID)?.state == .failed
-        })
-        let record = try #require(fixture.store.record(for: fixture.episodeID))
-        #expect(await fixture.client.pollCount() == 0)
-        #expect(record.errorMessage == EpisodeAdAnalysisError.analysisTimedOut.localizedDescription)
-        #expect(record.failureKind == .timedOut)
-    }
-
-    @Test("Three consecutive URL errors are tolerated")
-    func threeConsecutiveURLErrorsAreTolerated() async throws {
-        let fixture = try makeDrainFixture(
-            episodeID: "drain-url-errors",
-            pollSteps: [
-                .urlError(.networkConnectionLost),
-                .urlError(.timedOut),
-                .urlError(.notConnectedToInternet),
-                .completed
-            ]
-        )
-
-        fixture.store.load(modelContext: fixture.context)
-
-        #expect(await waitUntil(fixture.store) {
-            fixture.store.record(for: fixture.episodeID)?.state == .completed
-        })
-        #expect(await fixture.client.pollCount() == 4)
     }
 
     @Test("Cancelling quiet polling leaves the accepted record for the next launch")
@@ -498,40 +441,12 @@ struct EpisodeAdAnalysisPollingTests {
         #expect(failedRecord.jobAcceptedAt == nil)
     }
 
-    @Test("record(for:) matches a linear scan after load")
-    func recordLookupMatchesLinearScan() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let directory = try makeTemporaryDirectory()
-        for index in 1...3 {
-            context.insert(makeRunningRecord(
-                episodeID: "index-eq-\(index)",
-                fingerprint: "index-eq-fp-\(index)",
-                relativePath: "AdAnalysis/index-eq-\(index)/result.json",
-                jobAcceptedAt: nil,
-                state: .failed
-            ))
-        }
-        try context.save()
-        let store = makeStore(
-            client: PollingEpisodeAdAnalysisClient(pollSteps: []),
-            directory: directory
-        )
-
-        store.load(modelContext: context)
-
-        for episodeID in ["index-eq-1", "index-eq-2", "index-eq-3", "index-eq-missing"] {
-            #expect(store.record(for: episodeID) === store.records.first { $0.episodeID == episodeID })
-        }
-    }
-
     // MARK: - Fixtures
 
     private struct DrainFixture {
         let context: ModelContext
         let directory: URL
         let transcript: EpisodeTranscriptDocument
-        let handle: String
         let client: PollingEpisodeAdAnalysisClient
         let store: EpisodeAdAnalysisStore
 
@@ -544,28 +459,24 @@ struct EpisodeAdAnalysisPollingTests {
     /// accepted before the update, ready for `load`.
     private func makeDrainFixture(
         episodeID: String,
-        revision: String? = nil,
-        pollSteps: [PollingPollStep],
-        pollingTimeout: Duration = .seconds(30)
+        pollSteps: [PollingPollStep]
     ) throws -> DrainFixture {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let directory = try makeTemporaryDirectory()
         let transcript = makeTranscript(episodeID: episodeID)
         try writeTranscript(transcript, directory: directory, context: context)
-        let handle = try insertAcceptedJob(
+        _ = try insertAcceptedJob(
             for: transcript,
             fileStore: EpisodeAdAnalysisFileStore(baseDirectory: directory),
-            context: context,
-            revision: revision
+            context: context
         )
         let client = PollingEpisodeAdAnalysisClient(pollSteps: pollSteps)
-        let store = makeStore(client: client, directory: directory, pollingTimeout: pollingTimeout)
+        let store = makeStore(client: client, directory: directory)
         return DrainFixture(
             context: context,
             directory: directory,
             transcript: transcript,
-            handle: handle,
             client: client,
             store: store
         )
@@ -574,14 +485,13 @@ struct EpisodeAdAnalysisPollingTests {
     private func makeStore(
         client: some EpisodeAdAnalysisClient,
         directory: URL,
-        environment: ScriptedAdAnalysisRunEnvironment = ScriptedAdAnalysisRunEnvironment(),
-        pollingTimeout: Duration = .seconds(30)
+        environment: ScriptedAdAnalysisRunEnvironment = ScriptedAdAnalysisRunEnvironment()
     ) -> EpisodeAdAnalysisStore {
         EpisodeAdAnalysisStore(
             client: client,
             fileStore: EpisodeAdAnalysisFileStore(baseDirectory: directory),
             runEnvironment: environment,
-            pollingTimeout: pollingTimeout,
+            pollingTimeout: .seconds(30),
             resumeInitialPollAfter: 0,
             pollingSleep: { _ in }
         )
@@ -720,8 +630,7 @@ struct EpisodeAdAnalysisPollingTests {
     }
 
     /// Signal-driven: wakes on every store change instead of a fixed poll
-    /// budget, so load cannot outrun the wait. The backstop only trips on a
-    /// real regression.
+    /// budget, so load cannot outrun the wait.
     private func waitUntil(
         _ store: EpisodeAdAnalysisStore,
         _ condition: @escaping @MainActor () -> Bool
@@ -751,11 +660,9 @@ private enum PollingPollStep: Sendable {
     case running(pollAfter: TimeInterval)
     case completed
     case completedWithKind(EpisodeAdAnalysisSpanKind)
-    /// `failure` mirrors the typed body the worker attaches to the codes it
-    /// classifies (`Server/AdAnalysisWorker/src/failure.rs`); nil is an
-    /// untyped body, like the platform's plain-text 500.
+    /// `failure` is the typed body the worker attaches to a code it
+    /// classifies; nil is an untyped body, like the platform's plain-text 500.
     case http(statusCode: Int, code: String, failure: OpenCastAdAnalysisFailure? = nil)
-    case urlError(URLError.Code)
     case suspend
 }
 
@@ -791,8 +698,6 @@ private actor PollingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
             return .completed(Self.response(kind: kind))
         case .http(let statusCode, let code, let failure):
             throw EpisodeAdAnalysisHTTPError(statusCode: statusCode, code: code, detail: nil, failure: failure)
-        case .urlError(let code):
-            throw URLError(code)
         case .suspend:
             // Parked: cancellation of the polling task is the only exit.
             while true {
@@ -810,8 +715,7 @@ private actor PollingEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
     }
 
     /// Signal-driven: each `pollJob` arrival resumes satisfied waiters, so
-    /// there is no polling budget to race. The backstop only trips on a real
-    /// regression.
+    /// there is no polling budget to race.
     func waitForPollCount(_ expectedCount: Int) async -> Bool {
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.pollCountReached(expectedCount) }

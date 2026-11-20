@@ -12,7 +12,6 @@ final class PlaybackChaptersCoordinator {
     @ObservationIgnored private let transcriptions: EpisodeTranscriptionStore
     @ObservationIgnored private let transcriptAnalyses: EpisodeTranscriptAnalysisStore
     @ObservationIgnored private let publisherChapters: PublisherChaptersStore
-    /// UI-test seam: served for every episode in place of any real lookup.
     @ObservationIgnored var uiTestOverride: PlaybackChapterList?
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var itemObservationTask: Task<Void, Never>?
@@ -48,9 +47,8 @@ final class PlaybackChaptersCoordinator {
 
         let episodeID = episode.id.rawValue
         let itemGeneration = playback.currentItemGeneration
-        // A list belongs to one player item. A download switch or a
-        // failed-item rebuild changes the audio under the same episode, so
-        // the old list clears until the new item's read lands.
+        // A list belongs to one player item: a download switch or failed-item rebuild changes the
+        // audio under the same episode, so the old list clears until the new item's read lands.
         if installedEpisodeID != episodeID || installedItemGeneration != itemGeneration {
             install(.empty, forEpisodeID: episodeID, itemGeneration: itemGeneration)
         }
@@ -76,14 +74,12 @@ final class PlaybackChaptersCoordinator {
         refreshForCurrentEpisode()
     }
 
-    /// Awaits the in-flight refresh, if any. Test hook.
     func waitForRefresh() async {
         await refreshTask?.value
     }
 
-    /// Follows the player item itself, because not every install goes
-    /// through the app model: a failed item is rebuilt inside the
-    /// controller, and `unload()` has no refresh call of its own.
+    /// Not every item install goes through the app model: the controller rebuilds a failed item
+    /// itself, and `unload()` triggers no refresh.
     private func startItemObservation() {
         let playback = playback
         itemObservationTask = Task { [weak self] in
@@ -112,9 +108,6 @@ final class PlaybackChaptersCoordinator {
             return .empty
         }
 
-        // The feed's chapters document comes next. One that could not be
-        // read still keeps generated chapters out; one read fine with
-        // nothing usable in it does not. Same rule the detail cards follow.
         let detail = await library.episodeDetail(for: episodeID)
         guard !Task.isCancelled else {
             return .empty
@@ -123,8 +116,7 @@ final class PlaybackChaptersCoordinator {
         if let documentURL = detail?.chaptersURL {
             switch await publisherChapters.resolve(episodeID: episodeID, documentURL: documentURL) {
             case .chapters(let chapters):
-                // A feed refresh that moved the declaration mid-fetch leaves
-                // these to the next refresh, which reads the new one.
+                // A feed refresh moved the declaration mid-fetch; the next refresh reads the new.
                 guard await library.episodeDetail(for: episodeID)?.chaptersURL == documentURL else {
                     return .empty
                 }
@@ -146,12 +138,8 @@ final class PlaybackChaptersCoordinator {
             return .empty
         }
 
-        // Show notes rank last. A document that could not be read keeps
-        // generated chapters out, but not these. The cached feed duration
-        // bounds them, as on the episode screen, so both show one list; the
-        // player's measured duration lands at no fixed point relative to
-        // this read. Without a cached row the playing episode's own text
-        // stands in, the same text the Now Playing notes pane shows.
+        // Bound by the cached feed duration so the episode screen shows the same list; the player's
+        // measured duration lands at no fixed point relative to this read.
         let playing = playback.currentEpisode?.id.rawValue == episodeID ? playback.currentEpisode : nil
         let showNotesChapters = await EpisodeShowNotesContent.resolvingChapters(
             summaryHTML: detail?.listItem.summary ?? playing?.summary,
@@ -191,8 +179,6 @@ final class PlaybackChaptersCoordinator {
 }
 
 extension EpisodeChapter {
-    /// Generated chapters carry transcript segment bounds the player doesn't
-    /// need; only the display fields and times cross over.
     init(_ chapter: EpisodeTranscriptAnalysisChapter) {
         self.init(
             id: chapter.id,

@@ -1,7 +1,6 @@
 import Foundation
 
-/// Decoded input and processing ceilings shared with NotificationsWorker.
-/// scripts/check-feed-resource-policy.py guards the cross-language contract.
+/// Shared with NotificationsWorker; `scripts/check-feed-resource-policy.py` checks they agree.
 public enum FeedResourcePolicy {
     public static let maximumDecodedBytes = 128 * 1_024 * 1_024
     public static let maximumItems = 100_000

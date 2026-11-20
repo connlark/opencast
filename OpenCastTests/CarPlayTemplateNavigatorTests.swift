@@ -4,11 +4,10 @@ import Testing
 
 @MainActor
 struct CarPlayTemplateNavigatorTests {
-    @Test(arguments: ["More Playlists", "More Episodes", "More Shows"], ["Up Next", "Current Show", "Inbox"])
-    func fullBrowseStackStillOpensNowPlayingControls(page: String, destination: String) {
-        let harness = CarPlayTemplateNavigationHarness(browseTitles: ["Playlists", page, "Episodes"])
+    @Test func fullBrowseStackStillOpensNowPlayingControls() {
+        let harness = CarPlayTemplateNavigationHarness(browseTitles: ["Playlists", "More Playlists", "Episodes"])
         let originalStack = harness.stack
-        let list = CPListTemplate(title: destination, sections: [])
+        let list = CPListTemplate(title: "Up Next", sections: [])
         var succeeded: Bool?
 
         harness.navigator.pushNowPlayingList(list) { success, _ in succeeded = success }

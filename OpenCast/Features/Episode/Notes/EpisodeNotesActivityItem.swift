@@ -2,8 +2,7 @@ import LinkPresentation
 import UIKit
 import UniformTypeIdentifiers
 
-/// Shares the notes as a named text file, or as Markdown when the destination
-/// is Apple Notes. UIKit can ask for the item on a background queue.
+/// UIKit can ask for the item on a background queue.
 nonisolated final class EpisodeNotesActivityItem: NSObject, UIActivityItemSource {
     let export: EpisodeNotesShare
 

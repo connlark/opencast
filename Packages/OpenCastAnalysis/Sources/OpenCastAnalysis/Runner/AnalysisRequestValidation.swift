@@ -1,5 +1,4 @@
-/// The request checks the analysis services apply before any model call.
-/// Each failure is the service's error code.
+/// The first failing check picks the error code, so the check order must match the services'.
 public enum AnalysisRequestValidation {
     static let maxAdSegments = 6_000
     static let maxTranscriptTextCharacters = 360_000
@@ -12,7 +11,7 @@ public enum AnalysisRequestValidation {
     static let maxTitleCharacters = 512
     static let maxLanguageCodeCharacters = 40
 
-    /// Validates an ad-detection request; returns the estimated input tokens.
+    /// Success carries the estimated input tokens.
     public static func validate(_ request: AdAnalysisRequest) -> Result<UInt64, AnalysisCodeError> {
         if let code = commonCode(
             schemaVersion: request.schemaVersion,
@@ -48,8 +47,7 @@ public enum AnalysisRequestValidation {
         }
     }
 
-    /// Validates a Chapters & Summary request against the model-facing view
-    /// (coalesced when long); returns the estimated input tokens.
+    /// Estimates from the coalesced view of a long transcript; success carries the estimate.
     public static func validate(
         _ request: TranscriptAnalysisRequest,
         policy: ChaptersSummaryPolicy
@@ -131,7 +129,7 @@ public enum AnalysisRequestValidation {
         return nil
     }
 
-    /// Per-segment checks in order; the total text characters on success.
+    /// Success carries the total text characters.
     private static func segmentTotals(_ segments: [AnalysisSegment]) -> Result<Int, AnalysisCodeError> {
         var seen = Set<Int64>()
         var previousEnd: Double?
@@ -153,8 +151,6 @@ public enum AnalysisRequestValidation {
         return .success(total)
     }
 
-    /// `[id | start-end] ` plus the newline, as the services' prompt framing
-    /// counts it.
     static func framingCharacters(_ segment: AnalysisSegment) -> Int {
         RustText.charCount(
             "[\(segment.id) | \(RustFloatFormat.fixed(segment.start, places: 3))-\(RustFloatFormat.fixed(segment.end, places: 3))] \n"

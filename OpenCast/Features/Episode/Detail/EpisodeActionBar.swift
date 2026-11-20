@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// The hero's glass action bar: stateful download, prominent Play, and the
-/// one-tap Make Ad-Free pipeline entry.
 struct EpisodeActionBar: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Namespace private var glassNamespace
@@ -149,9 +147,8 @@ struct EpisodeActionBar: View {
         completionBadgeSize.clamped(to: 18...(dynamicTypeSize.isAccessibilitySize ? 22 : 20))
     }
 
-    /// Follows the clamped disc, not Dynamic Type, so the check stays inside
-    /// it at accessibility sizes; 0.6 is caption's 12 pt on the 20 pt disc
-    /// at the default size.
+    /// Follows the clamped disc, not Dynamic Type, so the check stays inside it at
+    /// accessibility sizes. 0.6 is caption's 12 pt on the default 20 pt disc.
     private var completionBadgeGlyphSize: CGFloat {
         resolvedCompletionBadgeSize * 0.6
     }

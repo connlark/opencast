@@ -3,10 +3,8 @@ import OpenCastCore
 import Testing
 @testable import OpenCastPlayback
 
-/// The settings preview of the skip cue, through the activation and
-/// deactivation probes and the factory spy. Every activation call a test
-/// starts is released before it ends: a stale preview activation is never
-/// cancelled, so an unreleased probe call would spin.
+// Release every activation call a test starts: a stale preview activation is
+// never cancelled, so an unreleased probe call spins.
 @MainActor
 @Suite
 struct AVFoundationPlaybackControllerSkipCuePreviewTests {
@@ -14,7 +12,6 @@ struct AVFoundationPlaybackControllerSkipCuePreviewTests {
     private let otherPreviewURL = URL(filePath: "/tmp/opencast-skip-cue-preview-b.m4a")
     private let cueURL = URL(filePath: "/tmp/opencast-skip-cue-a.m4a")
 
-    // 10
     @Test("A preview inside a held session takes no activation and makes no release")
     func previewInHeldSessionTakesNothing() async throws {
         try await AVFoundationPlaybackTestGate.acquire()
@@ -40,7 +37,6 @@ struct AVFoundationPlaybackControllerSkipCuePreviewTests {
         #expect(controller.isAudioSessionActive)
     }
 
-    // 10
     @Test(
         "Without a held session a preview takes one activation and releases once, after its sound ends",
         arguments: ["episodeLoaded", "nothingLoaded"]
@@ -84,7 +80,6 @@ struct AVFoundationPlaybackControllerSkipCuePreviewTests {
         #expect(await activation.recordedCallCount() == 1)
     }
 
-    // 11
     @Test(
         "An episode that plays during a preview keeps the session, and the preview's end releases nothing",
         arguments: ["whileEpisodeActivates", "afterEpisodeHoldsSession"]
@@ -118,7 +113,6 @@ struct AVFoundationPlaybackControllerSkipCuePreviewTests {
         #expect(controller.isAudioSessionActive)
     }
 
-    // 11
     @Test("A load and play right after a preview ends waits for the preview's release")
     func activationAfterAPreviewWaitsForItsRelease() async throws {
         try await AVFoundationPlaybackTestGate.acquire()
@@ -144,7 +138,6 @@ struct AVFoundationPlaybackControllerSkipCuePreviewTests {
         #expect(await deactivation.recordedCallCount() == 1)
     }
 
-    // 11
     @Test(
         "A preview activation that completes after an unload, None or a newer preview plays nothing, with one release in all",
         arguments: ["unload", "none", "newerPreview"]
@@ -194,7 +187,6 @@ struct AVFoundationPlaybackControllerSkipCuePreviewTests {
         #expect(factory.requestedURLs == (invalidation == "newerPreview" ? [otherPreviewURL] : []))
     }
 
-    // 11, the known interleaving
     @Test("An episode and a preview activation left stale by an unload release at most twice, in order, before the next activation")
     func staleEpisodeAndPreviewActivationsReleaseInOrder() async throws {
         try await AVFoundationPlaybackTestGate.acquire()
@@ -282,7 +274,6 @@ struct AVFoundationPlaybackControllerSkipCuePreviewTests {
         if previewEnds == "previewEndsBeforeTheFailure" {
             preview.finish()
             await yieldToPendingWork()
-            // Not released under an episode that is still acquiring.
             #expect(await deactivation.recordedCallCount() == 0)
         }
         await activation.releaseCalls(through: 2)
@@ -657,8 +648,6 @@ struct AVFoundationPlaybackControllerSkipCuePreviewTests {
         try await waitUntil { await deactivation.recordedCallCount() == 2 }
     }
 
-    /// Previews `previewURL` with nothing holding the session and returns
-    /// the sounding player once the preview owns the session.
     private func startOwnedPreview(
         _ controller: AVFoundationPlaybackController,
         factory: SkipCuePlayerFactorySpy,
@@ -687,16 +676,13 @@ struct AVFoundationPlaybackControllerSkipCuePreviewTests {
         )
     }
 
-    /// Lets tasks already queued on the main actor and the probes run, so
-    /// an absent call is absent and not merely late.
     private func yieldToPendingWork() async {
         for _ in 0..<20 {
             await Task.yield()
         }
     }
 
-    /// The event-log line without its timestamp, episode, source, position
-    /// and duration fields.
+    // Drops the timestamp, episode, source, position and duration fields.
     private static func eventLogMessage(_ line: String) -> String {
         String(line.split(separator: " ", maxSplits: 5)[5])
     }

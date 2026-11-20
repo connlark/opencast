@@ -6,8 +6,7 @@ import SwiftData
 
 @Observable
 final class LibraryStore {
-    /// Background/derived-data failures log here instead of writing
-    /// `lastErrorMessage`, which the root presents as a modal alert and is
+    /// For background and derived-data failures: `lastErrorMessage` shows a modal alert and is
     /// reserved for user-initiated library operations.
     nonisolated static let backgroundFailureLogger = Logger(
         subsystem: "com.connor.opencast",
@@ -18,7 +17,6 @@ final class LibraryStore {
     static let foregroundRefreshInterval: TimeInterval = 60 * 60
     static let episodeSummaryMaximumCharacters = 2_000
 
-    // Forwarders for the progress rules' established call sites.
     static let trivialProgressPrunableMinAge = EpisodeProgressRules.trivialProgressPrunableMinAge
 
     static func isPlayed(position: TimeInterval, duration: TimeInterval?) -> Bool {
@@ -40,19 +38,16 @@ final class LibraryStore {
         case failed(String)
     }
 
-    /// Written by this store's own flows and by `FeedRefreshCoordinator`'s
-    /// flow shell; nothing else assigns it.
+    /// Assigned only by this store and `FeedRefreshCoordinator`.
     var state: State = .idle
     private(set) var subscriptions: [SubscriptionRecord] = []
-    /// Active subscriptions' episodes in `EpisodeListItemSnapshot.newestFirst`
-    /// order with ties by ascending episode ID, as the cache loads them.
-    /// The smart playlist evaluator relies on this to stop at a limit.
+    /// `EpisodeListItemSnapshot.newestFirst` order, ties by ascending episode ID. Smart playlists
+    /// rely on this order to stop at a limit.
     private(set) var episodes: [EpisodeListItemSnapshot] = []
     var progressRecords: [EpisodeProgressRecord] {
         progressWriter.records
     }
-    /// Per-feed refresh-log projection (latest log per feed, plus its latest
-    /// success), newest first. Full history: `loadAllRefreshLogs()`.
+    /// The latest log per feed, plus its latest success, newest first; not the full history.
     private(set) var refreshLogs: [RefreshLogSnapshot] = []
     private(set) var incompleteFeeds: [String: FeedIncompleteReason] = [:]
     private var processingRefreshPodcastIDs: Set<String> = []
@@ -62,8 +57,6 @@ final class LibraryStore {
     }
     private(set) var activePodcastIDs: Set<String> = []
     private(set) var visibleEpisodeIDs: Set<String> = []
-    // The artwork-preview extension writes the podcast cache map and reports
-    // failures into lastErrorMessage, so their setters are module-visible.
     var podcastCacheByFeedURL: [String: PodcastCacheSnapshot] = [:]
     private(set) var latestRefreshLogByFeedURL: [String: RefreshLogSnapshot] = [:]
     private(set) var latestSuccessfulRefreshByFeedURL: [String: Date] = [:]
@@ -76,15 +69,10 @@ final class LibraryStore {
     var contentRefreshToken: Int {
         feedRefreshes.contentRefreshToken
     }
-    /// Set when a refresh could not reach the network at all; cleared by any
-    /// refresh that reached a feed host and by `recoverConnectivity`.
     var lastRefreshWasOffline: Bool {
         feedRefreshes.lastRefreshWasOffline
     }
 
-    /// Counts the app's own synced-store saves so the remote-change observer
-    /// can skip the reload each one would otherwise trigger (one credit per
-    /// save; see `SyncedStoreRemoteChangeArbiter`).
     var syncedStoreSelfSaveCount: Int {
         syncedStoreSelfSaveLedger.count
     }
@@ -93,34 +81,24 @@ final class LibraryStore {
     @ObservationIgnored private let progressWriter: EpisodeProgressWriter
     @ObservationIgnored private var hasPrunedTrivialProgressThisLaunch = false
     @ObservationIgnored private var lastSyncedProgressProbe: SyncedProgressProbe?
-    /// Times the synced-reload probe skipped the full progress refetch. Test hook.
     @ObservationIgnored private(set) var syncedProgressProbeSkipCount = 0
 
     @ObservationIgnored private let feedService: any FeedService
     @ObservationIgnored let localCache: any LocalLibraryCacheStore
     @ObservationIgnored private let now: () -> Date
-    /// Episode-keyed device-local stores that identity reconciliation
-    /// carries across an ID change; wired by OpenCastAppModel at composition.
     var episodeSidecarMigrators: [any EpisodeIdentitySidecarMigrating] {
         get { feedWrites.sidecarMigrators }
         set { feedWrites.sidecarMigrators = newValue }
     }
 
-    /// Feeds offered an "Update Feed Address" suggestion; see
-    /// `FeedWriteCoordinator`.
     var suggestedFeedMigrationURLsByFeedURL: [String: URL] {
         feedWrites.suggestedFeedMigrationURLsByFeedURL
     }
 
-    /// Server-reported notification poll health per accepted feed, replaced
-    /// wholesale from each successful subscription sync. Advisory UI only.
     private(set) var notificationFeedHealthByFeedURL: [String: NotificationFeedHealth] = [:]
-    /// The one nuke-invalidation token; every flow that captures or checks a
-    /// generation shares this instance by reference.
+    /// The one nuke-invalidation token, shared by reference with every write flow.
     @ObservationIgnored private let writeGeneration: LibraryWriteGeneration
-    /// The feed-write path shared by the user add flows and the refresh flow.
     @ObservationIgnored private let feedWrites: FeedWriteCoordinator
-    /// The refresh flows; lazy because they hold this store as their host.
     @ObservationIgnored private lazy var feedRefreshes = FeedRefreshCoordinator(
         host: self,
         feedService: feedService,
@@ -134,48 +112,32 @@ final class LibraryStore {
     @ObservationIgnored private var refreshLogReloadGeneration = 0
     @ObservationIgnored private var episodeIndexByID: [String: Int] = [:]
     @ObservationIgnored private var episodeIndicesByPodcastID: [String: [Int]] = [:]
-    /// Read by the new-episode lookups in `LibraryStore+NewEpisodes`.
     @ObservationIgnored private(set) var episodeReleaseOrderByPodcastID: [String: [Int]] = [:]
-    /// The instant new-episode badges and the Recent Episodes sort evaluate
-    /// against. It moves with every library publication and on Library entry
-    /// or scene activation — never on a timer — so time-based changes land
-    /// at those checkpoints while progress changes land immediately.
+    /// Moves at library publication, Library entry and scene activation, never on a timer, so
+    /// time-based badge changes land only at those checkpoints.
     private(set) var newEpisodeReferenceDate: Date
-    /// Advances after every full progress refetch. A refetch that picks up
-    /// another context's edit to a row this store already holds refreshes
-    /// that object's values without an Observation notification, and
-    /// `EpisodeProgressWriter.revision` tracks only index membership, so the
-    /// derived per-show readers (new-episode counts) read this too.
+    /// Advances after every full progress refetch: a refetch updates a held row's values without an
+    /// Observation notification, and `EpisodeProgressWriter.revision` tracks only index membership.
     private(set) var progressRefetchRevision = 0
-    /// Moves whenever a played-state filter may read a different answer: a
-    /// write through the writer that can change one (in-place edits
-    /// included; a position-only playback flush is not one), an index
-    /// membership change, or a refetch. Each counter only increases, so the
-    /// sum moves whenever any does. Smart playlist evaluations key on it;
-    /// rows keep observing their own records.
+    /// Moves whenever a played-state filter may read a different answer. Each counter only
+    /// increases, so the sum moves whenever any does.
     var progressChangeRevision: Int {
         progressWriter.statusRevision &+ progressWriter.revision &+ progressRefetchRevision
     }
-    /// Each active feed's newest follow date — the new-episode cutoff —
-    /// copied out of the subscription records so a synced reload can compare
-    /// values: a refetch refreshes a live record's `subscribedAt` without an
-    /// Observation notification, and the records compare equal by reference.
+    /// Copied out of the records so a synced reload can compare values: a refetch updates a live
+    /// record's `subscribedAt` without notifying Observation, and records compare by reference.
     private(set) var newEpisodeCutoffByFeedURL: [String: Date] = [:]
-    /// O(1) search-session invalidation token. Every publication that changes
-    /// `episodes` rebuilds the lookup indexes and advances this revision.
+    /// Advances with every publication that changes `episodes`.
     private(set) var episodeSearchCorpusRevision = 0
     @ObservationIgnored var pendingCacheWriteTask: Task<Void, Never>?
     @ObservationIgnored private var episodeSearchIndexPreparationTask: Task<Void, Never>?
-    // Resolved artwork previews live beside `episodes`, not inside it: writing
-    // episodes[index] republishes the whole array and re-diffs every List that
-    // reads it — once per newly realized row during a scroll. The maps hold
-    // per-key observable boxes so one row's resolution invalidates only that
-    // episode's or feed's appearances, not every mounted row.
+    // Kept beside `episodes`, not in it: writing episodes[index] republishes the array and re-diffs
+    // every List that reads it, once per realized row during a scroll. Per-key observable boxes
+    // invalidate only that episode's or feed's rows.
     @ObservationIgnored var artworkPreviewOverridesByEpisodeID: [String: ArtworkPreviewOverride] = [:]
     @ObservationIgnored var artworkPreviewOverridesByFeedURL: [String: ArtworkPreviewOverride] = [:]
 
-    /// `savePlaybackSkipSettingsModelContext` is the test seam for every
-    /// synced-store save, not only the skip-settings one it was named for.
+    /// `savePlaybackSkipSettingsModelContext` performs every synced-store save, despite its name.
     init(
         feedService: any FeedService = DefaultFeedService(),
         localCache: any LocalLibraryCacheStore,
@@ -211,20 +173,16 @@ final class LibraryStore {
         }
     }
 
-    /// Synced-store saves that originate outside this store (the data nuke's
-    /// row wipe) still go through the ledger so they carry their credit.
+    /// Synced-store saves from outside this store go through here so they carry a self-save credit.
     func saveSyncedStore(_ modelContext: ModelContext) throws {
         try syncedStoreSelfSaveLedger.save(modelContext)
     }
 
-    /// The episode list is already filtered to active subscriptions and ordered
-    /// newest-first by the cache store, so the inbox is the same list.
     var inboxEpisodes: [EpisodeListItemSnapshot] {
         episodes
     }
 
-    /// Subscriptions in the Library's title order, one per feed even while
-    /// sync twins of a subscription are waiting for repair.
+    /// One per feed while sync twins await repair.
     var uniqueSubscriptions: [SubscriptionRecord] {
         var seenFeedURLs = Set<String>()
         return subscriptions.filter { subscription in
@@ -236,9 +194,6 @@ final class LibraryStore {
         refreshLogs.first
     }
 
-    /// Full retained refresh-log history for diagnostics; the published
-    /// `refreshLogs` carries only the per-feed-latest projection.
-    /// Returns nil on a store failure so callers can avoid caching the miss.
     func loadAllRefreshLogs() async -> [RefreshLogSnapshot]? {
         do {
             return try await localCache.allRefreshLogs()
@@ -271,14 +226,10 @@ final class LibraryStore {
             recordFailure(error)
             didLoad = false
         }
-        // Advisory notification poll health; absence is just "no data".
         notificationFeedHealthByFeedURL = (try? await localCache.notificationFeedHealthByFeedURL()) ?? [:]
         return didLoad
     }
 
-    /// Persists and republishes the server-reported notification poll health
-    /// from a successful subscription sync. Advisory data: a failed write only
-    /// costs the diagnostics display, never the sync.
     func recordNotificationFeedHealth(_ records: [NotificationFeedHealthRecord]) async {
         try? await localCache.replaceNotificationFeedHealth(records)
         notificationFeedHealthByFeedURL = Dictionary(
@@ -313,11 +264,8 @@ final class LibraryStore {
                 match: fetchedSubscriptions
             )
 
-            // Progress is the large table, so a cheap probe (row count +
-            // newest updatedAt) gates its full refetch-and-compare; any
-            // mismatch takes the full reload. Subscriptions stay a plain
-            // fetch: the table is small and the records carry no updatedAt
-            // to probe (adding one would be a synced-schema change).
+            // Progress is the large table, so a count + newest-updatedAt probe gates its refetch.
+            // Subscriptions have no updatedAt to probe, and adding one is a synced-schema change.
             let progressProbe = try syncedProgressProbe(modelContext: modelContext)
             let progressRecordsChanged: Bool
             if progressProbe == lastSyncedProgressProbe {
@@ -509,8 +457,6 @@ final class LibraryStore {
             // also catches legacy copies whose raw URL drifted.
             let subscriptions = try modelContext.fetch(FetchDescriptor<SubscriptionRecord>())
                 .filter { URLCanonicalizer.canonicalString(forRawString: $0.feedURL) == canonicalFeedURL }
-            // Progress records are kept by default so played/position state
-            // survives unsubscribe (and resubscribe) on every device.
             let progressRecords = clearListeningHistory
                 ? try modelContext.fetch(
                     FetchDescriptor<EpisodeProgressRecord>(
@@ -520,9 +466,8 @@ final class LibraryStore {
                     )
                 )
                 : []
-            // Legacy local cache rows linger only until the one-time SQLite
-            // import has run; delete them so a later import cannot resurrect
-            // this feed's cache.
+            // Legacy cache rows linger until the one-time SQLite import runs; deleting them stops a
+            // later import from resurrecting this feed's cache.
             let legacyPodcastCaches = try modelContext.fetch(
                 FetchDescriptor<PodcastCacheRecord>(
                     predicate: #Predicate { record in
@@ -561,10 +506,8 @@ final class LibraryStore {
                 modelContext.delete(record)
             }
 
-            // Local deletes alone don't stick: a CloudKit copy this device
-            // hasn't imported yet would re-sync and resurrect the feed on
-            // every device. Tombstones make the delete authoritative;
-            // repair enforces them at import on all peers.
+            // A local delete alone does not stick: a CloudKit copy not yet imported would resurrect
+            // the feed on every device. The tombstones make the delete authoritative.
             let deletedAt = Date.now
             modelContext.insert(
                 SyncTombstoneRecord(scope: .subscription, feedURL: canonicalFeedURL, deletedAt: deletedAt)
@@ -603,20 +546,17 @@ final class LibraryStore {
         ).sanitized
     }
 
-    /// The show's own speed, or nil when it follows the global speed.
     func podcastPlaybackRateOverride(forPodcastID podcastID: String) -> Float? {
         subscriptions.first { $0.feedURL == podcastID }
             .flatMap { PodcastPlaybackRateOverride.resolved($0.playbackRate) }
     }
 
-    /// The show's Auto Add to Up Next position, or nil when it is off.
     func podcastUpNextAutoAddPosition(forPodcastID podcastID: String) -> UpNextAutoAddPosition? {
         subscriptions.first { $0.feedURL == podcastID }
             .flatMap { UpNextAutoAddPosition(stored: $0.autoAddToUpNext) }
     }
 
-    /// The active subscriptions Auto Add to Up Next is on for, derived on
-    /// read because the setters change the records in place.
+    /// Derived on read: the setters change the records in place.
     var upNextAutoAddPodcastIDs: Set<String> {
         Set(
             subscriptions.lazy
@@ -625,9 +565,6 @@ final class LibraryStore {
         )
     }
 
-    /// Skips, speed and Auto Add to Up Next in one synced save. A nil
-    /// `rateOverride` returns the show to the global speed; a nil
-    /// `upNextAutoAdd` turns Auto Add to Up Next off.
     @discardableResult
     func setPodcastPlaybackSettings(
         _ skipSettings: PodcastPlaybackSkipSettings,
@@ -685,8 +622,6 @@ final class LibraryStore {
         }
     }
 
-    /// The speed alone: a rate sets the show's own speed, nil returns the
-    /// show to the global speed.
     @discardableResult
     func setPodcastPlaybackRateOverride(
         _ rate: Float?,
@@ -724,8 +659,6 @@ final class LibraryStore {
 
     private static let invalidPlaybackRateMessage = "Speed must be between 0.5x and 3x."
 
-    /// A position turns Auto Add to Up Next on for the show, or moves it; nil
-    /// turns it off.
     @discardableResult
     func setPodcastUpNextAutoAddPosition(
         _ position: UpNextAutoAddPosition?,
@@ -783,10 +716,8 @@ final class LibraryStore {
         }
     }
 
-    /// Library entry, the Playlists collection, smart playlist detail and
-    /// scene activation call this. Sub-minute movement
-    /// cannot meaningfully change a 30-day window, so it is skipped rather
-    /// than invalidating every row on each tab switch.
+    /// Sub-minute movement cannot change a 30-day window, so it is skipped rather than invalidating
+    /// every row on each tab switch.
     func advanceNewEpisodeReferenceDate() {
         let currentDate = now()
         guard abs(currentDate.timeIntervalSince(newEpisodeReferenceDate)) >= 60 else {
@@ -856,16 +787,13 @@ final class LibraryStore {
         lastSyncedProgressProbe = nil
         newEpisodeReferenceDate = now()
         newEpisodeCutoffByFeedURL.removeAll()
-        // Derived indexes rebuild from the now-empty sources.
         rebuildEpisodeIndexes()
         rebuildLatestRefreshLogByFeedURL()
         lastErrorMessage = nil
     }
 
-    // Both lookups read the tracked `episodes` array before consulting the
-    // ignored indexes, so a miss still registers a dependency and a body
-    // that saw no episode invalidates once one appears (house guard:
-    // progressRecord(for:) / DownloadStore.recordsRevision).
+    // Both lookups read the tracked `episodes` before the ignored indexes, so a miss still
+    // registers a dependency and a body that saw no episode invalidates once one appears.
     func episode(with id: String) -> EpisodeListItemSnapshot? {
         let episodes = episodes
         return episodeIndexByID[id].map { episodes[$0] }
@@ -893,9 +821,6 @@ final class LibraryStore {
         }
     }
 
-    /// Full-text search support: show notes are not part of list snapshots, so
-    /// search fetches them on demand, scoped to one feed or all active feeds.
-    /// Returns nil on a store failure so callers can avoid caching the miss.
     func showNotesHTMLByEpisodeID(forPodcastID podcastID: String? = nil) async -> [String: String]? {
         let scopedPodcastIDs: Set<String>
         if let podcastID {
@@ -907,8 +832,6 @@ final class LibraryStore {
         do {
             return try await localCache.showNotesHTMLByEpisodeID(activePodcastIDs: scopedPodcastIDs)
         } catch {
-            // Search-support fetch, retried on the next keystroke — not a
-            // user-initiated operation, so it must not raise the modal alert.
             Self.backgroundFailureLogger.error(
                 "Show-notes fetch failed: \(error.localizedDescription, privacy: .public)"
             )
@@ -916,8 +839,6 @@ final class LibraryStore {
         }
     }
 
-    /// Raw episode descriptions for one active feed, on demand: list
-    /// snapshots never carry them. Returns nil on a store failure.
     func episodeSummaries(forPodcastID podcastID: String) async -> [String: String]? {
         guard activePodcastIDs.contains(podcastID) else {
             return [:]
@@ -929,8 +850,6 @@ final class LibraryStore {
                 maximumCharacters: Self.episodeSummaryMaximumCharacters
             )
         } catch {
-            // Background preparation for an optional feature, so it must
-            // not raise the modal alert.
             Self.backgroundFailureLogger.error(
                 "Episode-summary fetch failed: \(error.localizedDescription, privacy: .public)"
             )
@@ -961,11 +880,8 @@ final class LibraryStore {
         do {
             return try await localCache.searchEpisodes(request)
         } catch {
-            // Cancellation, an unready index, and store failures all share
-            // the nil path: this index is disposable derived data, so the
-            // session falls back to the established matcher and preparation
-            // rebuilds after the cache republishes instead of surfacing an
-            // unrelated library error banner.
+            // The index is disposable derived data: every failure, cancellation and an unready
+            // index included, returns nil rather than a library error.
             return nil
         }
     }
@@ -986,16 +902,14 @@ final class LibraryStore {
         latestRefreshLogByFeedURL[feedURL]
     }
 
-    /// Cache timestamps track content changes, including edits to older episodes.
     func lastContentChangedAt(for feedURL: String) -> Date? {
         [podcastCacheByFeedURL[feedURL]?.updatedAt, latestEpisodeContentChangeByFeedURL[feedURL]]
             .compactMap(\.self)
             .max()
     }
 
-    /// Refresh recency for display: the newest local successful refresh,
-    /// falling back to the synced `lastRefreshAt` snapshot (frozen after the
-    /// initial subscribe) for feeds this device hasn't refreshed yet.
+    /// The synced `lastRefreshAt` is frozen after the initial subscribe, so it only stands in for
+    /// feeds this device has not refreshed.
     func lastRefreshedAt(for subscription: SubscriptionRecord) -> Date? {
         [latestSuccessfulRefreshByFeedURL[subscription.feedURL], subscription.lastRefreshAt]
             .compactMap(\.self)
@@ -1009,7 +923,6 @@ final class LibraryStore {
             podcastTitle: episode.podcastTitle,
             title: episode.title,
             summary: episode.summary,
-            // Show notes are detail-only; playback surfaces never read them.
             showNotesHTML: nil,
             publishedAt: episode.publishedAt,
             duration: episode.duration,
@@ -1037,9 +950,7 @@ final class LibraryStore {
         progressWriter.latestRecord(for: episodeID)
     }
 
-    /// The episodes archived out of the Inbox, by each one's latest progress
-    /// row. Readers of Inbox membership observe this set, which moves on
-    /// archives, unarchives and refetches alike.
+    /// By each episode's latest progress row; moves on archives, unarchives and refetches alike.
     var archivedEpisodeIDs: Set<String> {
         progressWriter.archivedEpisodeIDs
     }
@@ -1171,11 +1082,8 @@ final class LibraryStore {
         }
     }
 
-    /// Once-per-launch cleanup of progress rows that are preview taps someone
-    /// never returned to — unsubscribed, unplayed, under a minute in, and
-    /// untouched for months. Deliberately narrow: played episodes and real
-    /// positions are kept forever regardless of subscription, so unsubscribe's
-    /// history-keeping promise stays intact.
+    /// Deliberately narrow: played episodes and real positions are kept forever, so unsubscribe
+    /// keeps its listening history.
     @discardableResult
     func pruneTrivialUnsubscribedProgressRecords(
         modelContext: ModelContext,
@@ -1186,10 +1094,8 @@ final class LibraryStore {
         }
 
         hasPrunedTrivialProgressThisLaunch = true
-        // No tombstones: a feed-level tombstone would also kill the
-        // non-trivial history this prune deliberately keeps. Unseen copies of
-        // pruned rows can resurrect, but every device prunes them again at
-        // launch, so the cleanup converges on its own.
+        // No tombstones: a feed-level one would also delete the history this prune keeps. Unseen
+        // copies can resurrect, but every device prunes again at launch, so the cleanup converges.
         return deleteUnsubscribedProgressRecords(
             modelContext: modelContext,
             writingTombstonesAt: nil
@@ -1200,8 +1106,6 @@ final class LibraryStore {
         }
     }
 
-    /// User-initiated bulk clear of all played/position state for shows with
-    /// no subscription record. Syncs to other devices like any progress delete.
     @discardableResult
     func clearProgressForUnsubscribedShows(modelContext: ModelContext) -> Int {
         deleteUnsubscribedProgressRecords(
@@ -1244,28 +1148,21 @@ final class LibraryStore {
         }
     }
 
-    /// Returns false when the episode was already archived or the save
-    /// failed; a failure is recorded like any progress write's.
     @discardableResult
     func archive(_ episode: EpisodeListItemSnapshot, modelContext: ModelContext) -> Bool {
         setArchived(true, episodes: [episode], modelContext: modelContext)
     }
 
-    /// Archives the episodes in one save per show; returns false when every
-    /// one was already archived or a save failed.
     @discardableResult
     func archive(_ episodes: [EpisodeListItemSnapshot], modelContext: ModelContext) -> Bool {
         setArchived(true, episodes: episodes, modelContext: modelContext)
     }
 
-    /// Returns false when the episode was not archived or the save failed.
     @discardableResult
     func unarchive(_ episode: EpisodeListItemSnapshot, modelContext: ModelContext) -> Bool {
         setArchived(false, episodes: [episode], modelContext: modelContext)
     }
 
-    /// Unarchives the episodes in one save per show; returns false when none
-    /// was archived or a save failed.
     @discardableResult
     func unarchive(_ episodes: [EpisodeListItemSnapshot], modelContext: ModelContext) -> Bool {
         setArchived(false, episodes: episodes, modelContext: modelContext)
@@ -1296,9 +1193,6 @@ final class LibraryStore {
         }
     }
 
-    /// OPML import's bulk subscribe: fetches run at the shared width while
-    /// each subscription applies serially on the main actor. Per-feed
-    /// failures accumulate; cancellation aborts the whole batch.
     func subscribeBatch(
         to feedURLStrings: [String],
         modelContext: ModelContext
@@ -1374,7 +1268,6 @@ final class LibraryStore {
                 refreshLogs: refreshLogRecords.map(RefreshLogSnapshot.init(legacyRecord:))
             )
 
-            // SQLite is the source of truth from here on; reclaim the legacy rows.
             for record in podcastRecords {
                 modelContext.delete(record)
             }
@@ -1386,8 +1279,7 @@ final class LibraryStore {
             }
             try modelContext.save()
         } catch {
-            // Import failure must not block launch; legacy rows stay intact and
-            // the next load retries because the completion marker is unset.
+            // Must not block launch: the legacy rows stay and the next load retries.
             lastErrorMessage = error.localizedDescription
         }
     }
@@ -1420,11 +1312,8 @@ final class LibraryStore {
             return
         }
 
-        // Fetch SwiftData state after the suspension: synchronous mutators
-        // (progress writes, unsubscribe) can run while the SQLite load is in
-        // flight, and publishing a pre-await fetch would resurrect deleted
-        // model objects. If the active set changed mid-load, the mutator's own
-        // follow-up reload republishes a consistent episode list.
+        // Fetch SwiftData state after the suspension: a mutator can run while the SQLite load is in
+        // flight, and publishing a pre-await fetch would resurrect deleted model objects.
         let activeSubscriptions = try modelContext.fetch(activeSubscriptionsDescriptor())
         subscriptions = activeSubscriptions
         activePodcastIDs = Set(activeSubscriptions.map(\.feedURL))
@@ -1464,11 +1353,8 @@ final class LibraryStore {
         }
     }
 
-    /// Scoped republication for a single-feed refresh that changed no feed
-    /// content: only the refresh-log projection is reloaded, skipping the
-    /// full episode materialization, the progress refetch, and the index
-    /// lookup-table rebuilds. A concurrent full reload owns the logs too, so this
-    /// publication is abandoned when either generation moves.
+    /// A concurrent full reload publishes the logs too, so this publication is abandoned when
+    /// either generation moves.
     func reloadRefreshLogsFromStore() async throws {
         refreshLogReloadGeneration += 1
         let logGeneration = refreshLogReloadGeneration
@@ -1507,18 +1393,15 @@ final class LibraryStore {
             do {
                 try await localCache.prepareEpisodeSearchIndex()
             } catch is CancellationError {
-                // Cancellation is normal during teardown or a data reset.
             } catch {
-                // The lexical index is derived; search keeps using its
-                // established fallback and a later load retries the rebuild.
+                // Derived data: search falls back and a later load retries the rebuild.
             }
             self?.episodeSearchIndexPreparationTask = nil
         }
     }
 
-    /// Which canonical feed each cached episode belongs to, for repair's
-    /// variant-key normalization. Episode IDs claimed by more than one feed
-    /// (same audio syndicated across shows) are excluded as ambiguous.
+    /// An episode ID claimed by more than one feed (audio syndicated across shows) is ambiguous and
+    /// left out.
     private func claimedFeedURLsByEpisodeID() -> [String: String] {
         var claims: [String: String] = [:]
         claims.reserveCapacity(episodes.count)
@@ -1550,7 +1433,6 @@ final class LibraryStore {
         return try modelContext.fetch(descriptor).first
     }
 
-    /// The bulk refresh set, in the store's display order.
     func activeSubscriptionFeedURLStrings(modelContext: ModelContext) throws -> [String] {
         try modelContext.fetch(activeSubscriptionsDescriptor()).map(\.feedURL)
     }
@@ -1614,8 +1496,6 @@ final class LibraryStore {
         return true
     }
 
-    /// Moves a subscription onto a new canonical feed URL; see
-    /// `FeedWriteCoordinator.migrateSubscription`.
     func migrateSubscription(
         from oldFeedURLString: String,
         toFeedURL newFeedURL: URL,
@@ -1628,8 +1508,6 @@ final class LibraryStore {
         )
     }
 
-    /// Diagnostics sweep for libraries duplicated before reconciliation
-    /// existed; see `FeedWriteCoordinator.mergeDuplicateEpisodes`.
     func mergeDuplicateEpisodes(modelContext: ModelContext) async throws -> EpisodeMergeResult {
         try await feedWrites.mergeDuplicateEpisodes(
             feedURLStrings: subscriptions.map(\.feedURL),

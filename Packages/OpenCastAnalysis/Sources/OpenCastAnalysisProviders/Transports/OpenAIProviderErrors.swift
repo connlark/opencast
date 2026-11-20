@@ -1,12 +1,5 @@
 import OpenCastAnalysis
 
-/// Classifies a non-2xx OpenAI exchange for the pipeline and the listener.
-/// 401 is an invalid key; 404 (or a 400/403 naming the model) an
-/// unavailable model; 429 `insufficient_quota` the account's quota or
-/// prepaid balance; any other 429 a rate limit to retry after
-/// `Retry-After`; 500, 502, 503, 504 and 529 an overloaded provider to
-/// retry; everything else a final refusal. `Retry-After` is read as Gemini's
-/// is: whole seconds, capped.
 public enum OpenAIProviderErrors {
     public static func classify(status: Int, retryAfter: String?, body: String) -> AnalysisProviderErrorClassification {
         let envelope = Envelope(body)
@@ -36,8 +29,7 @@ public enum OpenAIProviderErrors {
         }
     }
 
-    /// `{"error": {"code", "type", "param"}}`, read leniently. The message
-    /// is never read.
+    /// The message is never read.
     struct Envelope {
         var code: String?
         var type: String?

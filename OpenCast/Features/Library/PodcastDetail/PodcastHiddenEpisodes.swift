@@ -1,18 +1,12 @@
-/// What a Group by Podcast visit keeps off the show's list, or the Inbox
-/// off its own, as the caption over the list and the filtered-empty copy
-/// name it.
 nonisolated struct PodcastHiddenEpisodes: Equatable, Sendable {
-    /// Archived episodes are off the list. Only set while the list has
-    /// some, so the copy never names an empty archive.
+    /// Archived episodes are off the list. Set only while the list has some.
     var archived = false
     /// Up Next and the playing episode are off the list.
     var queued = false
-    /// Episodes not archived are off the list: a visit from the Inbox's
-    /// archive view lists only the show's archived episodes. Only set while
-    /// the show has some not archived, and never with `archived`.
+    /// Episodes not archived are off the list, as from the Inbox's archive view. Set only while
+    /// the show has some, and never with `archived`.
     var unarchived = false
 
-    /// The caption's text; nil while nothing is hidden.
     var caption: String? {
         if unarchived {
             return queued
@@ -56,11 +50,7 @@ nonisolated struct PodcastHiddenEpisodes: Equatable, Sendable {
         }
     }
 
-    /// The filtered-empty copy under a filter other than All while
-    /// something is hidden; nil while nothing is. What is hidden may be what
-    /// emptied the list, so the filter's own claim ("every episode is marked
-    /// as played") could be false: the copy says only that none are left to
-    /// show, and what is hidden.
+    /// What is hidden may be what emptied the list, which would make the filter's own copy false.
     func filteredEmptyDescription(hiddenUnder filter: PodcastEpisodeFilter) -> String? {
         guard let caption else {
             return nil
@@ -68,7 +58,6 @@ nonisolated struct PodcastHiddenEpisodes: Equatable, Sendable {
         return "\(Self.noneToShow(under: filter)) \(caption)."
     }
 
-    /// "No <noun> to show.", the nouns following `emptyStateTitle`.
     static func noneToShow(under filter: PodcastEpisodeFilter) -> String {
         switch filter {
         case .all:

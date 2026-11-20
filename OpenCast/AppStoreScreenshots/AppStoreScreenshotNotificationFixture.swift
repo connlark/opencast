@@ -1,10 +1,6 @@
 #if DEBUG
 import UserNotifications
 
-/// Screenshot-lane-only: delivers a marketing-clean ad-free-pass completion
-/// notification a few seconds after launch so the App Store set can capture
-/// the real copy and category on SpringBoard. Unlike the UI-test look
-/// fixture, this variant reports no failures.
 enum AppStoreScreenshotNotificationFixture {
     static func schedule() {
         Task {

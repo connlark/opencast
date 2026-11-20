@@ -1,8 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// The Now Playing notes sheet: the episode note (or a row to add one), then
-/// the timestamped notes, with swipe actions to edit and delete.
 struct EpisodeNotesList: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext

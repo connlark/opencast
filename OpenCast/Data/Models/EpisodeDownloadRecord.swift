@@ -13,18 +13,15 @@ final class EpisodeDownloadRecord {
     var errorMessage: String?
     var entityTag: String?
     var lastModifiedHeader: String?
-    /// SHA-256 of the completed assembled file; empty until a download
-    /// completes and cleared whenever the file is re-downloaded or fails.
-    /// Header validators never substitute for this hash.
+    /// SHA-256 of the completed file; empty until a download completes and cleared on
+    /// re-download or failure. Header validators never substitute for it.
     var sourceFileSHA256: String = ""
     var episodeTitle: String?
     var podcastTitle: String?
     var artworkURLString: String?
     var duration: TimeInterval?
     var publishedAt: Date?
-    /// When the file last finished downloading; the Keep Downloaded trim
-    /// keeps the most recent. Nil on records completed before this field
-    /// existed, which fall back to `createdAt`. `updatedAt` can't stand in:
+    /// Nil on older records, which fall back to `createdAt`. `updatedAt` can't stand in:
     /// validator refreshes and launch size repairs move it.
     var completedAt: Date?
     var createdAt: Date = Date()

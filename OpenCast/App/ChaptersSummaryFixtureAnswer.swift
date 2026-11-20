@@ -1,10 +1,5 @@
 import OpenCastAnalysis
 
-/// UI tests: the Gemini body the fixture transport answers a Chapters &
-/// Summary request with. The answer is synthetic: it reads only the segment
-/// ids from the request's prompt and splits them into at most two chapters
-/// with fixed titles, a fixed summary and one claim; no transcript text is
-/// echoed. `nil` (no segment ids found) fails the send.
 nonisolated enum ChaptersSummaryFixtureAnswer {
     static let chapterTitles = ["Part One", "Part Two"]
     static let summary = "A fixture summary written for interface tests."
@@ -57,7 +52,6 @@ nonisolated enum ChaptersSummaryFixtureAnswer {
         ]))
     }
 
-    /// The ids of the prompt's `[<id> | <start>-<end>] text` lines.
     static func segmentIDs(in prompt: String) -> [Int64] {
         guard let segments = prompt.range(of: "\nSegments:\n") else {
             return []

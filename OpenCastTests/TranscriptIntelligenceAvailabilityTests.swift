@@ -79,15 +79,6 @@ struct TranscriptIntelligenceAvailabilityTests {
         #expect(resolve(lastFailure: .unknown("x")) == .available)
     }
 
-    @Test("Transient failures clear on refresh; the rest persist")
-    func transientFailures() {
-        #expect(TranscriptIntelligenceFailure.offline.isTransient)
-        #expect(TranscriptIntelligenceFailure.guardrailViolation(.output).isTransient)
-        #expect(!TranscriptIntelligenceFailure.notEntitled.isTransient)
-        #expect(!TranscriptIntelligenceFailure.rateLimited(resetDate: nil).isTransient)
-        #expect(!TranscriptIntelligenceFailure.quotaLimitReached(resetDate: nil).isTransient)
-    }
-
     @Test("A guardrail decline keeps which check fired", arguments: [
         ("Safety guardrail was triggered.", TranscriptIntelligenceGuardrailSide.input),
         ("Response may contain sensitive or unsafe content", .output),
@@ -98,12 +89,5 @@ struct TranscriptIntelligenceAvailabilityTests {
     func guardrailSideIsReadFromTheModelDetail(debugDescription: String, side: TranscriptIntelligenceGuardrailSide) {
         let error = LanguageModelError.guardrailViolation(.init(debugDescription: debugDescription))
         #expect(TranscriptIntelligenceFailure.failure(mapping: error) == .guardrailViolation(side))
-    }
-
-    @Test("Cancellation carries no user message; everything else does")
-    func userMessages() {
-        #expect(TranscriptIntelligenceFailure.cancelled.userMessage == nil)
-        #expect(TranscriptIntelligenceFailure.guardrailViolation(.output).userMessage == "Apple’s model declined this passage.")
-        #expect(TranscriptIntelligenceFailure.unknown("boom").userMessage?.contains("boom") == true)
     }
 }

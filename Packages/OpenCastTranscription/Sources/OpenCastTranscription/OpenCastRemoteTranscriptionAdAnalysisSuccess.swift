@@ -1,5 +1,3 @@
-/// Payload of a completed chained ad analysis inside the result envelope's
-/// `ad_analysis` block.
 public struct OpenCastRemoteTranscriptionAdAnalysisSuccess: Codable, Sendable, Equatable {
     public var model: String
     public var policy: String

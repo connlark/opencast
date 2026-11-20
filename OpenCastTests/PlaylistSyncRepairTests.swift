@@ -620,9 +620,8 @@ struct PlaylistSyncRepairTests {
     }
 
     /// Three copies of one membership: the smallest identity is the oldest,
-    /// the middle one carries the newest content, the largest the newest
-    /// added date (so the kept row is the one a smallest-identity pick would
-    /// not have chosen).
+    /// the middle one carries the newest content, and the largest the newest
+    /// added date, which a smallest-identity pick would not keep.
     private func twinItems() -> [PlaylistItemRecord] {
         [
             makeItem(

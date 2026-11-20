@@ -1,23 +1,11 @@
 import Foundation
 import SwiftData
 
-/// Copies the playlists an earlier build kept in the device-local store into
-/// the synced store, once per install.
-///
-/// Copies keep their logical keys and timestamps so a second device that
-/// copies the same playlists converges through duplicate repair, and each
-/// gets a fresh `dedupeUUID` because the legacy rows were never synced and
-/// their UUIDs carry no cross-device meaning. Raw kind and origin strings
-/// are copied as stored so a value this build does not know survives.
-///
-/// The completion flag lives in `UserDefaults` because Delete Data clears
-/// every `LocalPreferenceRecord` but cannot reach the legacy rows, which
-/// stay in the local store file; a flag kept there would copy them back.
-/// Delete Data sets the flag itself after a successful wipe, so a copy that
-/// had failed before the wipe is not retried either.
-/// Tombstones are not read: a copy whose playlist was deleted elsewhere is
-/// removed by the next repair pass.
+/// Copies keep their logical keys and timestamps, so a second device that copies the same
+/// playlists converges through duplicate repair.
 enum PlaylistLocalStoreMigration {
+    // In `UserDefaults`, not a `LocalPreferenceRecord`: Delete Data clears those but not the
+    // legacy rows in the local store file, which a cleared flag would copy back.
     nonisolated static let completedDefaultsKey = "playlists.localStoreMigration.completed"
 
     /// Returns how many rows it inserted.
@@ -72,6 +60,7 @@ enum PlaylistLocalStoreMigration {
                 createdAt: playlist.createdAt,
                 updatedAt: playlist.updatedAt
             )
+            // Copied as stored, so a value this build does not know survives.
             record.kindRawValue = playlist.kindRawValue
             record.originRawValue = playlist.originRawValue
             modelContext.insert(record)

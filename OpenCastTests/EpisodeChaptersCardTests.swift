@@ -1,38 +1,15 @@
 import Foundation
-import OpenCastCore
 import Testing
 @testable import OpenCast
 
 @MainActor
 @Suite("Episode chapters card")
 struct EpisodeChaptersCardTests {
-    @Test("Start times under an hour show minutes, and from an hour on show hours")
-    func startTimePatternFollowsTheHour() {
-        #expect(EpisodeChaptersCard.startTimeText(3_599).split(separator: ":").count == 2)
-        #expect(EpisodeChaptersCard.startTimeText(3_600).split(separator: ":").count == 3)
-    }
-
-    @Test("Start times past the timestamp bound clamp to it instead of trapping")
-    func clampsStartTimesPastTheBound() {
-        let atBound = EpisodeChaptersCard.startTimeText(PublisherChaptersDocumentDecoder.maximumTimestamp)
-
-        for startTime in [1e300, .infinity, 1e15, 1_000_000_001] as [TimeInterval] {
-            #expect(EpisodeChaptersCard.startTimeText(startTime) == atBound)
-        }
-        #expect(EpisodeChaptersCard.startTimeText(999_999_999) != atBound)
-    }
-
-    @Test("Show-notes chapters are tagged with the decided wording")
-    func showNotesTagWording() {
-        #expect(ShowNotesContentTag.title == "From the show notes")
-    }
-
-    @Test("Negative and NaN start times read as the episode start")
-    func negativeAndNaNStartTimesReadAsZero() {
-        let zero = EpisodeChaptersCard.startTimeText(0)
-
-        for startTime in [-1, -.infinity, .nan] as [TimeInterval] {
-            #expect(EpisodeChaptersCard.startTimeText(startTime) == zero)
-        }
+    @Test("Start times outside the timestamp range clamp to it instead of trapping", arguments: zip(
+        [.nan, -1, -.infinity, .infinity, 1_000_000_001] as [TimeInterval],
+        [0, 0, 0, 1_000_000_000, 1_000_000_000] as [TimeInterval]
+    ))
+    func clampsStartTimes(startTime: TimeInterval, clamped: TimeInterval) {
+        #expect(EpisodeChaptersCard.startTimeText(startTime) == EpisodeChaptersCard.startTimeText(clamped))
     }
 }

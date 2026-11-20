@@ -2,9 +2,6 @@ import Foundation
 import Testing
 @testable import OpenCastVoiceBoost
 
-/// Safety invariants that must survive every VoiceBoost overhaul pass:
-/// finite output always, exact dry bypass when disabled, and true-peak
-/// ceiling compliance measured with the offline 4x analyzer.
 struct VoiceBoostInvariantTests {
     @Test(
         "Hostile input blocks produce finite bounded output",
@@ -89,12 +86,6 @@ struct VoiceBoostInvariantTests {
         }
     }
 
-    /// The C pipeline always runs through the limiter delay
-    /// line, so C-level disabled output is the dry signal delayed by exactly
-    /// `latencyFrames`, bit-identically. The zero-latency bit-identical
-    /// bypass invariant lives at the tap level, whose `!isEnabled`
-    /// short-circuit never invokes the processor (pinned in
-    /// OpenCastPlayback's tap tests).
     @Test("Disabled processor passes finite in-range audio through as bit-identical delayed dry")
     func disabledProcessorIsBitIdenticalDelayedDry() {
         var buffer = VoiceBoostFixtureGenerator.speechLike(

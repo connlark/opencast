@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Glass progress card observing the ad-free pipeline. Rendered only while
-/// work runs or a step failed; `EpisodePipelineState.make` decides that.
 struct EpisodePipelineCard: View {
     let state: EpisodePipelineState
     let onAction: (EpisodePipelineAction) -> Void

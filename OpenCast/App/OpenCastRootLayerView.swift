@@ -2,8 +2,7 @@ import SwiftUI
 
 struct OpenCastRootLayerView<Content: View>: View {
     @Environment(OpenCastAppModel.self) private var appModel
-    /// The scene's fold latch and Library layout memory, owned here so the
-    /// tab root's content and the Now Playing overlay read one value.
+    /// Owned here so the tab root's content and the Now Playing overlay share one value.
     @State private var sceneLibraryLayouts = SceneLibraryLayouts()
 
     let onDismissNowPlaying: () -> Void
@@ -37,9 +36,8 @@ struct OpenCastRootLayerView<Content: View>: View {
                 .allowsHitTesting(!isNowPlayingPresented)
                 .accessibilityHidden(isNowPlayingPresented)
 
-            // Prepare the card with the playback surface instead of rebuilding
-            // its view graph on every tap. Hidden content stops observing clocks
-            // and progress; dismissal resets its transient interaction state.
+            // Built with the playback surface, not on each tap, so opening the
+            // card never rebuilds its view graph.
             if appModel.hasNowPlayingPresentationContent {
                 NowPlayingOverlayView(
                     onDismissed: onDismissNowPlaying,

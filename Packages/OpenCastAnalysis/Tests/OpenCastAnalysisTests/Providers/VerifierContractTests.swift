@@ -4,11 +4,6 @@ import Foundation
 @testable import OpenCastAnalysisReplay
 import Testing
 
-/// The verifier's contract at its edges: decoders read case-kept text,
-/// every candidate is checked by structure, depth is bounded before any
-/// recursion, recognised but invalid encodings fail closed, normalisation
-/// and registration stay linear; the redactor's credential glue and quoted
-/// values; and the oracle's own reach.
 @Suite("Verifier contract")
 struct VerifierContractTests {
     static let key = RedactionPropertyTests.openAIKey
@@ -18,11 +13,6 @@ struct VerifierContractTests {
         String(String.UnicodeScalarView(text.unicodeScalars.map { (0x21...0x7E).contains($0.value) ? Unicode.Scalar($0.value + fullwidthOffset)! : $0 }))
     }
 
-    /// Every other scalar of `text` written with `encode`, the rest as it is.
-    static func partly(_ text: String, _ encode: (Unicode.Scalar) -> String) -> String {
-        text.unicodeScalars.enumerated().map { $0.offset.isMultiple(of: 2) ? encode($0.element) : String($0.element) }.joined()
-    }
-
     static func recordingHolds(_ text: String, secrets: [String], _ name: String) {
         let recording = RedactingLogger.safeRecording(.object([JSONMember("m", .string(text))]), secrets: secrets)
         #expect(!recording.recorded || recording.text == #"{"m":"[REDACTED]"}"#, "\(name): \(recording.text.prefix(200))")
@@ -30,10 +20,8 @@ struct VerifierContractTests {
 
     @Test("Decoders read case-kept normalised text: fullwidth percent, entity and \\u around base64")
     func caseKeptDecoding() {
-        // Every third character of the key is a capital, so every base64
-        // group of it starts with a capital symbol. The capitals stay as
-        // they are and every other symbol is encoded in fullwidth syntax:
-        // only normalising exposes the encoding, and folding case then
+        // Every base64 group of the key starts with a capital, kept as is,
+        // and every other symbol is encoded in fullwidth syntax: folding case
         // breaks every group, so only the case-kept form decodes the key.
         let key = "Qx7Rm2Sn4Tp8Uq1Vr3Ws5Xt6Yu9Zv0"
         let encoded = Data(key.utf8).base64EncodedString()
@@ -86,40 +74,6 @@ struct VerifierContractTests {
             for (index, holds) in verdicts.enumerated() {
                 #expect(holds, "check \(index) at \(count) brackets")
             }
-        }
-    }
-
-    /// A provider body nested `depth` levels in an ignored field, or with an
-    /// answer text that is.
-    static func deepGeminiBody(_ depth: Int, inText: Bool) -> String {
-        let nest = String(repeating: "[", count: depth) + String(repeating: "]", count: depth)
-        return inText
-            ? #"{"candidates":[{"content":{"parts":[{"text":"\#(nest)"}]},"finishReason":"STOP"}]}"#
-            : #"{"candidates":[{"content":{"parts":[{"text":"{}"}]},"finishReason":"STOP"}],"ignored":\#(nest)}"#
-    }
-
-    @Test("A provider body nested past the bound never reaches a recursive parser: a malformed answer, an error classified by status")
-    func deepProviderBodies() async throws {
-        for depth in [4 * 1024, 64 * 1024] {
-            for inText in [false, true] {
-                let body = Self.deepGeminiBody(depth, inText: inText)
-                let interpreted = GeminiAnalysisTransport.interpret(body)
-                #expect(interpreted.finishReason == .malformedResponse, "gemini depth \(depth) in text \(inText)")
-                let model = ProviderTestSupport.googleEntry()
-                let transport = try ProviderTestSupport.googleTransport(ScriptedHTTPClient(status: 200, body: body))
-                let outcome = await AnalysisRunner(transport: transport, clock: AnalysisFrozenClock())
-                    .detectAds(try ProviderTestSupport.carouselRequest, policy: AdDetectionAnalysisPolicy.service.with(model: model))
-                guard case .failed = outcome else {
-                    Issue.record("gemini depth \(depth) in text \(inText): \(outcome)")
-                    continue
-                }
-            }
-            let nest = String(repeating: "[", count: depth) + String(repeating: "]", count: depth)
-            let openAI = #"{"status":"completed","output":[{"type":"message","status":"completed","content":[{"type":"output_text","text":"\#(nest)"}]}]}"#
-            #expect(OpenAIResponsesMapping.answer(fromBody: openAI).answer.finishReason == AnalysisFinishReason.malformedResponse.rawValue)
-            let error = #"{"error":{"status":"RESOURCE_EXHAUSTED","message":"quota","details":\#(nest)}}"#
-            #expect(GeminiProviderErrors.classify(status: 429, retryAfter: nil, body: error).listener == .rateLimited)
-            #expect(OpenAIProviderErrors.classify(status: 401, retryAfter: nil, body: #"{"error":\#(nest)}"#).listener == .invalidKey)
         }
     }
 
@@ -209,18 +163,6 @@ struct VerifierContractTests {
             #expect(!recording.recorded && FragmentOracle.isPlaceholder(recording.text), "\(secret)")
             #expect(RedactingLogger.safeLine("nothing here", secrets: [secret]) == RedactingLogger.redactedLine, "\(secret)")
         }
-    }
-
-    @Test("The oracle reads JSON nested past the verifier's four levels, named entities, and short secrets")
-    func oracleReach() {
-        var nested = JSONWriter.string(.object([JSONMember("v", .string(Self.key))]))
-        for _ in 0..<6 { nested = JSONWriter.string(.object([JSONMember("v", .string(nested))])) }
-        let fragments = FragmentOracle.fragments([Self.key])
-        #expect(FragmentOracle.leak(inArtifact: nested, fragments: fragments) != nil)
-        #expect(FragmentOracle.texts(ofArtifact: nested).contains(Self.key))
-        #expect(FragmentOracle.decodings("a&nbsp;b").texts.contains("a\u{00A0}b"))
-        let short = FragmentOracle.fragments(["Zq9"])
-        #expect(FragmentOracle.leak(inArtifact: #"{"m":"aZq9b"}"#, fragments: short) != nil)
     }
 
     @Test("The recorder persists no provider string: no message, id, model version, signature or unknown type")

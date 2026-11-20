@@ -2,9 +2,6 @@ import SwiftUI
 import Testing
 @testable import OpenCast
 
-/// The real sheet content presented through `.sheet(item:)` with the
-/// player's detents, in a window the size of the Closed card and of the
-/// pinned iPhone, read from the views SwiftUI renders through.
 @MainActor
 @Suite("Sound Lab sheet: hosted presentation")
 struct NowPlayingSoundLabSheetPresentationTests {
@@ -46,9 +43,8 @@ struct NowPlayingSoundLabSheetPresentationTests {
         }
     }
 
-    /// Frames in `root`'s own points: the system draws the medium-detent
-    /// sheet as a card inset from the window's sides and scaled to fit, so
-    /// window coordinates are about 4 % smaller than the layout.
+    /// In `root`'s own points: the system scales the medium-detent sheet to
+    /// fit, so window coordinates are about 4 % smaller than the layout.
     static func rendered(in root: UIView) -> [(view: UIView, frame: CGRect)] {
         var views: [(view: UIView, frame: CGRect)] = []
         func collect(_ view: UIView) {
@@ -65,8 +61,6 @@ struct NowPlayingSoundLabSheetPresentationTests {
         return views
     }
 
-    /// 466 × 678 is the Closed card (`NowPlayingContentMetricsTests`), 402 ×
-    /// 874 the pinned iPhone; AX XXXL wraps the labels.
     @Test(
         "Presented, the sheet shows the three labelled rows and the switch inside it; dismissed, it is gone",
         arguments: [
@@ -88,7 +82,7 @@ struct NowPlayingSoundLabSheetPresentationTests {
         let pixel = 1 / window.traitCollection.displayScale
 
         presenter.sheet = .soundLab
-        #expect(await waitUntil(timeout: .seconds(10)) {
+        #expect(await waitUntil {
             host.presentedViewController?.isBeingPresented == false
         })
         let sheet = try #require(host.presentedViewController)
@@ -104,8 +98,6 @@ struct NowPlayingSoundLabSheetPresentationTests {
         #expect(switches.count == 1, "switches \(switches)")
         for row in rows {
             #expect(row.minX >= sheetBounds.minX - pixel && row.maxX <= sheetBounds.maxX + pixel, "row \(row) sheet \(sheetBounds)")
-            // Labelled: each row spans the sheet's width, past the width
-            // below which the panel drops its titles.
             #expect(row.width >= NowPlayingSoundLabLayout.iconOnlyRowAreaWidth, "row \(row)")
             #expect(row.height >= NowPlayingSoundLabLayout.compactRowHeight - pixel, "row \(row)")
         }
@@ -126,7 +118,7 @@ struct NowPlayingSoundLabSheetPresentationTests {
         }
 
         presenter.sheet = nil
-        #expect(await waitUntil(timeout: .seconds(10)) {
+        #expect(await waitUntil {
             host.presentedViewController == nil && presenter.dismissals == 1
         })
     }

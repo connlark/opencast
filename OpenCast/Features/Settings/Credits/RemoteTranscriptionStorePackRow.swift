@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// One purchasable credit pack: localized name/price from StoreKit, grant
-/// from the verified catalog.
+/// Name and price come from StoreKit; the grant comes from the verified catalog.
 struct RemoteTranscriptionStorePackRow: View {
     @Environment(OpenCastAppModel.self) private var appModel
 

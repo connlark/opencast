@@ -1,9 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// The Group by Podcast Inbox's layout menu: the shared `LayoutPickerMenu`
-/// bound to the Inbox's own layout preference, shown left of the filter
-/// menu while grouping is on.
 struct InboxGroupedLayoutMenu: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext

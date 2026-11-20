@@ -3,13 +3,6 @@ import Observation
 import OpenCastTranscription
 import SwiftData
 
-/// Thin adapter for the plain Transcribe Remotely surface: owns the
-/// observable request store and maps `RemoteTranscriptionJobRunner` events
-/// and errors onto `RemoteTranscriptionRequestPhase`. The runner owns the
-/// whole job (download, identity, upload fallback, poll, import, ack); this
-/// coordinator owns the user's decisions about it: start, Resume/Try Again
-/// (which re-attach the persisted reference), park, and the user cancel
-/// that is the only path to `/cancel`.
 @Observable
 final class EpisodeRemoteTranscriptionCoordinator {
     typealias UploadSessionFactory = RemoteTranscriptionJobRunner.UploadSessionFactory
@@ -24,16 +17,12 @@ final class EpisodeRemoteTranscriptionCoordinator {
     /// Set by `park(exit:)` before the local task is cancelled, so the run's
     /// cancellation catch can tell a park from a user cancel.
     @ObservationIgnored private var pendingParkExit: RemoteTranscriptionJobExit?
-    /// The in-flight user cancel, kept so a test or a later trigger can
-    /// await its resolution. While it runs for an episode, further taps for
-    /// that episode are no-ops: one tap burst sends at most one `/cancel`.
+    /// One tap burst sends at most one `/cancel`: while this runs, further taps for its episode
+    /// are no-ops.
     @ObservationIgnored private(set) var userCancelTask: Task<Void, Never>?
     @ObservationIgnored private var userCancelEpisodeID: String?
-    /// Every phase the request publishes, with its episode, so the system
-    /// card can follow the run it was armed for.
     @ObservationIgnored var onPhaseChange: ((_ episodeID: String, _ phase: RemoteTranscriptionRequestPhase) -> Void)?
-    /// A run's last phase, once per run, with the delivery owner snapshotted
-    /// before the runner cleared the reference.
+    /// Called once per run.
     @ObservationIgnored var onRunEnded: ((
         _ episodeID: String,
         _ phase: RemoteTranscriptionRequestPhase,
@@ -63,9 +52,8 @@ final class EpisodeRemoteTranscriptionCoordinator {
         )
     }
 
-    /// A user's start. `prepareBackgroundSession` runs only once the episode
-    /// is reserved and its run exists, so a rejected start never arms the
-    /// system card.
+    /// `prepareBackgroundSession` runs only once the run exists, so a rejected start never arms
+    /// the system card.
     @discardableResult
     func start(
         episode: EpisodeListItemSnapshot,
@@ -126,10 +114,6 @@ final class EpisodeRemoteTranscriptionCoordinator {
         return .started
     }
 
-    /// Resume and Try Again: re-runs the episode against its persisted
-    /// reference, so a parked or retryable job is re-attached by the same
-    /// client request ID and never minted twice. A cleared reference (a
-    /// terminal outcome) starts a fresh job.
     @discardableResult
     func resume(
         episode: EpisodeListItemSnapshot,
@@ -140,12 +124,8 @@ final class EpisodeRemoteTranscriptionCoordinator {
         return start(episode: episode, modelContext: modelContext, prepareBackgroundSession: prepareBackgroundSession)
     }
 
-    /// Launch and activation re-attach of the episode's kept reference
-    /// (`RemoteJobReattacher`). A completed transcript refuses it unless that
-    /// transcript is the reference's own imported result: the re-run then
-    /// acks it (death after import) or accepts `acknowledged` (death after
-    /// ack) and clears the reference. No user tapped anything, so the system
-    /// card is never armed from here.
+    /// A completed transcript that is the reference's own import still re-runs, so a run that died
+    /// after the import or after the ack finishes and clears the reference.
     @discardableResult
     func reattach(episode: EpisodeListItemSnapshot, modelContext: ModelContext) -> StartOutcome {
         if transcriptions.hasCompletedTranscript(for: episode.episodeID) {
@@ -158,12 +138,8 @@ final class EpisodeRemoteTranscriptionCoordinator {
         return launchRun(episode: episode, modelContext: modelContext, prepareBackgroundSession: nil)
     }
 
-    /// A recovery trigger's retry of a persisted user cancel (CONTRACTS §4).
-    /// While this coordinator's own cancel for the episode is still in
-    /// flight, the trigger joins it rather than racing the tap's resolution;
-    /// otherwise the runner resolves the same reference once. `episode` lets
-    /// a create whose response was lost be replayed after a relaunch. Never
-    /// starts polling.
+    /// Joins this coordinator's own in-flight cancel for the episode rather than racing it.
+    /// `episode` lets a create whose response was lost be replayed after a relaunch.
     func resolvePendingUserCancel(episodeID: String, replaying episode: EpisodeListItemSnapshot?) async {
         if userCancelEpisodeID == episodeID, let userCancelTask {
             await userCancelTask.value
@@ -172,11 +148,8 @@ final class EpisodeRemoteTranscriptionCoordinator {
         _ = await runner.cancelServerJob(episodeID: episodeID, purpose: .transcription, replaying: episode)
     }
 
-    /// The user cancel. The intent is persisted before the local task is
-    /// cancelled, the runner's cancel path then resolves the job (letting an
-    /// in-flight create attach first) and sends at most one `/cancel`, and
-    /// the reference is cleared only after that attempt is recorded. A
-    /// repeated tap while that resolution is in flight does nothing.
+    /// Persists the intent before cancelling the local task, and lets the run unwind so an
+    /// in-flight create can attach before the runner sends `/cancel`.
     func cancel() {
         guard let episodeID = store.activeEpisodeID,
               let phase = store.phase,
@@ -192,9 +165,7 @@ final class EpisodeRemoteTranscriptionCoordinator {
         userCancelTask = Task { [weak self, runner, store] in
             await runTask?.value
             _ = await runner.cancelServerJob(episodeID: episodeID, purpose: .transcription)
-            // A cancel that landed after the durable import stopped nothing:
-            // the run completed and the transcript is on this device, so the
-            // completed phase stands.
+            // A cancel that landed after the durable import stopped nothing: the completed phase stands.
             if store.activeEpisodeID == episodeID, store.phase != .completed {
                 store.finish(phase: .cancelled)
                 self?.onPhaseChange?(episodeID, .cancelled)
@@ -205,15 +176,8 @@ final class EpisodeRemoteTranscriptionCoordinator {
         }
     }
 
-    /// Stops local polling without any server decision: the reference keeps
-    /// its job and records the exit, and the phase becomes resumable. A park
-    /// already in flight, or a user cancel, ends the run on its own, so a
-    /// second park does nothing.
-    /// Parks the live run: records the exit, stops polling and keeps the
-    /// reference for Resume. Returns the run task that is now unwinding, so a
-    /// caller that must outlive the run ending (the expiration handler, which
-    /// completes the system task) can await it. Nil when no run was in flight
-    /// or the park was refused.
+    /// Stops local polling without any server decision; the reference keeps its job for Resume.
+    /// Returns the unwinding run task, or nil when no run was in flight or the park was refused.
     @discardableResult
     func park(exit: RemoteTranscriptionJobExit) -> Task<Void, Never>? {
         guard let episodeID = store.activeEpisodeID,
@@ -309,8 +273,7 @@ final class EpisodeRemoteTranscriptionCoordinator {
         case .processing(let progress):
             .processing(progress)
         case .detectingAds:
-            // Plain transcription jobs never request the ad phase; keep the
-            // last honest phase if a server ever reports it anyway.
+            // Plain jobs never request the ad phase; `.saving` is the nearest honest one.
             .saving
         case .uploadingExactCopy(let completed, let total):
             .uploadingExactCopy(completedParts: completed, totalParts: total)

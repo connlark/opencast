@@ -242,8 +242,6 @@ struct EpisodeIdentityReconciliationTests {
             localCache: SQLiteLocalLibraryCacheStore.inMemory()
         )
         try await store.subscribe(to: Self.feedURL, modelContext: context)
-        // The old ID's copy was archived last; the successor's copy keeps
-        // its identity.
         context.insert(
             EpisodeProgressRecord(
                 episodeID: oldID,
@@ -318,8 +316,6 @@ struct EpisodeIdentityReconciliationTests {
         let oldID = v1.episodes[0].id.rawValue
         let newID = v2.episodes[0].id.rawValue
         let cache = SQLiteLocalLibraryCacheStore.inMemory()
-        // Seed the duplicated state directly: both catalogs cached, progress
-        // stranded on the old ID — the shape a pre-reconciliation library is in.
         try await cache.upsertCache(from: v1, refreshedAt: Date(timeIntervalSince1970: 1_750_000_000))
         try await cache.upsertCache(from: v2, refreshedAt: Date(timeIntervalSince1970: 1_750_000_100))
         let store = LibraryStore(
@@ -387,8 +383,6 @@ struct EpisodeIdentityReconciliationTests {
         #expect(newRelativePath == "EpisodeDownloads/new-episode-id.mp3")
         #expect(FileManager.default.fileExists(atPath: fileStore.fileURL(relativePath: newRelativePath).path))
         #expect(!FileManager.default.fileExists(atPath: fileStore.fileURL(relativePath: oldRelativePath).path))
-        // The keyed lookup index must observe the successor identity without
-        // a relaunch.
         #expect(store.record(for: "new-episode-id") === record)
         #expect(store.record(for: "old-episode-id") == nil)
     }

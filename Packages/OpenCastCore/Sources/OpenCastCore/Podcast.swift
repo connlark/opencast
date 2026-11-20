@@ -9,7 +9,6 @@ public struct Podcast: Codable, Hashable, Identifiable, Sendable {
     public var websiteURL: URL?
     public var artworkURL: URL?
     public var languageCode: String?
-    /// The channel's `podcast:guid` declaration, when present.
     public var podcastGUID: String?
 
     public init(

@@ -1,13 +1,6 @@
 import CoreGraphics
 
-/// One card across a horizontal band (Laptop), card-local: the media (the
-/// artwork and the title block) in the viewport above the band, the controls
-/// (progress, the failure block, transport, the utility row and the pane's
-/// row) in the viewport below it. Each viewport scrolls on its own and is
-/// clipped at the band, so nothing scrolls through the fold. The artwork
-/// fits the upper viewport after the title block, the spacing and the
-/// paddings, each counted once; at accessibility sizes it keeps its bound
-/// and the upper viewport scrolls instead.
+/// Card-local y throughout.
 struct NowPlayingFoldedLayout {
     let mediaViewport: ClosedRange<CGFloat>
     let controlsViewport: ClosedRange<CGFloat>
@@ -16,11 +9,9 @@ struct NowPlayingFoldedLayout {
     let controlsTopPadding: CGFloat
     let controlsBottomPadding: CGFloat
     let artworkSize: CGFloat
-    /// The media at rest, once the title block is measured.
     let mediaSpan: ClosedRange<CGFloat>?
-    /// The controls at rest, once they are measured (without an expanded pane).
+    /// At rest, without an expanded pane.
     let controlsSpan: ClosedRange<CGFloat>?
-    /// The room the controls leave below them, for the source pill's rule.
     let controlsSpareHeight: CGFloat?
     let mediaRequiresScrolling: Bool
     let controlsRequireScrolling: Bool
@@ -78,7 +69,6 @@ struct NowPlayingFoldedLayout {
         controlsViewport.upperBound - controlsViewport.lowerBound
     }
 
-    /// The band between the viewports, where nothing is drawn.
     var foldGap: CGFloat {
         max(0, controlsViewport.lowerBound - mediaViewport.upperBound)
     }

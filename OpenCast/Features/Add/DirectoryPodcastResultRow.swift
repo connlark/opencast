@@ -47,8 +47,6 @@ struct DirectoryPodcastResultRow<TrailingContent: View>: View {
         .contentShape(.rect)
     }
 
-    /// Provenance only when Podcast Index contributed; Apple-only rows
-    /// keep the unadorned look.
     private var provenanceLabel: String? {
         guard result.sources.contains(.podcastIndex) else {
             return nil

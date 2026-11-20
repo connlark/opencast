@@ -1,10 +1,5 @@
 import Foundation
 
-/// Folds transcript text and questions into comparable lexical tokens for
-/// the passage index: case and diacritic insensitive, split on anything that
-/// is not a letter or digit, possessives and plurals collapsed, and a small
-/// list of function and filler words removed. Deliberately tiny; semantic
-/// re-ranking is a later experiment, not this type's job.
 nonisolated enum TranscriptPassageTokenizer {
     static let minimumTokenLength = 2
 

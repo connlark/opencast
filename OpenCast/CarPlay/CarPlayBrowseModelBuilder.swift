@@ -1,9 +1,6 @@
 import Foundation
 import OpenCastCore
 
-/// Maps store state to the value models the CarPlay templates render. Every
-/// ordering, capping and marking decision lives here so the surface that has no
-/// UI-test bridge stays covered by plain unit tests.
 enum CarPlayBrowseModelBuilder {
     static func upNext(
         queueItems: [UpNextQueueItem],
@@ -73,9 +70,8 @@ enum CarPlayBrowseModelBuilder {
             )
         }
 
-        // Visible list + continuation never consume more than 2x the item
-        // cap; don't build rows for an unbounded inbox (perf 29). Archived
-        // episodes leave before the cap, so they never take a slot.
+        // The list and its continuation never show more than 2x the item cap, so no rows are built
+        // past it. Archived episodes are filtered before the cap so they never take a slot.
         let archivedEpisodeIDs = library.archivedEpisodeIDs
         let latestEpisodes = Array(
             library.inboxEpisodes.lazy
@@ -169,8 +165,6 @@ enum CarPlayBrowseModelBuilder {
         )
     }
 
-    /// The car's show list is the phone's show list: same episodes, same stored
-    /// filter and sort order, computed by the same model.
     static func episodes(
         forPodcastID podcastID: String,
         title: String,
@@ -211,10 +205,7 @@ enum CarPlayBrowseModelBuilder {
         )
     }
 
-    /// Input order is kept: the store already sorts by the collection
-    /// preference the phone shows. A row carries one image, so a smart
-    /// playlist shows its most dominant show's artwork (its card stack's
-    /// front card) and keeps its symbol only without one.
+    /// Input order is kept: the store already sorts by the phone's collection preference.
     static func playlists(
         _ summaries: [PlaylistSummary],
         episodeCount: (PlaylistSummary) -> Int,
@@ -308,9 +299,8 @@ enum CarPlayBrowseModelBuilder {
             limits: limits,
             continuationTitle: continuationTitle
         )
-        // Loading copy only reaches the screen while the list is empty, so a
-        // populated list is byte-identical before and after hydration settles
-        // and never spends a re-render on the transition.
+        // Loading copy shows only while the list is empty, so a populated list stays equal across
+        // hydration and costs no re-render.
         let isLoadingEmpty = isLoading && truncated.sections.isEmpty
 
         return CarPlayBrowseSnapshot(
@@ -342,8 +332,7 @@ enum CarPlayBrowseModelBuilder {
         )
     }
 
-    /// Slices to the head unit's ceilings, spending the last visible slot on a
-    /// "Show More" row that reaches exactly one further page.
+    /// The last visible slot goes to a "Show More" row that reaches exactly one further page.
     private static func truncate(
         sections: [CarPlayListSection],
         limits: CarPlayListLimits,
@@ -358,9 +347,6 @@ enum CarPlayBrowseModelBuilder {
             return (Array(kept), nil)
         }
 
-        // A list with nowhere to push, or too short to hold both content and a
-        // marker, spends every slot on rows; the rest stay on the phone rather
-        // than costing the driver a visible row for a dead end.
         guard limits.allowsContinuation, limits.maximumItemCount > 1 else {
             return (sliced(kept, budget: limits.maximumItemCount).sections, nil)
         }
@@ -423,10 +409,8 @@ enum CarPlayBrowseModelBuilder {
             title: episode.title,
             detailText: detailText,
             artworkURL: episode.artworkURL,
-            // While an episode plays its progress record is rewritten every few
-            // seconds, and reading it would rebuild the car lists on that
-            // cadence for a bar the playing indicator already stands in for.
-            // Paused, nothing writes it, so the bar comes back.
+            // The progress record is rewritten every few seconds while playing; reading it then
+            // would rebuild the car lists on that cadence.
             playbackProgress: nowPlaying.isActivelyPlaying(episode.episodeID)
                 ? nil
                 : visibleProgress(for: episode, library: library),

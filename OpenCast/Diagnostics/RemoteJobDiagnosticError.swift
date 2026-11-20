@@ -2,10 +2,7 @@ import DeviceCheck
 import Foundation
 import OpenCastTranscription
 
-/// The privacy-safe reduction of a thrown error for remote-job diagnostics:
-/// a vocabulary domain, the framework's numeric code, a closed framework
-/// domain and a closed machine code. No field accepts free text, so a URL
-/// or title embedded in an error message cannot reach disk.
+/// No field accepts free text: a URL or title in an error message must never reach disk.
 nonisolated struct RemoteJobDiagnosticError: Codable, Sendable, Equatable {
     enum Domain: String, Codable, Sendable, CaseIterable {
         case transport
@@ -21,8 +18,7 @@ nonisolated struct RemoteJobDiagnosticError: Codable, Sendable, Equatable {
         case other
     }
 
-    /// Closed set of `NSError.domain` values worth keeping for triage;
-    /// anything else collapses to `other`.
+    /// Any other `NSError.domain` collapses to `other`.
     enum FrameworkDomain: String, Codable, Sendable, CaseIterable {
         case urlError
         case cocoa
@@ -47,21 +43,16 @@ nonisolated struct RemoteJobDiagnosticError: Codable, Sendable, Equatable {
         }
     }
 
-    /// Closed set of client-side machine codes.
     enum LocalCode: String, Codable, Sendable, CaseIterable {
-        // Client-side HTTP layer.
         case invalidResponse
         case responseTooLarge
         case missingLocalFile
-        // Decoding.
         case typeMismatch
         case valueNotFound
         case keyNotFound
         case dataCorrupted
-        // Downloads.
         case fileMissing
         case notCompleted
-        // Result validation.
         case sourceIdentityMismatch
         case invalidDuration
         case emptyTranscript
@@ -69,7 +60,6 @@ nonisolated struct RemoteJobDiagnosticError: Codable, Sendable, Equatable {
         case textMismatch
         case normalizedHashMismatch
         case unsupportedSchema
-        // Runner outcomes.
         case downloadFailed
         case remoteCancelled
         case mismatchLocalFallback
@@ -84,8 +74,7 @@ nonisolated struct RemoteJobDiagnosticError: Codable, Sendable, Equatable {
     /// URLError code, HTTP status, OSStatus, DCError code or NSError code.
     let code: Int?
     let frameworkDomain: FrameworkDomain?
-    /// The server's stable wire error code; values this client does not
-    /// know encode as `unknown`.
+    /// Values this client does not know encode as `unknown`.
     let wireCode: OpenCastRemoteTranscriptionErrorCode?
     let localCode: LocalCode?
 
@@ -142,8 +131,6 @@ nonisolated struct RemoteJobDiagnosticError: Codable, Sendable, Equatable {
         }
     }
 
-    /// The encoded form of a wire code: known values verbatim, anything
-    /// else collapsed to `unknown`.
     static func encodedWireCode(_ code: OpenCastRemoteTranscriptionErrorCode) -> String {
         if case .unknown = code {
             return "unknown"

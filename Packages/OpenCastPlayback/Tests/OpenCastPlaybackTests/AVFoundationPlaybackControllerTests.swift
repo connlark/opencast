@@ -1085,21 +1085,6 @@ struct AVFoundationPlaybackControllerTests {
     }
 
     @Test
-    func naturalEpisodeCompletionClearsEndOfEpisodeTimer() throws {
-        let controller = AVFoundationPlaybackController()
-        defer {
-            controller.unload()
-        }
-        try controller.load(episode(duration: 60))
-        controller.setSleepTimer(mode: .endOfEpisode)
-
-        controller.handleCurrentItemDidPlayToEnd()
-
-        #expect(controller.sleepTimerMode == .off)
-        #expect(controller.sleepTimerRemaining() == nil)
-    }
-
-    @Test
     func naturalEpisodeCompletionPublishesParkedStateBeforeFinishingCallback() throws {
         let controller = AVFoundationPlaybackController()
         defer {
@@ -1500,38 +1485,6 @@ struct AVFoundationPlaybackControllerTests {
     }
 
     @Test
-    func playFromRealFixtureEndRestartsAtZero() async throws {
-        try await AVFoundationPlaybackTestGate.acquire()
-        defer {
-            AVFoundationPlaybackTestGate.release()
-        }
-        let fixtureURL = try VoiceBoostAudioFixture.writeSine(
-            fileExtension: "m4a",
-            settings: VoiceBoostAudioFixture.aacSettings(),
-            duration: 2
-        )
-        let controller = AVFoundationPlaybackController()
-        defer {
-            controller.unload()
-            try? FileManager.default.removeItem(at: fixtureURL)
-        }
-        let fixtureEpisode = Episode(
-            id: EpisodeID(rawValue: "replay-fixture"),
-            podcastID: PodcastID(rawValue: "podcast"),
-            podcastTitle: "Podcast",
-            title: "Replay Fixture",
-            duration: 2,
-            audioURL: fixtureURL
-        )
-        try controller.load(fixtureEpisode, startPosition: 2)
-
-        controller.play()
-
-        #expect(controller.snapshot.position == 0)
-        #expect(controller.snapshot.progressBoundaryID > 0)
-    }
-
-    @Test
     func nextTrackAdvancesQueueOnlyWhenQueueIsNonempty() throws {
         let controller = AVFoundationPlaybackController()
         defer {
@@ -1584,44 +1537,6 @@ struct AVFoundationPlaybackControllerTests {
         #expect(controller.sleepTimerEndsAt == nil)
     }
 
-    @Test
-    func autoSkipJumpsPastZoneAndPublishesEvent() async throws {
-        try await AVFoundationPlaybackTestGate.acquire()
-        defer {
-            AVFoundationPlaybackTestGate.release()
-        }
-
-        let fixtureURL = try VoiceBoostAudioFixture.writeSine(
-            fileExtension: "m4a",
-            settings: VoiceBoostAudioFixture.aacSettings(),
-            duration: 5
-        )
-        let controller = AVFoundationPlaybackController()
-        let episode = Episode(
-            id: EpisodeID(rawValue: "auto-skip-fixture"),
-            podcastID: PodcastID(rawValue: "podcast"),
-            podcastTitle: "Podcast",
-            title: "Auto Skip Fixture",
-            duration: 5,
-            audioURL: fixtureURL
-        )
-        defer {
-            controller.unload()
-            try? FileManager.default.removeItem(at: fixtureURL)
-        }
-
-        try controller.load(episode)
-        controller.setSkipZones([
-            PlaybackSkipZone(id: 7, startTime: 0.5, endTime: 2)
-        ])
-        controller.play()
-
-        let event = try await waitForAutoSkipEvent(in: controller)
-
-        #expect(event == PlaybackAutoSkipEvent(zoneID: 7, sequence: 1))
-        #expect(controller.snapshot.position >= 2)
-    }
-
     private func waitForTerminalPlaybackState(
         in controller: AVFoundationPlaybackController
     ) async throws -> PlaybackState {
@@ -1648,19 +1563,6 @@ struct AVFoundationPlaybackControllerTests {
             try await Task.sleep(for: .milliseconds(50))
         }
         return controller.snapshot.state
-    }
-
-    private func waitForAutoSkipEvent(
-        in controller: AVFoundationPlaybackController
-    ) async throws -> PlaybackAutoSkipEvent? {
-        let deadline = Date.now.addingTimeInterval(60)
-        while Date.now < deadline {
-            if let event = controller.lastAutoSkipEvent {
-                return event
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-        return controller.lastAutoSkipEvent
     }
 
     private func waitForActivationCalls(

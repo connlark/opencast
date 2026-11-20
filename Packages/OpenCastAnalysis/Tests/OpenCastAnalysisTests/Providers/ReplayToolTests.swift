@@ -4,8 +4,6 @@ import Foundation
 @testable import OpenCastAnalysisReplay
 import Testing
 
-/// The live tool's recorder and spend hook: what they save and how long
-/// they may hold an exchange.
 @Suite("Replay tool live recording")
 struct ReplayToolTests {
     static func temporaryDirectory() -> URL {
@@ -164,12 +162,9 @@ struct ReplayToolTests {
 }
 
 extension ReplayToolTests {
-    /// How long a hook's child runs when nothing stops it. The stop tests
-    /// bound the hook by this, not by a guess at scheduling delay: a stop
-    /// path that works returns well before it at any machine load, and one
-    /// that waits for the child cannot. Five minutes, because a three-core
-    /// CI runner once held the cooperative pool for 45 seconds while other
-    /// suites ran, which a 30-second lifetime read as waiting for the child.
+    /// How long a hook's child runs when nothing stops it: a stop path that
+    /// works returns well before it at any machine load, and one that waits
+    /// for the child cannot.
     static let childLifetimeSeconds = 300
 
     /// Whether the process `pid` is gone, waiting up to `seconds` for it.

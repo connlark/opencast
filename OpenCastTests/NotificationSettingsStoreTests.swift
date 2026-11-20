@@ -229,8 +229,7 @@ struct NotificationSettingsStoreTests {
         store.scheduleSubscriptionSyncIfEnabled(
             activePodcastIDs: ["https://example.com/latest.xml"]
         )
-        // Settle the debounced sync (it records the pending set against the
-        // busy window) before releasing registration — no grace sleep to race.
+        // The debounced sync must record its pending set while registration holds the store busy.
         await store.awaitScheduledSubscriptionSync()
 
         registration.releaseRegister()

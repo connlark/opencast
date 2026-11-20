@@ -1,12 +1,8 @@
 import Foundation
 import SwiftData
 
-/// The per-show position is synced; the watermark, the limit and the rule
-/// stay on this device.
 extension OpenCastAppModel {
-    /// A position turns the show on (queuing nothing until its next
-    /// release) or moves it; nil turns it off. A false leaves the message in
-    /// `library.lastErrorMessage` when the synced save failed, else in
+    /// On false, the message is in `library.lastErrorMessage` when the synced save failed, else in
     /// `upNextAutoAddSettings.lastErrorMessage`.
     @discardableResult
     func setUpNextAutoAddPosition(
@@ -30,14 +26,9 @@ extension OpenCastAppModel {
         upNextAutoAddSettings.setLimitReachedAction(action, modelContext: modelContext)
     }
 
-    /// Waits for hydration, a loaded library and playback restoration.
-    /// Before the settings store has loaded, every show that is on would
-    /// look watermark-less and be reset to its newest release, losing the
-    /// releases since the last pass; with the library unloaded every show
-    /// would look off and lose its watermark the same way; before
-    /// restoration, the episode about to be restored is not current yet and
-    /// would also be queued. A failed queue save surfaces through the Up
-    /// Next alert.
+    /// Before hydration every show that is on looks watermark-less, and before the library loads
+    /// every show looks off; either would reset watermarks. Before playback restoration, the
+    /// episode about to be restored would be queued too.
     func runUpNextAutoAddPass(modelContext: ModelContext) {
         guard coreStoresHydrated, hasLoadedLibrary, hasRestoredPlaybackSurface else {
             return

@@ -84,7 +84,6 @@ struct EpisodeMetadataChipsRow: View {
         case .played:
             Label("Played", systemImage: "checkmark")
         case .playlists:
-            // Drawn as its own button in `body`.
             EmptyView()
         }
     }

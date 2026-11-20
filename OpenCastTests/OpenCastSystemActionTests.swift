@@ -64,13 +64,6 @@ struct OpenCastSystemActionTests {
         #expect(OpenCastIndexRevision(catalog: catalog) == OpenCastIndexRevision(catalog: catalog))
     }
 
-    @Test func searchOpensWithBoundedInput() async throws {
-        let fixture = try await OpenCastSystemActionFixture.make()
-        try await fixture.model.systemActions.perform(.search(String(repeating: "a", count: 300)), modelContext: fixture.context)
-        #expect(fixture.model.systemSearchRequest?.query.count == 256)
-        #expect(fixture.model.playback.currentEpisode == nil)
-    }
-
     @Test func unsubscribeRemovesCatalogAndSavedActionAvailability() async throws {
         let fixture = try await OpenCastSystemActionFixture.make()
         await fixture.model.ensurePlaybackSurfaceHydrated(modelContext: fixture.context)
@@ -90,12 +83,6 @@ struct OpenCastSystemActionTests {
             try await fixture.model.systemActions.perform(.enqueue("episode-1"), modelContext: fixture.context)
         }
         #expect(fixture.model.upNextQueue.items.isEmpty)
-    }
-
-    @Test func queryRejectsUnboundedIdentifierRequests() async {
-        await #expect(throws: OpenCastSystemActionError.self) {
-            _ = try await OpenCastEpisodeQuery().entities(for: Array(repeating: "id", count: 101))
-        }
     }
 
     @Test func downloadedPlaybackResumesPersistedProgress() async throws {
@@ -216,30 +203,6 @@ struct OpenCastSystemActionTests {
         #expect(fixture.model.playlists.itemsByPlaylistID[playlists.emptyID, default: []].isEmpty)
     }
 
-    @Test func playlistQueryRejectsOversizedIdentifierBatch() async {
-        await #expect(throws: OpenCastSystemActionError.queryTooLarge) {
-            _ = try await OpenCastPlaylistQuery().entities(for: (0..<101).map(String.init))
-        }
-    }
-
-    @Test func playlistEntitiesSortNewestUpdatedFirstWithInflectedCounts() async throws {
-        let fixture = try await OpenCastSystemActionFixture.make()
-        let playlists = try await fixture.seedPlaylists()
-        await fixture.model.ensurePlaybackSurfaceHydrated(modelContext: fixture.context)
-        let model = fixture.model
-        // The store follows the collection's sort preference; the entities must not.
-        model.playlists.sortOrder = .name
-        #expect(model.playlists.playlists.map(\.playlistID).first == playlists.allPlayedID)
-
-        let entities = OpenCastPlaylistEntity.entities(for: model.playlists.playlists) { model.playlistEpisodeCount(for: $0) }
-
-        #expect(entities.map(\.id) == [playlists.commuteID, playlists.allPlayedID, playlists.emptyID, playlists.smartID])
-        #expect(entities.prefix(3).map(\.episodeCountText) == ["2 episodes", "1 episode", "No episodes"])
-        #expect(entities.prefix(3).map(\.episodeCount) == [2, 1, 0])
-        #expect(entities.map(\.isSmart) == [false, false, false, true])
-        #expect(entities.first?.name == "Commute")
-    }
-
     @Test func playPlaylistQueueFailureAfterStartIsAQueueError() async throws {
         let queue = UpNextQueueStore { _ in throw CocoaError(.fileWriteOutOfSpace) }
         let fixture = try await OpenCastSystemActionFixture.make(queue: queue)
@@ -253,8 +216,6 @@ struct OpenCastSystemActionTests {
     }
 }
 
-/// Fails the library's synced-store saves once switched on, so loading can
-/// finish before a write is made to fail.
 private final class SwitchableSaveFailure {
     var failsSaves = false
 

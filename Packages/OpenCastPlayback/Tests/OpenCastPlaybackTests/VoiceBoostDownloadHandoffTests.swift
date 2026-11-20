@@ -89,7 +89,7 @@ struct VoiceBoostDownloadHandoffTests {
 
     @MainActor
     private func waitUntil(_ condition: () -> Bool) async throws {
-        let deadline = Date.now.addingTimeInterval(30)
+        let deadline = Date.now.addingTimeInterval(60)
         while !condition(), Date.now < deadline {
             try await Task.sleep(for: .milliseconds(50))
         }

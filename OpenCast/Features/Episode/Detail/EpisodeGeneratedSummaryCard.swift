@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Generated episode summary on episode detail — native text only, clearly
-/// labeled as generated.
 struct EpisodeGeneratedSummaryCard: View {
     @State private var isExpanded = false
 

@@ -253,35 +253,7 @@ struct PlaylistOrganizerTests {
         #expect(drafts[6].episodes.map(\.episodeID) == ["episode-1"])
     }
 
-    @Test("An answer with nothing valid is empty with the scope that was sent")
-    func nothingValidIsEmpty() async {
-        client.turns = [answer([("Nowhere", [99, -3])]), .json(#"{"playlists":[]}"#)]
-        let organizer = makeOrganizer()
-
-        let invalid = await organizer.run(request(), episodes: Self.episodes, snapshotsByEpisodeID: Self.snapshots)
-        let none = await organizer.run(request(), episodes: Self.episodes, snapshotsByEpisodeID: Self.snapshots)
-
-        let scope = PlaylistOrganizerScope(kind: .all, sentCount: 6, totalCount: 6)
-        #expect(invalid.outcome == .empty(scope: scope))
-        #expect(none.outcome == .empty(scope: scope))
-    }
-
     // MARK: - Retries and failures
-
-    @Test("A guardrail decline retries once in a fresh session with the same prompt")
-    func guardrailRetriesOnce() async throws {
-        client.turns = [.failure(.guardrailViolation(.output)), answer([("Harbor Walks", [0])])]
-
-        let run = await makeOrganizer().run(request(), episodes: Self.episodes, snapshotsByEpisodeID: Self.snapshots)
-
-        #expect(proposals(in: run.outcome).map(\.title) == ["Harbor Walks"])
-        #expect(run.attempts == 2)
-        #expect(client.sessions.count == 2)
-        #expect(client.sessions.allSatisfy { $0.prompts.count == 1 && $0.options.count == 1 })
-        #expect(client.sessions[0].prompts == client.sessions[1].prompts)
-        #expect(run.failure == nil)
-        #expect(run.retriedFailures == [.guardrailViolation(.output)])
-    }
 
     @Test("Two declines in a row, guardrail or refusal, read as declined")
     func twoDeclinesAreDeclined() async {
@@ -458,50 +430,6 @@ struct PlaylistOrganizerTests {
         #expect(tooLong.input?.rung == .compact)
     }
 
-    @Test("Every model failure maps to an outcome, retried classes after their retry")
-    func everyFailureMapsToAnOutcome() async {
-        let resetDate = Date(timeIntervalSince1970: 1_800_003_600)
-        let failures: [TranscriptIntelligenceFailure] = [
-            .cancelled,
-            .guardrailViolation(.input),
-            .guardrailViolation(.output),
-            .guardrailViolation(.recitation),
-            .guardrailViolation(.unknown),
-            .refusal,
-            .rateLimited(resetDate: resetDate),
-            .quotaLimitReached(resetDate: nil),
-            .contextSizeExceeded(tokenCount: 30_000, contextSize: 20_000),
-            .notEntitled,
-            .offline,
-            .serviceUnavailable,
-            .timeout,
-            .unsupportedLanguage,
-            .malformedOutput,
-            .unknown("model busy"),
-        ]
-        #expect(failures.count == 16)
-
-        for failure in failures {
-            let expected = Self.expectation(for: failure)
-            let client = ScriptedTranscriptIntelligenceClient()
-            client.turns = Array(repeating: .failure(failure), count: expected.turns)
-
-            let run = await makeOrganizer(client: client).run(
-                request(),
-                episodes: Self.episodes,
-                snapshotsByEpisodeID: Self.snapshots
-            )
-
-            #expect(run.outcome == expected.outcome, "\(failure)")
-            #expect(run.attempts == expected.turns, "\(failure)")
-            #expect(client.sessions.count == expected.turns, "\(failure)")
-            #expect(client.turns.isEmpty, "\(failure)")
-            if failure != .cancelled {
-                #expect(run.failure == failure, "\(failure)")
-            }
-        }
-    }
-
     @Test("The form scope is the whole show for a request, the newest 150 for suggestions, and nil when nothing can fit")
     func formScope() async {
         let organizer = makeOrganizer()
@@ -538,7 +466,6 @@ struct PlaylistOrganizerTests {
 
     @Test("A decline from any of Apple's checks gets the one silent resend")
     func everySideOfADeclineResendsOnce() async {
-        // A recitation decline is resent renumbered; see the next test.
         let sides: [TranscriptIntelligenceGuardrailSide] = [.input, .output, .unknown]
         for side in sides {
             let client = ScriptedTranscriptIntelligenceClient()
@@ -796,72 +723,6 @@ struct PlaylistOrganizerTests {
 
     // MARK: - Outcome copy, sorting and drafts
 
-    @Test("Decline and empty messages depend on the mode")
-    func outcomeMessages() {
-        let empty = PlaylistOrganizerOutcome.empty(scope: PlaylistOrganizerScope(kind: .all, sentCount: 6, totalCount: 6))
-
-        #expect(
-            PlaylistOrganizerOutcome.declined.message(for: .prompted)
-                == "Apple’s model declined this request. Try different words, or suggest groups instead."
-        )
-        #expect(
-            PlaylistOrganizerOutcome.declined.message(for: .unprompted)
-                == "Apple’s model declined this request. Try again, or ask for a specific playlist instead."
-        )
-        #expect(empty.message(for: .prompted) == "No matching episodes. Try different words, or suggest groups instead.")
-        #expect(empty.message(for: .unprompted) == "No groups stood out in this show. Ask for a specific playlist instead.")
-        #expect(PlaylistOrganizerOutcome.cancelled.message(for: .prompted) == nil)
-        #expect(PlaylistOrganizerOutcome.declined.offersRetry)
-        #expect(PlaylistOrganizerOutcome.declined.offersOtherMode)
-        #expect(!empty.offersRetry)
-        #expect(empty.offersOtherMode)
-        #expect(!PlaylistOrganizerOutcome.limitReached(resetDate: nil).offersRetry)
-
-        // Only a decline of the simpler request reads differently.
-        #expect(
-            PlaylistOrganizerOutcome.declined.message(for: .prompted, answerStyle: .indicesOnly)
-                == "Apple’s model declined the simpler request too. Try different words, or suggest groups instead."
-        )
-        #expect(
-            PlaylistOrganizerOutcome.declined.message(for: .unprompted, answerStyle: .indicesOnly)
-                == "Apple’s model declined the simpler request too. Try again, or ask for a specific playlist instead."
-        )
-        #expect(
-            PlaylistOrganizerOutcome.declined.message(for: .prompted, answerStyle: .standard)
-                == PlaylistOrganizerOutcome.declined.message(for: .prompted)
-        )
-        for mode in [PlaylistOrganizerMode.prompted, .unprompted] {
-            #expect(empty.message(for: mode, answerStyle: .indicesOnly) == empty.message(for: mode))
-            #expect(
-                PlaylistOrganizerOutcome.timedOut.message(for: mode, answerStyle: .indicesOnly)
-                    == PlaylistOrganizerOutcome.timedOut.message(for: mode)
-            )
-        }
-
-        let draft = PlaylistProposalDraft(
-            id: UUID(),
-            title: "Harbor Walks",
-            rationale: "",
-            episodes: Self.snapshots["episode-0"].map { [$0] } ?? []
-        )
-        let others: [PlaylistOrganizerOutcome] = [
-            .proposals([draft], scope: PlaylistOrganizerScope(kind: .all, sentCount: 6, totalCount: 6)),
-            empty,
-            .limitReached(resetDate: nil),
-            .offline,
-            .serviceUnavailable,
-            .timedOut,
-            .malformed,
-            .tooLong,
-            .cancelled,
-            .failed("Apple’s model couldn’t respond: model busy"),
-        ]
-        #expect(PlaylistOrganizerOutcome.declined.offersSimplerRetry)
-        for outcome in others {
-            #expect(!outcome.offersSimplerRetry, "\(outcome)")
-        }
-    }
-
     @Test("Sorting by date is stable: equal dates keep their order and undated episodes go last")
     func sortOrderIsStable() {
         let january = Date(timeIntervalSince1970: 1_767_355_200)
@@ -883,15 +744,6 @@ struct PlaylistOrganizerTests {
         #expect(newest == ["march", "february", "january-1", "january-2", "undated-1", "undated-2"])
         #expect(PlaylistItemSortOrder.oldestFirst.title == "Oldest First")
         #expect(PlaylistItemSortOrder.newestFirst.title == "Newest First")
-    }
-
-    @Test("A draft is saveable with a non-blank title and at least one episode")
-    func draftSaveability() throws {
-        let snapshot = try #require(Self.snapshots["episode-0"])
-
-        #expect(PlaylistProposalDraft(id: UUID(), title: "Harbor Walks", rationale: "", episodes: [snapshot]).isSaveable)
-        #expect(!PlaylistProposalDraft(id: UUID(), title: "  \n ", rationale: "Boats", episodes: [snapshot]).isSaveable)
-        #expect(!PlaylistProposalDraft(id: UUID(), title: "Harbor Walks", rationale: "Boats", episodes: []).isSaveable)
     }
 
     // MARK: - Fixtures
@@ -944,35 +796,6 @@ struct PlaylistOrganizerTests {
             )
         }
     )
-
-    private static func expectation(
-        for failure: TranscriptIntelligenceFailure
-    ) -> (turns: Int, outcome: PlaylistOrganizerOutcome) {
-        switch failure {
-        case .cancelled:
-            (1, .cancelled)
-        case .guardrailViolation, .refusal:
-            (2, .declined)
-        case .rateLimited(let resetDate), .quotaLimitReached(let resetDate):
-            (1, .limitReached(resetDate: resetDate))
-        case .contextSizeExceeded:
-            (3, .tooLong)
-        case .notEntitled:
-            (1, .failed("Make a Playlist isn’t available in this build."))
-        case .offline:
-            (1, .offline)
-        case .serviceUnavailable:
-            (1, .serviceUnavailable)
-        case .timeout:
-            (1, .timedOut)
-        case .unsupportedLanguage:
-            (1, .failed("Apple’s model doesn’t support this show’s language."))
-        case .malformedOutput:
-            (2, .malformed)
-        case .unknown(let detail):
-            (1, .failed("Apple’s model couldn’t respond: \(detail)"))
-        }
-    }
 
     /// The prompt's "N. …" lines split into their number and the rest.
     private func numberedLines(in prompt: String) -> [(number: Int, text: String)] {

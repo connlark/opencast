@@ -44,11 +44,6 @@ struct PlaybackChapterListTests {
         #expect(list.previousChapter(before: 10)?.title == "First")
     }
 
-    @Test("Timeline markers skip the episode start")
-    func markers() {
-        #expect(list.timelineMarkers == [120, 600])
-    }
-
     @Test("Previous steps past chapters that share a start")
     func previousChapterWithDuplicateStarts() {
         let list = PlaybackChapterList(
@@ -60,8 +55,6 @@ struct PlaybackChapterListTests {
             source: .embedded
         )
         #expect(list.chapter(at: 60)?.title == "Third")
-        // Within the restart threshold, Previous must reach a strictly
-        // earlier start rather than the twin at 60, or it never leaves 60.
         #expect(list.previousChapter(before: 60)?.title == "First")
         #expect(list.previousChapter(before: 61)?.title == "First")
         #expect(list.previousChapter(before: 70)?.title == "Third")

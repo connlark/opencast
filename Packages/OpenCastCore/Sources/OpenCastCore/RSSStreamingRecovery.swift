@@ -1,9 +1,7 @@
 import Foundation
 
 extension RSSFeedRecovery {
-    /// Decode bounded chunks, retaining an incomplete code point and delimiter
-    /// suffix between reads. CDATA is copied verbatim; entity repair only runs
-    /// outside it. Recovery writes UTF-8 with a matching declaration.
+    /// Writes UTF-8 with a matching declaration and copies CDATA verbatim.
     static func recoverFile(from source: URL, to destination: URL) throws -> Bool {
         let input = try FileHandle(forReadingFrom: source)
         defer { try? input.close() }
@@ -25,8 +23,7 @@ extension RSSFeedRecovery {
             let value = repair ? recoverEntities(inFragment: text) : text
             let data = Data(value.utf8)
             outputBytes += data.count
-            // Recovery may expand ampersands. Its output still has a bounded
-            // processing envelope and never changes the source-byte policy.
+            // Entity repair can expand the output, so it has its own bound.
             guard outputBytes <= FeedResourcePolicy.maximumProcessingBytes else {
                 throw OpenCastCoreError.malformedFeed(reason: "Entity recovery exceeded its processing budget.")
             }
@@ -35,9 +32,7 @@ extension RSSFeedRecovery {
 
         while true {
             try Task.checkCancellation()
-            // Foundation decoding and entity repair create autoreleased
-            // objects even though the Swift buffers are bounded. Drain them
-            // per chunk instead of retaining an entire recovery pass's text.
+            // Decoding and entity repair autorelease objects: drain them per chunk, not per pass.
             let finished: Bool? = try autoreleasepool {
                 let chunk = try input.read(upToCount: FeedResourcePolicy.chunkBytes) ?? Data()
                 let atEnd = chunk.isEmpty
@@ -78,9 +73,8 @@ extension RSSFeedRecovery {
                         }
                         let fragment = String(pendingText[..<end])
                         try write(fragment, repair: !inCDATA)
-                        // libxml has its own single-CDATA token ceiling below our
-                        // field budget. Adjacent CDATA sections preserve every
-                        // character while delivering bounded parser callbacks.
+                        // libxml caps one CDATA token below the field budget, so long
+                        // CDATA is split into adjacent sections that keep every character.
                         if inCDATA, !atEnd, !fragment.isEmpty {
                             try write("]]><![CDATA[", repair: false)
                         }

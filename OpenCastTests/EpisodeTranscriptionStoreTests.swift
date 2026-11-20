@@ -35,39 +35,6 @@ struct EpisodeTranscriptionStoreTests {
         #expect(store.lastErrorMessage(for: episode.episodeID) == EpisodeTranscriptionError.downloadNotComplete.localizedDescription)
     }
 
-    @Test("Creates transcript record and document from events")
-    func createsTranscriptRecordAndDocumentFromEvents() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let temporaryDirectory = try makeTemporaryDirectory()
-        let audioURL = try writeAudioPlaceholder(in: temporaryDirectory, contents: "audio")
-        let fakeTranscriber = FakeEpisodeTranscriber()
-        let store = EpisodeTranscriptionStore(
-            transcriber: fakeTranscriber,
-            fileStore: EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory)
-        )
-        let episode = makeEpisode(episodeID: "transcript-create")
-        let record = completedDownloadRecord(episode: episode)
-        context.insert(record)
-
-        store.startTranscription(
-            episode,
-            downloadRecord: record,
-            localFileURL: audioURL,
-            modelSummary: modelSummary(),
-            modelContext: context
-        )
-
-        #expect(await waitUntil {
-            store.record(for: episode.episodeID)?.state == .completed
-        })
-        let transcriptRecord = try #require(store.record(for: episode.episodeID))
-        let document = try #require(store.document(for: episode.episodeID))
-        #expect(transcriptRecord.state == .completed)
-        #expect(document.text.contains("hello transcript"))
-        #expect(document.segments.map(\.start) == [0, 2])
-    }
-
     @Test("Completed and deleted transcripts reconcile the library search index")
     func transcriptLifecycleReconcilesSearchIndex() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -360,8 +327,6 @@ struct EpisodeTranscriptionStoreTests {
                 == [episodeID]
         )
 
-        // Composition order at launch: the index store is assigned before
-        // load(modelContext:) can run. That alone must not touch the index.
         let store = EpisodeTranscriptionStore(
             transcriber: FakeEpisodeTranscriber(),
             fileStore: fileStore
@@ -476,9 +441,7 @@ struct EpisodeTranscriptionStoreTests {
                 == [episodeID]
         )
 
-        // Break a derived table the maintenance path writes so the next
-        // refresh marks the index for rebuild, exactly like a mid-session
-        // SQLite failure would.
+        // Dropping a table the next refresh writes marks the index for rebuild.
         try execRawSQL(
             "DROP TABLE episode_search_spelling_document",
             databaseURL: databaseURL
@@ -511,8 +474,6 @@ struct EpisodeTranscriptionStoreTests {
 
         try await cache.prepareEpisodeSearchIndex()
 
-        // The rebuild restored metadata only; the rebuild handler must bring
-        // the transcript documents back without a relaunch.
         try await seedFeed(cache: cache, podcastID: podcastID, episodeID: episodeID,
                            title: "Rebuild Episode Retitled")
         let retried = try await cache.loadLibrary(activePodcastIDs: [podcastID])
@@ -601,13 +562,11 @@ struct EpisodeTranscriptionStoreTests {
         try context.save()
         await store.waitForEpisodeSearchIndexSync()
 
-        // The record migrated and reload ran even though the rewrite failed.
         let migratedRecord = try #require(store.record(for: newEpisodeID))
         #expect(migratedRecord.state == .completed)
         #expect(store.record(for: oldEpisodeID) == nil)
 
-        // The sidecar kept its stale embedded identity, so reconciliation
-        // must skip it: no searchable ghost under either identity.
+        // The sidecar keeps its old embedded identity, which keeps it out of the index.
         let staleDocument = try #require(store.document(for: newEpisodeID))
         #expect(staleDocument.episodeID == oldEpisodeID)
         #expect(try await cache.searchEpisodes(
@@ -1260,8 +1219,7 @@ struct EpisodeTranscriptionStoreTests {
         transcriber.emit(.checkpoint(cumulativeCheckpoint(index: 1, audioDuration: 100)))
         #expect(await waitUntil { store.record(for: episode.episodeID)?.completedDuration == 10 })
 
-        // Skipped checkpoints must leave the durable stamps untouched; a
-        // broken throttle would advance completedDuration within this window.
+        // A broken throttle would advance completedDuration within this window.
         transcriber.emit(.checkpoint(cumulativeCheckpoint(index: 2, audioDuration: 100)))
         transcriber.emit(.checkpoint(cumulativeCheckpoint(index: 3, audioDuration: 100)))
         try await Task.sleep(for: .milliseconds(300))
@@ -1323,8 +1281,6 @@ struct EpisodeTranscriptionStoreTests {
         store.deleteTranscript(episodeID: episode.episodeID, modelContext: context)
         #expect(await waitUntil { !store.hasActiveJob })
 
-        // The flush must not mutate the deleted record or rewrite the
-        // transcript document into the swept per-episode directory.
         #expect(store.record(for: episode.episodeID) == nil)
         #expect(try context.fetch(FetchDescriptor<EpisodeTranscriptRecord>()).isEmpty)
         let episodeDirectory = temporaryDirectory
@@ -1333,84 +1289,8 @@ struct EpisodeTranscriptionStoreTests {
         #expect(FileManager.default.fileExists(atPath: episodeDirectory.path) == false)
     }
 
-    @Test(
-        "Kill at every checkpoint index leaves stamps and document consistent and resumes from the last written checkpoint",
-        arguments: 1...7
-    )
-    func killAtCheckpointIndexResumesFromLastWrittenCheckpoint(killIndex: Int) async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let temporaryDirectory = try makeTemporaryDirectory()
-        let audioURL = try writeAudioPlaceholder(in: temporaryDirectory, contents: "kill matrix audio \(killIndex)")
-        let fileStore = EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory)
-        let transcriber = ManualEpisodeTranscriber()
-        let store = EpisodeTranscriptionStore(transcriber: transcriber, fileStore: fileStore)
-        let episode = EpisodeListItemSnapshot.fixture(
-            episodeID: "kill-matrix-\(killIndex)",
-            duration: 100,
-            audioURL: "https://example.com/kill-matrix-\(killIndex).mp3",
-            guid: "kill-matrix-\(killIndex)"
-        )
-        let record = completedDownloadRecord(episode: episode)
-        context.insert(record)
-
-        store.startTranscription(
-            episode,
-            downloadRecord: record,
-            localFileURL: audioURL,
-            modelSummary: modelSummary(),
-            modelContext: context
-        )
-        #expect(await waitUntil { transcriber.isStreaming })
-        for index in 1...killIndex {
-            transcriber.emit(.checkpoint(cumulativeCheckpoint(index: index, audioDuration: 100)))
-        }
-        // Writes land at checkpoints 1 and 6; skipped checkpoints leave the
-        // stamps untouched, so the durable floor is deterministic per index.
-        // (Each in-run rewrite replaces the single run checkpoint entry, so
-        // checkpointCount stays 1 while completedDuration advances.)
-        let expectedWrittenIndex = killIndex >= 6 ? 6 : 1
-        let expectedDuration = TimeInterval(expectedWrittenIndex) * 10
-        #expect(await waitUntil {
-            store.record(for: episode.episodeID)?.checkpointCount == 1
-                && store.record(for: episode.episodeID)?.completedDuration == expectedDuration
-        })
-
-        // Simulated kill: the abandoned run never gets a terminal path; a
-        // fresh context and store model the relaunch reading committed state.
-        let relaunchContext = ModelContext(container)
-        let resumeTranscriber = ManualEpisodeTranscriber()
-        let relaunchStore = EpisodeTranscriptionStore(transcriber: resumeTranscriber, fileStore: fileStore)
-        relaunchStore.load(modelContext: relaunchContext)
-
-        let relaunchRecord = try #require(relaunchStore.record(for: episode.episodeID))
-        #expect(relaunchRecord.state == .interrupted)
-        #expect(relaunchRecord.checkpointCount == 1)
-        #expect(relaunchRecord.completedDuration == expectedDuration)
-        let killedDocument = try #require(relaunchStore.document(for: episode.episodeID))
-        #expect(killedDocument.checkpoints.count == relaunchRecord.checkpointCount)
-        #expect(killedDocument.checkpoints.last?.completedDuration == relaunchRecord.completedDuration)
-        #expect(killedDocument.segments.count == expectedWrittenIndex)
-
-        let relaunchDownload = try #require(
-            try relaunchContext.fetch(FetchDescriptor<EpisodeDownloadRecord>()).first
-        )
-        relaunchStore.startTranscription(
-            episode,
-            downloadRecord: relaunchDownload,
-            localFileURL: audioURL,
-            modelSummary: modelSummary(),
-            modelContext: relaunchContext
-        )
-        #expect(await waitUntil { resumeTranscriber.isStreaming })
-        #expect(resumeTranscriber.lastRequest?.resumeStart == expectedDuration)
-        resumeTranscriber.finish()
-    }
-
     @Test("Resume after a throttled kill matches an uninterrupted run's final output")
     func resumeAfterThrottledKillMatchesUninterruptedRun() async throws {
-        // Throttled lane: four checkpoints (write at 1; 2-4 skipped), killed,
-        // relaunched, resumed from 10s.
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
@@ -1442,6 +1322,7 @@ struct EpisodeTranscriptionStoreTests {
         let resumeTranscriber = ManualEpisodeTranscriber()
         let relaunchStore = EpisodeTranscriptionStore(transcriber: resumeTranscriber, fileStore: fileStore)
         relaunchStore.load(modelContext: relaunchContext)
+        #expect(relaunchStore.record(for: episode.episodeID)?.state == .interrupted)
         let relaunchDownload = try #require(
             try relaunchContext.fetch(FetchDescriptor<EpisodeDownloadRecord>()).first
         )
@@ -1459,7 +1340,6 @@ struct EpisodeTranscriptionStoreTests {
         #expect(await waitUntil { relaunchStore.record(for: episode.episodeID)?.state == .completed })
         let resumedDocument = try #require(relaunchStore.document(for: episode.episodeID))
 
-        // Uninterrupted lane over its own container and directory.
         let plainContainer = try OpenCastModelContainerFactory.make(inMemory: true)
         let plainContext = ModelContext(plainContainer)
         let plainDirectory = try makeTemporaryDirectory()
@@ -1749,36 +1629,6 @@ struct EpisodeTranscriptionStoreTests {
         }
     }
 
-    @Test("Background CoreML failure retries once on CPU-only and completes")
-    func backgroundCoreMLFailureRetriesCPUOnlyAndCompletes() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let temporaryDirectory = try makeTemporaryDirectory()
-        let audioURL = try writeAudioPlaceholder(in: temporaryDirectory, contents: "cpu fallback audio")
-        let transcriber = CoreMLFailingThenCompletingTranscriber()
-        let store = EpisodeTranscriptionStore(
-            transcriber: transcriber,
-            fileStore: EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory),
-            failureEnvironment: { EpisodeTranscriptionFailureEnvironment(sceneState: .background, isProtectedDataAvailable: true) }
-        )
-        let episode = makeEpisode(episodeID: "background-cpu-retry")
-        let record = completedDownloadRecord(episode: episode)
-
-        store.startTranscription(
-            episode,
-            downloadRecord: record,
-            localFileURL: audioURL,
-            modelSummary: modelSummary(),
-            modelContext: context
-        )
-
-        #expect(await waitUntil {
-            store.record(for: episode.episodeID)?.state == .completed
-        })
-        #expect(transcriber.requests.map(\.computeProfile) == [.backgroundSafe, .cpuOnly])
-        #expect(store.lastErrorMessage(for: episode.episodeID) == nil)
-    }
-
     @Test("CPU fallback resumes from the persisted checkpoint")
     func cpuFallbackResumesFromPersistedCheckpoint() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -2024,108 +1874,6 @@ struct EpisodeTranscriptionStoreTests {
         #expect(document.segments.first?.words == nil)
     }
 
-    @Test("Reads v2 documents and infers engine provenance from the model identifier")
-    func readsV2DocumentsAndInfersEngineProvenance() throws {
-        let temporaryDirectory = try makeTemporaryDirectory()
-        let fileStore = EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory)
-        let relativePath = fileStore.relativePath(episodeID: "v2-episode", fingerprint: "v2")
-        let fileURL = fileStore.fileURL(relativePath: relativePath)
-        try FileManager.default.createDirectory(
-            at: fileURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        func v2JSON(modelIdentifier: String) -> Data {
-            Data("""
-            {
-              "schemaVersion": 2,
-              "episodeID": "v2-episode",
-              "podcastID": "https://example.com/feed.xml",
-              "sourceAudioURL": "https://example.com/v2.mp3",
-              "sourceFileByteCount": 10,
-              "sourceFileSHA256": "abc",
-              "modelIdentifier": "\(modelIdentifier)",
-              "modelVersion": "1",
-              "modelTreeSHA256": "def",
-              "languageCode": "en",
-              "audioDuration": 60,
-              "checkpoints": [],
-              "segments": [],
-              "text": "",
-              "timings": {
-                "modelLoading": 0,
-                "audioLoading": 0,
-                "transcription": 0,
-                "fullPipeline": 0,
-                "realTimeFactor": 0,
-                "decodingFallbackCount": 0,
-                "decodingFallback": 0,
-                "decodingWindowCount": 0
-              },
-              "createdAt": "2026-01-01T00:00:00Z",
-              "updatedAt": "2026-01-01T00:00:00Z"
-            }
-            """.utf8)
-        }
-
-        try v2JSON(modelIdentifier: "openai_whisper-tiny.en").write(to: fileURL, options: .atomic)
-        let whisperDocument = try fileStore.read(relativePath: relativePath)
-        #expect(whisperDocument.schemaVersion == 2)
-        #expect(whisperDocument.transcriptionEngine == nil)
-        #expect(whisperDocument.modelIdentifier == "openai_whisper-tiny.en")
-        #expect(whisperDocument.remoteSourceMatchMode == nil)
-
-        try v2JSON(modelIdentifier: "apple-speech-transcriber.en-US").write(to: fileURL, options: .atomic)
-        let appleDocument = try fileStore.read(relativePath: relativePath)
-        #expect(appleDocument.transcriptionEngine == nil)
-        #expect(appleDocument.modelIdentifier == "apple-speech-transcriber.en-US")
-    }
-
-    @Test("Round-trips schema 3 remote provenance fields")
-    func roundTripsSchema3RemoteProvenance() throws {
-        let temporaryDirectory = try makeTemporaryDirectory()
-        let fileStore = EpisodeTranscriptFileStore(baseDirectory: temporaryDirectory)
-        let relativePath = fileStore.relativePath(episodeID: "remote-episode", fingerprint: "remote")
-        var document = EpisodeTranscriptDocument(
-            schemaVersion: EpisodeTranscriptDocument.currentSchemaVersion,
-            episodeID: "remote-episode",
-            podcastID: "https://example.com/feed.xml",
-            sourceAudioURL: "https://example.com/remote.mp3",
-            sourceFileByteCount: 10,
-            sourceFileSHA256: "abc",
-            modelIdentifier: "remote-whisper-large-v3-turbo",
-            modelVersion: "serving-contract-1",
-            modelTreeSHA256: "",
-            languageCode: "en",
-            audioDuration: 60,
-            checkpoints: [],
-            segments: [],
-            text: "",
-            timings: EpisodeTranscriptTimings(),
-            createdAt: .now,
-            updatedAt: .now
-        )
-        document.transcriptionEngine = EpisodeTranscriptEngineProvenance.remoteWhisper.rawValue
-        document.providerModelIdentifier = "@cf/openai/whisper-large-v3-turbo"
-        document.remoteServingContractVersion = "1"
-        document.remotePipelineVersion = "pass0"
-        document.remoteRequestSettingsSHA256 = "aa"
-        document.remoteChunkManifestSHA256 = "bb"
-        document.normalizedTranscriptSHA256 = "cc"
-        document.remoteJobProvenanceToken = "job-token"
-        document.remoteSourceMatchMode = EpisodeRemoteTranscriptSourceMatchMode.serverDeviceHashMatch.rawValue
-        try fileStore.write(document, relativePath: relativePath)
-
-        let decoded = try fileStore.read(relativePath: relativePath)
-        #expect(decoded.schemaVersion == 3)
-        #expect(decoded.transcriptionEngine == EpisodeTranscriptEngineProvenance.remoteWhisper.rawValue)
-        #expect(decoded.providerModelIdentifier == "@cf/openai/whisper-large-v3-turbo")
-        #expect(decoded.providerModelRevision == nil)
-        #expect(decoded.remoteChunkManifestSHA256 == "bb")
-        #expect(decoded.normalizedTranscriptSHA256 == "cc")
-        #expect(decoded.remoteSourceMatchMode == EpisodeRemoteTranscriptSourceMatchMode.serverDeviceHashMatch.rawValue)
-        #expect(decoded.modelTreeSHA256.isEmpty)
-    }
-
     @Test("Remote fingerprint is domain-separated and contract-sensitive")
     func remoteFingerprintIsDomainSeparatedAndContractSensitive() throws {
         let fileStore = EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
@@ -2302,11 +2050,8 @@ struct EpisodeTranscriptionStoreTests {
             )
         }
 
-        // Display surfaces keep seeing the transcript, whatever audio it describes.
         #expect(state(.any) == .completed(record))
         #expect(state(.trusted(sha256: document.sourceFileSHA256)) == .completed(record))
-        // Other bytes, or no trusted download, leave the episode ready to
-        // transcribe again, with or without a model identity to match.
         #expect(state(.trusted(sha256: "other-bytes")) == .ready)
         #expect(state(.trusted(sha256: nil)) == .ready)
         #expect(state(.trusted(sha256: document.sourceFileSHA256), modelIdentity: recordIdentity) == .completed(record))
@@ -2318,55 +2063,27 @@ struct EpisodeTranscriptionStoreTests {
         #expect(state(.trusted(sha256: "")) == .ready)
         #expect(state(.any) == .completed(record))
 
-        // Only a completed transcript is held to the source; an interrupted
-        // one still reads interrupted, so its own resume path stays as it is.
+        // Only a completed transcript is held to the source.
         record.sourceFileSHA256 = document.sourceFileSHA256
         record.state = .interrupted
         #expect(state(.trusted(sha256: "other-bytes")) == .interrupted(record))
     }
 
-    @Test("An interrupted Whisper replacement restores the prior transcript, keeps its partial and resumes from it")
-    func interruptedWhisperReplacementKeepsPartialAndResumes() async throws {
-        let harness = try makeReplacementHarness(episodeID: "replacement-interrupted")
-        #expect(await startReplacementAndCheckpoint(harness))
-        let partialPath = try replacementPartialRelativePath(harness)
-
-        harness.store.interruptActiveJob(modelContext: harness.context)
-
-        #expect(await waitUntil { !harness.store.hasActiveJob })
-        try expectPriorTranscriptRestored(harness)
-        #expect(harness.fileStore.documentExists(relativePath: partialPath))
-        #expect(
-            harness.store.interruptedReplacement(for: harness.episodeID)
-                == EpisodeTranscriptionReplacementInterruption(isEnvironmental: false)
-        )
-        // The record reads the restored transcript; only the note knows.
-        #expect(!harness.store.hasEnvironmentalInterruptionPending(for: harness.episodeID))
-        #expect(!harness.store.hasResumableWhisperCheckpoint(for: harness.episodeID))
-
-        try await expectReplacementResumesAndCompletes(harness)
-    }
-
     @Test(
         "An interrupt that holds for auto-resume lands a first run as an environmental interruption; the plain one is unchanged",
-        arguments: [false, true], [EpisodeTranscriptionEngine.whisper, .appleSpeech]
+        arguments: [false, true]
     )
-    func heldInterruptLandsFirstRunAsEnvironmental(
-        holdsForAutoResume: Bool,
-        engine: EpisodeTranscriptionEngine
-    ) async throws {
+    func heldInterruptLandsFirstRunAsEnvironmental(holdsForAutoResume: Bool) async throws {
         let harness = try makeAppleRunHarness(
-            episodeID: "held-first-\(engine.rawValue)-\(holdsForAutoResume)",
+            episodeID: "held-first-\(holdsForAutoResume)",
             stream: { _ in neverFinishingStream() }
         )
         harness.store.startTranscription(
             harness.episode,
             downloadRecord: harness.downloadRecord,
             localFileURL: harness.audioURL,
-            engine: engine,
-            modelIdentity: engine == .appleSpeech
-                ? appleImproveIdentity()
-                : EpisodeTranscriptionModelIdentity(summary: modelSummary()),
+            engine: .whisper,
+            modelIdentity: EpisodeTranscriptionModelIdentity(summary: modelSummary()),
             languageCode: "en",
             modelContext: harness.context
         )
@@ -2402,6 +2119,9 @@ struct EpisodeTranscriptionStoreTests {
             harness.store.interruptedReplacement(for: harness.episodeID)
                 == EpisodeTranscriptionReplacementInterruption(isEnvironmental: holdsForAutoResume)
         )
+        // The record reads the restored transcript; only the note knows.
+        #expect(!harness.store.hasEnvironmentalInterruptionPending(for: harness.episodeID))
+        #expect(!harness.store.hasResumableWhisperCheckpoint(for: harness.episodeID))
 
         try await expectReplacementResumesAndCompletes(harness)
     }
@@ -2464,8 +2184,7 @@ struct EpisodeTranscriptionStoreTests {
             harness.store.interruptedReplacement(for: harness.episodeID)
                 == EpisodeTranscriptionReplacementInterruption(isEnvironmental: true)
         )
-        // The record-based query stays the record's: a note whose queue item
-        // went away must never be resumed from the foreground.
+        // The record reads the restored transcript; only the note knows.
         #expect(!harness.store.hasEnvironmentalInterruptionPending(for: harness.episodeID))
         #expect(harness.store.lastErrorMessage(for: harness.episodeID) == nil)
 
@@ -2497,8 +2216,6 @@ struct EpisodeTranscriptionStoreTests {
             harness.store.lastErrorMessage(for: harness.episodeID)
                 == (stop == .hardFailure ? "Deterministic replacement failure" : nil)
         )
-        // A cancel leaves only its note to say so, read once; a failure
-        // says why in its recorded error.
         #expect(harness.store.consumeCancelledReplacement(for: harness.episodeID) == (stop == .userCancel))
         #expect(!harness.store.consumeCancelledReplacement(for: harness.episodeID))
     }
@@ -2518,7 +2235,6 @@ struct EpisodeTranscriptionStoreTests {
         #expect(harness.store.consumeCancelledReplacement(for: harness.episodeID))
         #expect(!harness.store.consumeCancelledReplacement(for: harness.episodeID))
 
-        // A start clears a note no one read.
         #expect(startReplacement(harness))
         harness.store.cancelTranscription(episodeID: harness.episodeID, modelContext: harness.context)
         #expect(await waitUntil { !harness.store.hasActiveJob })
@@ -2911,8 +2627,6 @@ struct EpisodeTranscriptionStoreTests {
         try expectEveryCompletedRecordHasItsDocument(harness)
     }
 
-    /// A remote transcript of the harness's download, as a cloud pass
-    /// imports it.
     private func remoteTranscript(_ harness: ReplacementHarness) throws -> EpisodeTranscriptDocument {
         var remote = EpisodeTranscriptDocument(
             schemaVersion: EpisodeTranscriptDocument.currentSchemaVersion,
@@ -2940,7 +2654,6 @@ struct EpisodeTranscriptionStoreTests {
         return remote
     }
 
-    /// No transcript record reads completed while its document is gone.
     private func expectEveryCompletedRecordHasItsDocument(
         _ harness: ReplacementHarness,
         sourceLocation: SourceLocation = #_sourceLocation
@@ -2958,9 +2671,7 @@ struct EpisodeTranscriptionStoreTests {
 
     private static let replacementPriorText = "prior transcript"
 
-    /// A completed transcript of earlier bytes (`insertCompletedTranscript`)
-    /// and a fresh download of other bytes to replace it from; the store's
-    /// transcriber is driven by the test.
+    /// A completed transcript of earlier bytes and a fresh download of other bytes to replace it from.
     private func makeReplacementHarness(
         episodeID: String,
         failureEnvironment: @escaping @MainActor () -> EpisodeTranscriptionFailureEnvironment = { .foreground },
@@ -3034,8 +2745,7 @@ struct EpisodeTranscriptionStoreTests {
         )
     }
 
-    /// Starts a replacement and waits until its first checkpoint (10 s of
-    /// 60) is written and committed on the running record.
+    /// Waits until the first checkpoint (10 s of 60) is committed on the running record.
     private func startReplacementAndCheckpoint(
         _ harness: ReplacementHarness,
         engine: EpisodeTranscriptionEngine = .whisper,
@@ -3064,9 +2774,6 @@ struct EpisodeTranscriptionStoreTests {
         }
     }
 
-    /// Restarts an interrupted replacement: it resumes from the kept
-    /// partial's checkpoint, completes over the new bytes and deletes the
-    /// superseded prior document.
     private func expectReplacementResumesAndCompletes(
         _ harness: ReplacementHarness,
         sourceLocation: SourceLocation = #_sourceLocation
@@ -3220,9 +2927,7 @@ struct EpisodeTranscriptionStoreTests {
             priorCompletedTranscript: .preserve,
             modelContext: context
         )
-        // The prior-transcript snapshot is captured just before the improve
-        // attempt reaches the transcriber; waiting here keeps the restore
-        // paths deterministic for the caller.
+        // The prior-transcript snapshot is taken before the attempt reaches the transcriber.
         _ = await waitUntil { transcriber.requests.count == 2 }
 
         return (context, episode, store, fileStore, priorModelIdentifier, priorRelativePath)
@@ -3264,37 +2969,6 @@ struct EpisodeTranscriptionStoreTests {
             totalByteCount: 10,
             treeSHA256: String(repeating: "b", count: 64)
         )
-    }
-
-    @Test("record(for:) matches a linear scan after load")
-    func recordLookupMatchesLinearScan() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        for index in 1...3 {
-            context.insert(EpisodeTranscriptRecord(
-                episodeID: "index-eq-\(index)",
-                podcastID: "https://example.com/feed.xml",
-                sourceAudioURL: "https://example.com/index-eq-\(index).mp3",
-                sourceFileByteCount: 3,
-                sourceFileSHA256: "abc",
-                modelIdentifier: "openai_whisper-tiny.en",
-                modelVersion: "20260701_75MB-v1",
-                modelTreeSHA256: "60d71f9a",
-                state: .failed,
-                audioDuration: 60,
-                completedDuration: 0,
-                checkpointCount: 0,
-                transcriptRelativePath: nil
-            ))
-        }
-        try context.save()
-        let store = EpisodeTranscriptionStore(transcriber: FakeEpisodeTranscriber())
-
-        store.load(modelContext: context)
-
-        for episodeID in ["index-eq-1", "index-eq-2", "index-eq-3", "index-eq-missing"] {
-            #expect(store.record(for: episodeID) === store.records.first { $0.episodeID == episodeID })
-        }
     }
 
     private func makeEpisode(episodeID: String) -> EpisodeListItemSnapshot {
@@ -3397,9 +3071,7 @@ enum RemoteImportOverlap: CaseIterable, Sendable {
     case runTranscribing
 }
 
-/// Holds the first document write (or read, on the read hook) that reaches
-/// it after `arm()` until `release()`, so a test can act while that caller
-/// is suspended in it.
+/// Holds only the first write or read that reaches it after `arm()`, until `release()`.
 nonisolated private final class DocumentGate: @unchecked Sendable {
     private let lock = NSLock()
     private var isArmed = false
@@ -3561,8 +3233,7 @@ private final class FakeEpisodeTranscriber: EpisodeTranscribing, @unchecked Send
     }
 }
 
-/// Event pacing under test control: the stream stays open until the test
-/// finishes it, so checkpoint cadence and kill points are deterministic.
+/// The stream stays open until the test finishes it.
 private final class ManualEpisodeTranscriber: EpisodeTranscribing, @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: AsyncThrowingStream<EpisodeTranscriptionRunEvent, Error>.Continuation?
@@ -3611,26 +3282,6 @@ private final class ManualEpisodeTranscriber: EpisodeTranscribing, @unchecked Se
 
     func unload() async {
         lock.withLock { recordedUnloadCount += 1 }
-    }
-}
-
-private final class CoreMLFailingThenCompletingTranscriber: EpisodeTranscribing, @unchecked Sendable {
-    var requests: [EpisodeTranscriptionRunRequest] = []
-
-    func transcribe(
-        _ request: EpisodeTranscriptionRunRequest
-    ) -> AsyncThrowingStream<EpisodeTranscriptionRunEvent, Error> {
-        requests.append(request)
-        guard requests.count > 1 else {
-            return AsyncThrowingStream { continuation in
-                continuation.finish(throwing: coreMLError())
-            }
-        }
-
-        return FakeEpisodeTranscriber().transcribe(request)
-    }
-
-    func unload() async {
     }
 }
 

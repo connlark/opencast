@@ -1,31 +1,13 @@
 import SwiftUI
 
-/// Column layout for the Library grid, resolved from the measured container
-/// width rather than a device class: Split View, Stage Manager, and rotation
-/// all change the width, not the idiom. Compact (phone-like) grids stop at
-/// three columns so artwork stays large; accessibility text sizes raise the
-/// minimum tile width so titles keep room, down to a single column.
-///
-/// A vertical fold (`WindowPose.foldedVertical`) crossing the grid is
-/// reserved in full: no tile intersects the band. Each side of the band
-/// takes the same width rule (its own margins, minimum tile and column
-/// limit) and holds as many whole columns as fit; the tiles share the
-/// narrower side's tile width so every tile matches. When the two sides
-/// cannot hold two columns between them, one column sits clear of the band
-/// on the wider side.
 nonisolated struct LibraryGridMetrics: Equatable {
     static let compactColumnLimit = 3
 
-    /// The columns around a reserved band, in the grid content's leading
-    /// space: the content starts one horizontal margin in from the
-    /// container's leading edge.
+    /// In the grid content's space, which starts one horizontal margin in from the container.
     struct FoldSplit: Equatable {
-        /// Columns on the leading side of the band; the rest follow it.
         let leadingColumnCount: Int
-        /// The first column's offset from the content's leading edge.
         let leadingOffset: Double
-        /// From the last leading column to the first trailing one: the
-        /// band and the margin on each side of it.
+        /// From the last leading column to the first trailing one: the band and a margin each side.
         let bandGap: Double
     }
 
@@ -35,8 +17,7 @@ nonisolated struct LibraryGridMetrics: Equatable {
     let rowSpacing: Double
     let horizontalMargin: Double
     let isCompact: Bool
-    /// Nil when no band is reserved: the columns fill the width as flexible
-    /// items.
+    /// Nil when no band is reserved: the columns are flexible and fill the width.
     var foldSplit: FoldSplit?
 
     private struct WidthRule {
@@ -66,8 +47,6 @@ nonisolated struct LibraryGridMetrics: Equatable {
             max(width - horizontalMargin * 2, 0)
         }
 
-        /// Whole columns of at least the minimum tile width, up to the
-        /// limit; zero when not even one fits.
         func fittingColumns(in availableWidth: Double) -> Int {
             let fitting = Int(((availableWidth + columnSpacing) / (minimumTileWidth + columnSpacing)).rounded(.down))
             return min(max(fitting, 0), columnLimit)
@@ -78,8 +57,6 @@ nonisolated struct LibraryGridMetrics: Equatable {
         }
     }
 
-    /// The grids' row spacing for a width class, which is also the shell's
-    /// row gap above the tab accessory for screens whose rows abut.
     static func rowSpacing(isCompact: Bool) -> Double {
         WidthRule(isCompact: isCompact, isAccessibilitySize: false).rowSpacing
     }
@@ -102,10 +79,8 @@ nonisolated struct LibraryGridMetrics: Equatable {
         )
     }
 
-    /// The horizontal extent a grid reserves for a pose: a vertical fold's
-    /// band (Book), in the space its regions were read in. A horizontal fold
-    /// (Laptop) crosses every column of a vertically scrolling grid, so it
-    /// reserves nothing, as no fold does.
+    /// A horizontal fold crosses every column of a vertically scrolling grid, so only a vertical
+    /// fold reserves a band.
     static func reservedBand(for pose: WindowPose) -> ClosedRange<Double>? {
         switch pose {
         case .foldedVertical(let band):
@@ -115,9 +90,8 @@ nonisolated struct LibraryGridMetrics: Equatable {
         }
     }
 
-    /// - Parameter reservedBand: the fold band's leading and trailing edges
-    ///   in the container's space; nil, or a band outside the container,
-    ///   gives the full-width grid.
+    /// `reservedBand` is in the container's space; nil, or a band outside the container, gives the
+    /// full-width grid.
     static func resolve(
         containerWidth: Double,
         isCompact: Bool,
@@ -183,9 +157,6 @@ nonisolated struct LibraryGridMetrics: Equatable {
         }
     }
 
-    /// The fixed width of a split grid, its columns and the gaps between
-    /// them; nil for a full-width grid. `CGFloat` because a frame takes an
-    /// optional width.
     var foldedGridWidth: CGFloat? {
         guard let foldSplit else {
             return nil

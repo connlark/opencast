@@ -2,10 +2,6 @@ import Foundation
 import Observation
 import OpenCastCore
 
-/// Help topics rendered natively from a versioned JSON document. The bundled
-/// copy seeds the store; a cached remote copy replaces it when newer; the
-/// network is consulted at most hourly and only ever moves the document
-/// forward in `updatedAt`.
 @Observable
 final class HelpContentStore {
     static let refreshInterval: TimeInterval = 60 * 60
@@ -14,8 +10,6 @@ final class HelpContentStore {
     nonisolated static let cachedDocumentFileName = "help-v1.json"
 
     private(set) var document: HelpDocument
-    /// Set only when the bundled document itself cannot be used; the Help hub
-    /// shows it instead of an empty list.
     private(set) var loadErrorMessage: String?
     private(set) var lastRefreshErrorMessage: String?
 
@@ -57,9 +51,6 @@ final class HelpContentStore {
         visibleTopics.first { $0.id == id }
     }
 
-    /// Safe to call from every Help surface: the cached copy loads once, the
-    /// network is throttled, and concurrent callers share one in-flight task
-    /// that outlives any single view's cancellation.
     func refreshIfNeeded() async {
         if !hasLoadedCachedDocument {
             hasLoadedCachedDocument = true
@@ -80,6 +71,7 @@ final class HelpContentStore {
         }
 
         lastRefreshAttempt = now()
+        // Unstructured so the shared refresh outlives any one caller's cancellation.
         let task = Task {
             await refreshFromNetwork()
         }
@@ -128,8 +120,6 @@ final class HelpContentStore {
         }
     }
 
-    /// Change-detection guard: only a supported schema with a later
-    /// `updatedAt` replaces the current document.
     @discardableResult
     private func adoptIfNewer(_ candidate: HelpDocument) -> Bool {
         guard candidate.schemaVersion == HelpDocument.supportedSchemaVersion,

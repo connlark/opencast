@@ -1,6 +1,3 @@
-/// Stability classification for the Worker's read-only remaining-time
-/// projection. Unknown strings survive round trips so newer server behavior
-/// does not break an older polling client.
 public enum OpenCastRemoteTranscriptionEstimateStatus: Sendable, Equatable, Hashable {
     case onTrack
     case queued

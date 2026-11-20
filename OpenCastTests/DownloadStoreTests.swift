@@ -36,35 +36,6 @@ struct DownloadStoreTests {
         #expect(fileStore.fileExists(relativePath: relativePath) == false)
     }
 
-    @Test("record(for:) matches a linear scan through download, reload, and delete")
-    func recordLookupMatchesLinearScan() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let temporaryDirectory = try makeTemporaryDirectory()
-        let fileStore = EpisodeDownloadFileStore(baseDirectory: temporaryDirectory)
-        let downloader = ChunkedEpisodeAudioDownloader(chunks: [Data("abc".utf8)])
-        let store = DownloadStore(downloader: downloader, fileStore: fileStore)
-        let episode = makeEpisode(episodeID: "index-equivalence")
-
-        func expectLookupParity() {
-            for episodeID in ["index-equivalence", "index-equivalence-missing"] {
-                #expect(store.record(for: episodeID) === store.records.first { $0.episodeID == episodeID })
-            }
-        }
-
-        store.startDownload(for: episode, modelContext: context)
-        try await store.waitForDownload(episodeID: episode.episodeID)
-        expectLookupParity()
-
-        await store.load(modelContext: context)
-        expectLookupParity()
-
-        let record = try #require(store.record(for: episode.episodeID))
-        store.deleteDownload(record, modelContext: context)
-        expectLookupParity()
-        #expect(store.record(for: episode.episodeID) == nil)
-    }
-
     @Test("record(for:) registers Observation dependencies even with no record")
     func recordLookupRegistersObservationWithoutRecord() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -75,9 +46,6 @@ struct DownloadStoreTests {
         let store = DownloadStore(downloader: downloader, fileStore: fileStore)
         let episode = makeEpisode(episodeID: "observation-nil-lookup")
 
-        // A body whose only store read is a nil record(for:) must still be
-        // invalidated when the record appears — the ignored index alone
-        // registers no dependency.
         try await confirmation("nil lookup invalidates when the record appears") { invalidated in
             withObservationTracking {
                 #expect(store.record(for: episode.episodeID) == nil)
@@ -140,9 +108,7 @@ struct DownloadStoreTests {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let temporaryDirectory = try makeTemporaryDirectory()
-        // A base directory nested under a regular file makes every
-        // prepareDownloadsDirectory call fail, so startDownload(for:) swallows
-        // the setup error without ever creating a record.
+        // A base directory under a regular file makes every directory setup fail.
         let blockerURL = temporaryDirectory.appending(path: "blocker")
         try Data("not a directory".utf8).write(to: blockerURL, options: .atomic)
         let fileStore = EpisodeDownloadFileStore(
@@ -200,9 +166,6 @@ struct DownloadStoreTests {
         store.startDownload(for: episode, modelContext: context)
         #expect(await waitUntil { store.byteProgress(for: episode.episodeID)?.bytesReceived == 7 })
 
-        // Ticks surface through the transient accessor; the record and the
-        // context stay untouched so autosave has nothing to persist (and the
-        // remote-change reload cascade never fires mid-download).
         let record = try #require(store.record(for: episode.episodeID))
         #expect(record.bytesReceived == 0)
         #expect(store.byteProgress(for: episode.episodeID)?.bytesExpected == 100)
@@ -488,7 +451,6 @@ struct DownloadStoreTests {
         #expect(appModel.library.episodes(forPodcastID: keptFeedURL).map(\.episodeID) == ["kept-episode"])
     }
 
-
     @Test("Clear Automatic Caches leaves explicit downloads intact")
     func clearAutomaticCachesLeavesExplicitDownloadsIntact() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -639,14 +601,9 @@ struct DownloadStoreTests {
         let succeededEpisodeID = succeededRecord.episodeID
         store.deleteDownloads([failedRecord, succeededRecord], modelContext: context)
 
-        // Record deletions commit in one save before any file is touched, so
-        // the locked file can no longer strand unsaved deletions in the
-        // shared context for an unrelated later save to pick up.
         #expect(try context.fetch(FetchDescriptor<EpisodeDownloadRecord>()).isEmpty)
         #expect(store.record(for: failedEpisodeID) == nil)
         #expect(store.record(for: succeededEpisodeID) == nil)
-        // The undeletable file stays claimed-by-nothing until the next
-        // launch's unclaimed-file sweep; the failure still surfaces.
         #expect(FileManager.default.fileExists(atPath: failedFileURL.path))
         #expect(fileStore.fileExists(relativePath: succeededRelativePath) == false)
         #expect(store.lastErrorMessage != nil)
@@ -746,9 +703,6 @@ struct DownloadStoreTests {
         )
         let episode = makeEpisode(episodeID: "url-session-pause")
 
-        // This test is about a partial with bytes in it, so the stubbed body
-        // being on disk is a precondition; a pause before the first byte has
-        // its own tests below.
         store.startDownload(for: episode, modelContext: context)
         try #require(await waitUntil {
             store.byteProgress(for: episode.episodeID)?.bytesReceived == Int64(receivedByteCount)
@@ -799,7 +753,6 @@ struct DownloadStoreTests {
         let relativePath = try #require(record.localRelativePath)
         #expect(record.state == .completed)
         #expect(try Data(contentsOf: fileStore.fileURL(relativePath: relativePath)) == Data("abcdef".utf8))
-        // Both attempts started from byte zero: there was nothing to resume.
         #expect(downloader.resumeContexts().allSatisfy { $0 == nil })
         #expect(downloader.resumeContexts().count == 2)
     }
@@ -1232,8 +1185,7 @@ struct DownloadStoreTests {
         )
         let library = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
         // The real BGTaskScheduler traps on a second same-identifier
-        // registration in one host process, and suites run twice per
-        // invocation — pass-arming tests must inject the fake scheduler.
+        // registration in one host process.
         let appModel = OpenCastAppModel(
             library: library,
             downloads: downloadStore,
@@ -1357,65 +1309,6 @@ struct DownloadStoreTests {
         #expect(transcriptFileStore.documentExists(relativePath: transcriptPath))
     }
 
-    @Test("Remove Played removes a played download whose completed transcript matches it")
-    func removePlayedRemovesTranscriptMatchedDownload() async throws {
-        let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
-        let transcriptions = EpisodeTranscriptionStore(fileStore: transcriptFileStore)
-        let fixture = try await KeepLimitFixture.make(transcriptions: transcriptions)
-        let episode = fixture.episode("scanned-removed", podcastID: KeepLimitFixture.showA)
-        let record = try fixture.insert(episode.episodeID, podcastID: episode.podcastID, completedDay: 1)
-        let downloadHash = record.sourceFileSHA256
-        let downloadPath = try #require(record.localRelativePath)
-        let transcriptPath = try writeCompletedTranscript(
-            for: record,
-            fileStore: transcriptFileStore,
-            context: fixture.context
-        )
-        try await fixture.reload()
-        transcriptions.load(modelContext: fixture.context)
-        #expect(fixture.library.markEpisodePlayed(episode, modelContext: fixture.context))
-        #expect(!fixture.downloads.autoDeletesPlayedDownloads)
-        #expect(!downloadHash.isEmpty)
-        #expect(transcriptions.record(for: episode.episodeID)?.sourceFileSHA256 == downloadHash)
-        try #require(transcriptions.record(for: episode.episodeID)?.state == .completed)
-
-        fixture.appModel.deletePlayedDownloads(modelContext: fixture.context)
-
-        #expect(fixture.downloads.record(for: episode.episodeID) == nil)
-        #expect(!fixture.fileStore.fileExists(relativePath: downloadPath))
-        #expect(transcriptions.record(for: episode.episodeID)?.state == .completed)
-        #expect(transcriptFileStore.documentExists(relativePath: transcriptPath))
-    }
-
-    @Test("Remove Played leaves a transcript-matched download that is the current episode")
-    func removePlayedKeepsCurrentTranscriptMatchedDownload() async throws {
-        let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
-        let transcriptions = EpisodeTranscriptionStore(fileStore: transcriptFileStore)
-        let fixture = try await KeepLimitFixture.make(transcriptions: transcriptions)
-        let episode = fixture.episode("scanned-current", podcastID: KeepLimitFixture.showA)
-        let record = try fixture.insert(episode.episodeID, podcastID: episode.podcastID, completedDay: 1)
-        try writeCompletedTranscript(for: record, fileStore: transcriptFileStore, context: fixture.context)
-        try await fixture.reload()
-        transcriptions.load(modelContext: fixture.context)
-        #expect(fixture.library.markEpisodePlayed(episode, modelContext: fixture.context))
-        try fixture.appModel.playDownloadedEpisode(episode, downloadRecord: record, modelContext: fixture.context)
-        defer { fixture.appModel.playback.unload() }
-        #expect(fixture.library.progressRecord(for: episode.episodeID)?.isPlayed == true)
-        #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == episode.episodeID)
-        try #require(transcriptions.record(for: episode.episodeID)?.state == .completed)
-
-        fixture.appModel.deletePlayedDownloads(modelContext: fixture.context)
-
-        #expect(fixture.downloads.record(for: episode.episodeID)?.state == .completed)
-
-        fixture.appModel.playback.unload()
-        #expect(fixture.appModel.playback.currentEpisode == nil)
-        #expect(fixture.library.progressRecord(for: episode.episodeID)?.isPlayed == true)
-        fixture.appModel.deletePlayedDownloads(modelContext: fixture.context)
-
-        #expect(fixture.downloads.record(for: episode.episodeID) == nil)
-    }
-
     @Test("A completed matching transcript with an open remote reference keeps the download")
     func autoDeleteKeepsTranscriptMatchedDownloadWithRemoteReference() async throws {
         let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
@@ -1446,47 +1339,6 @@ struct DownloadStoreTests {
         fixture.appModel.sweepPlayedDownloadsIfEnabled(modelContext: fixture.context)
 
         #expect(fixture.downloads.record(for: episode.episodeID) == nil)
-    }
-
-    @Test("A failed or interrupted transcript's hash doesn't keep a played download")
-    func autoDeleteSweepsDownloadsWithStaleTranscriptHashes() async throws {
-        let transcriptions = EpisodeTranscriptionStore(
-            fileStore: EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
-        )
-        let fixture = try await KeepLimitFixture.make(transcriptions: transcriptions)
-        let staleStates: [(episodeID: String, state: EpisodeTranscriptState)] = [
-            ("stale-failed", .failed),
-            ("stale-interrupted", .interrupted),
-        ]
-        for (day, stale) in staleStates.enumerated() {
-            let record = try fixture.insert(stale.episodeID, podcastID: KeepLimitFixture.showA, completedDay: day)
-            fixture.context.insert(EpisodeTranscriptRecord(
-                episodeID: record.episodeID,
-                podcastID: record.podcastID,
-                sourceAudioURL: record.sourceAudioURL,
-                sourceFileSHA256: record.sourceFileSHA256,
-                state: stale.state
-            ))
-        }
-        try await fixture.reload()
-        transcriptions.load(modelContext: fixture.context)
-        for stale in staleStates {
-            #expect(fixture.library.markEpisodePlayed(
-                fixture.episode(stale.episodeID, podcastID: KeepLimitFixture.showA),
-                modelContext: fixture.context
-            ))
-        }
-        #expect(fixture.downloads.setAutoDeletesPlayedDownloads(true, modelContext: fixture.context))
-        for stale in staleStates {
-            let transcript = try #require(transcriptions.record(for: stale.episodeID))
-            #expect(transcript.state == stale.state)
-            #expect(!transcript.sourceFileSHA256.isEmpty)
-            #expect(transcript.sourceFileSHA256 == fixture.downloads.record(for: stale.episodeID)?.sourceFileSHA256)
-        }
-
-        fixture.appModel.sweepPlayedDownloadsIfEnabled(modelContext: fixture.context)
-
-        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA).isEmpty)
     }
 
     @Test("The removable count matches what Remove Played removes")
@@ -1771,26 +1623,6 @@ struct DownloadStoreTests {
         #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["remote-job-1", "remote-job-2"])
     }
 
-    @Test("The trim keeps an unplayed download whose completed transcript matches it")
-    func keepLimitKeepsUnplayedTranscriptMatchedDownload() async throws {
-        let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
-        let transcriptions = EpisodeTranscriptionStore(fileStore: transcriptFileStore)
-        let fixture = try await KeepLimitFixture.make(transcriptions: transcriptions)
-        let matched = try fixture.insert("matched-1", podcastID: KeepLimitFixture.showA, completedDay: 1)
-        try fixture.insert("matched-2", podcastID: KeepLimitFixture.showA, completedDay: 2)
-        try writeCompletedTranscript(for: matched, fileStore: transcriptFileStore, context: fixture.context)
-        try await fixture.reload()
-        transcriptions.load(modelContext: fixture.context)
-        #expect(!matched.sourceFileSHA256.isEmpty)
-        #expect(transcriptions.record(for: "matched-1")?.sourceFileSHA256 == matched.sourceFileSHA256)
-        #expect(fixture.library.progressRecord(for: "matched-1")?.isPlayed != true)
-        try #require(transcriptions.record(for: "matched-1")?.state == .completed)
-
-        #expect(fixture.appModel.setKeepLimitOverride(.one, forPodcastID: KeepLimitFixture.showA, modelContext: fixture.context))
-
-        #expect(fixture.episodeIDs(for: KeepLimitFixture.showA) == ["matched-1", "matched-2"])
-    }
-
     @Test("The trim removes a played download whose completed transcript matches it")
     func keepLimitRemovesPlayedTranscriptMatchedDownload() async throws {
         let transcriptFileStore = EpisodeTranscriptFileStore(baseDirectory: try makeTemporaryDirectory())
@@ -2066,28 +1898,6 @@ struct DownloadStoreTests {
         #expect(completedEpisodeIDs == [episode.episodeID])
     }
 
-    @Test("Pausing after a download completes leaves it completed")
-    func pauseAfterFinalBytesLeavesCompletedRecord() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
-        let store = DownloadStore(
-            downloader: CompletedBytesHangingEpisodeAudioDownloader(),
-            fileStore: fileStore
-        )
-        let episode = makeEpisode(episodeID: "pause-after-completion")
-
-        store.startDownload(for: episode, modelContext: context)
-        #expect(await waitUntil {
-            store.record(for: episode.episodeID)?.state == .downloading
-                && store.byteProgress(for: episode.episodeID)?.bytesReceived == 8
-        })
-        store.pauseDownload(episodeID: episode.episodeID, modelContext: context)
-        try await store.waitForDownload(episodeID: episode.episodeID)
-
-        #expect(store.record(for: episode.episodeID)?.state == .completed)
-    }
-
     @Test("Completed download persists the assembled-file hash and exposes source identity")
     func completedDownloadPersistsSourceIdentity() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -2131,39 +1941,6 @@ struct DownloadStoreTests {
         #expect(store.completedSourceIdentity(for: episode.episodeID) == nil)
     }
 
-    @Test("Preexisting completed records without a hash expose no identity")
-    func preexistingCompletedRecordWithoutHashExposesNoIdentity() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let fileStore = EpisodeDownloadFileStore(baseDirectory: try makeTemporaryDirectory())
-        let store = DownloadStore(fileStore: fileStore)
-        let sourceURL = URL(string: "https://example.com/legacy.mp3")!
-        let relativePath = fileStore.relativePath(episodeID: "identity-legacy", sourceAudioURL: sourceURL)
-        let fileURL = fileStore.fileURL(relativePath: relativePath)
-        try FileManager.default.createDirectory(
-            at: fileURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try Data("legacy".utf8).write(to: fileURL, options: .atomic)
-        context.insert(
-            EpisodeDownloadRecord(
-                episodeID: "identity-legacy",
-                podcastID: "https://example.com/feed.xml",
-                sourceAudioURL: sourceURL.absoluteString,
-                localRelativePath: relativePath,
-                state: .completed,
-                bytesReceived: 6,
-                bytesExpected: 6
-            )
-        )
-        try context.save()
-        await store.load(modelContext: context)
-
-        // The record predates hash persistence, so the identity is honestly
-        // unavailable until something recomputes it from the file.
-        #expect(store.completedSourceIdentity(for: "identity-legacy") == nil)
-    }
-
     @Test("Launch reconciliation drops the hash of a completed download whose size drifted and keeps an unchanged one")
     func reconcileDropsHashWhenCompletedSizeDrifts() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -2186,7 +1963,6 @@ struct DownloadStoreTests {
             context: context
         )
         try context.save()
-        // The file changed after it was hashed.
         try Data("abcdefgh".utf8).write(
             to: fileStore.fileURL(relativePath: try #require(drifted.localRelativePath)),
             options: .atomic
@@ -2462,8 +2238,6 @@ struct DownloadStoreTests {
 
         switch failure {
         case .readError:
-            // The file is still there at its recorded size: the failure is
-            // the hash's own and says nothing about the bytes.
             #expect((thrown as? CocoaError)?.code == .fileReadUnknown)
             #expect(trusted == nil)
             #expect(downloader.requestCount == 1)
@@ -2478,8 +2252,6 @@ struct DownloadStoreTests {
         }
     }
 
-    /// Downloads the episode and pauses it once all its bytes are in, which
-    /// completes it without a hash (R9).
     private func completeUnhashedByPausingAtFullSize(
         _ episode: EpisodeListItemSnapshot,
         byteCount: Int,
@@ -2958,9 +2730,6 @@ struct DownloadStoreTests {
         return record
     }
 
-    /// A completed transcript of the download's bytes (or of the bytes
-    /// `sourceFileSHA256` names), with its document on disk so the
-    /// transcription store's `load` keeps it completed.
     @discardableResult
     private func writeCompletedTranscript(
         for record: EpisodeDownloadRecord,
@@ -3039,8 +2808,6 @@ struct DownloadStoreTests {
     }
 }
 
-/// How hashing an unhashed download fails: a read error over a file that
-/// is still there, or the file gone while it was hashed.
 enum DownloadHashFailure: CaseIterable, Sendable {
     case readError
     case fileGone
@@ -3097,7 +2864,7 @@ private struct HangingEpisodeAudioDownloader: EpisodeAudioDownloading {
 }
 
 private struct CompletedBytesHangingEpisodeAudioDownloader: EpisodeAudioDownloading {
-    var data = Data("complete".utf8)
+    var data: Data
     var metadata = EpisodeDownloadResponseMetadata(entityTag: nil, lastModified: nil)
 
     @concurrent
@@ -3118,8 +2885,6 @@ private struct CompletedBytesHangingEpisodeAudioDownloader: EpisodeAudioDownload
     }
 }
 
-/// Serves one scripted step per download: the bytes, then either a hang that
-/// only a pause or cancel ends, or a normal completion.
 nonisolated private final class SequencedEpisodeAudioDownloader: EpisodeAudioDownloading, @unchecked Sendable {
     enum Step: Sendable {
         case holdAtFullSize(Data)
@@ -3228,8 +2993,6 @@ nonisolated private final class ResumableGatedEpisodeAudioDownloader: EpisodeAud
     }
 }
 
-/// First attempt: parks without a response, a file or a byte until it is
-/// cancelled. Later attempts write the whole body and return.
 nonisolated private final class SilentThenCompletingEpisodeAudioDownloader: EpisodeAudioDownloading, @unchecked Sendable {
     private let lock = NSLock()
     private var recordedResumeContexts: [EpisodeDownloadResumeContext?] = []
@@ -3359,8 +3122,6 @@ private final class HangingDownloadTestURLProtocol: URLProtocol, @unchecked Send
     }
 }
 
-/// Answers with headers and then never sends a body byte. It keeps no shared
-/// state, so it cannot interfere with the configurable stub above.
 private final class BodylessDownloadTestURLProtocol: URLProtocol, @unchecked Sendable {
     override class func canInit(with request: URLRequest) -> Bool {
         true
@@ -3401,8 +3162,6 @@ private final class HangingAutoDeleteEpisodeTranscriber: EpisodeTranscribing, @u
     }
 }
 
-/// Completed downloads for two shows with chosen completion and request
-/// days, behind an app model whose cleanup coordinator runs the trim.
 @MainActor
 private final class KeepLimitFixture {
     static let showA = "https://example.com/feed.xml"

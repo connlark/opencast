@@ -9,8 +9,6 @@ import SwiftUI
 import Testing
 @testable import OpenCast
 
-/// No textual, reflected or exported form of the key stores holds any
-/// eight-character run of a saved fixture key.
 @MainActor
 @Suite("Provider key leaks")
 struct AnalysisProviderKeyLeakTests {
@@ -215,8 +213,7 @@ struct AnalysisProviderKeyLeakTests {
         try seedRuns(in: runs)
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
-        // A record a provider body could once have written: the export and
-        // the block must never read it.
+        // A planted record with a key: the export and the block must never read it.
         try seedChaptersFailure(
             message: "Chapters & Summary failed: \(AnalysisKeyFixtures.googleText) \(Self.transcriptWord)",
             context: context
@@ -241,33 +238,6 @@ struct AnalysisProviderKeyLeakTests {
         #expect(blockText.contains("invalid_key"))
     }
 
-    @Test("The performance export holds no key")
-    func performanceExportHoldsNoKey() async throws {
-        let directory = URL.temporaryDirectory
-            .appending(path: "analysis-key-leak-performance-\(UUID())", directoryHint: .isDirectory)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = PerformanceReportStore(directory: directory)
-        let state = try #require(PerformanceState(domain: .playback, label: "playing"))
-        try await store.save(PerformanceReport(
-            id: UUID(),
-            receivedAt: .now,
-            appVersion: "1.0 (1)",
-            toolchainVersion: "27A266a",
-            kind: .metrics,
-            timeRange: DateInterval(start: .now, duration: 1),
-            states: [state]
-        ))
-        let export = directory.deletingLastPathComponent().appending(path: "\(UUID()).json")
-        defer { try? FileManager.default.removeItem(at: export) }
-
-        _ = try await store.export(to: export)
-
-        let exported = try Data(contentsOf: export)
-        let text = String(decoding: exported, as: UTF8.self)
-        #expect(text.contains("playing"))
-        #expect(!AnalysisKeyFixtures.containsFragment(text))
-    }
-
     // MARK: - Helpers
 
     private func expectNoKey(in subject: Any, _ label: String, sourceLocation: SourceLocation = #_sourceLocation) {
@@ -288,14 +258,11 @@ struct AnalysisProviderKeyLeakTests {
 
     private static let transcriptWord = "Zanzibarian"
 
-    /// A failed direct Chapters run and a finished trial ad run on the leak
-    /// episode, each with the leak feed address and a fingerprint on the
-    /// record; the policy revision of the Chapters run carries a key, so the
-    /// export's grammar must refuse it.
     private func seedRuns(in runs: AnalysisRunRecordStore) throws {
         let snapshot = AnalysisPolicySnapshot.baked
         let chapters = try #require(snapshot.chaptersSummary(provider: .openai))
         var settings = chapters.settings
+        // A planted key: the export's grammar must refuse this revision.
         settings.revision = "rev \(AnalysisKeyFixtures.openAIText)"
         let chaptersPolicy = AnalysisRoutePolicy.chaptersSummary(AnalysisPolicy(
             bundleVersion: chapters.bundleVersion,

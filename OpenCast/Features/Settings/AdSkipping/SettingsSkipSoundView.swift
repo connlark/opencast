@@ -2,9 +2,6 @@ import SwiftData
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Settings › Ad Skipping › Skip Sound: None, the sounds this build carries
-/// and the listener's own. A tap chooses a sound and plays it once, so the
-/// list can be auditioned without leaving it.
 struct SettingsSkipSoundView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext

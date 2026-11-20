@@ -1,7 +1,5 @@
-/// Top-level `ad_analysis` block of the result envelope, present only on jobs
-/// created with `adAnalysisRequested`. Decoding keys off `state`; a state this
-/// client does not know is preserved as `.unknown` and treated as a failed
-/// analysis (device fallback) — never as skippable audio.
+/// An unknown `state` is kept as `.unknown` and treated as a failed analysis, never as
+/// skippable audio.
 public enum OpenCastRemoteTranscriptionAdAnalysisOutcome: Sendable, Equatable {
     case completed(OpenCastRemoteTranscriptionAdAnalysisSuccess)
     case failed(errorCode: String?, failure: OpenCastAdAnalysisFailure? = nil)

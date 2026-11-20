@@ -126,12 +126,9 @@ nonisolated enum SQLiteEpisodeSearchIndex {
             operation: "episode search spelling schema",
             db: db
         )
-        // The canonical visible-title columns and the compressed body blob
-        // live in separate tables: the per-keystroke scans read only the two
-        // short canonicals for up to every evidence row, and a same-record
-        // body blob would inflate every page those scans touch (and push the
-        // canonicals into overflow chains). body_data is read only for the
-        // top hits via materializeBodyEvidence.
+        // The visible-title canonicals and the compressed body blob live in separate tables: the
+        // per-keystroke scans read only the short canonicals, and a body blob in the same row
+        // would inflate every page they touch.
         try execute(
             """
             CREATE TABLE IF NOT EXISTS episode_search_evidence (
@@ -153,9 +150,8 @@ nonisolated enum SQLiteEpisodeSearchIndex {
             operation: "episode search evidence schema",
             db: db
         )
-        // Installed builds created an (episode_id) index on the segment
-        // table; the UNIQUE (episode_id, segment_id) autoindex already leads
-        // with episode_id, so it only amplified every segment write.
+        // Older stores carry an (episode_id) index that the UNIQUE autoindex makes redundant; it
+        // only slowed every segment write.
         try execute(
             """
             CREATE TABLE IF NOT EXISTS episode_transcript_search_segment (

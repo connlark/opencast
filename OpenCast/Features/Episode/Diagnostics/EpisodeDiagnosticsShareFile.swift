@@ -1,9 +1,5 @@
 import Foundation
 
-/// The file handed to the activity sheet. When a temporary directory is set,
-/// the URL is a hard link with a readable name and only that directory is
-/// removed after sharing; otherwise the URL is the original download and
-/// cleanup touches nothing.
 nonisolated struct EpisodeDiagnosticsShareFile: Sendable, Equatable, Identifiable {
     var url: URL
     var temporaryDirectoryURL: URL?
@@ -12,10 +8,7 @@ nonisolated struct EpisodeDiagnosticsShareFile: Sendable, Equatable, Identifiabl
 }
 
 nonisolated enum EpisodeDiagnosticsShareFilePreparer {
-    /// Hard-links the download under a sanitized podcast/episode name so the
-    /// share carries a meaningful filename without copying the audio. A
-    /// failed link (foreign volume, permissions) falls back to sharing the
-    /// original file directly.
+    /// A hard link gives the share a readable filename without copying the audio.
     static func prepare(source: URL, podcastTitle: String, episodeTitle: String) -> EpisodeDiagnosticsShareFile {
         let fileName = sanitizedFileName(
             podcastTitle: podcastTitle,

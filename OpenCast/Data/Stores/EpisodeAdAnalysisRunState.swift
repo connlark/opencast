@@ -1,8 +1,7 @@
 import Foundation
 import OpenCastTranscription
 
-/// Device-local recovery metadata. Kept beside the episode's documents so
-/// delete/migration follows the same lifecycle without a synced model change.
+/// Device-local; kept beside the episode's documents so deletion and migration move it too.
 nonisolated struct EpisodeAdAnalysisRunState: Codable, Sendable, Equatable {
     var transcriptFingerprint: String
     var jobID: String?

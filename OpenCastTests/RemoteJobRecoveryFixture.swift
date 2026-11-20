@@ -10,7 +10,7 @@ import SwiftData
 /// and `clientSeam` names the client-side condition (process death,
 /// expiration, user action) the owning test drives through the store,
 /// runner or coordinator rather than through the API.
-enum RemoteJobRecoveryFixture: String, CaseIterable, Sendable {
+enum RemoteJobRecoveryFixture: String, Sendable {
     case createNeverLeaves
     case createAcceptedResponseLost
     case createDelayedThenUserCancels
@@ -44,20 +44,6 @@ enum RemoteJobRecoveryFixture: String, CaseIterable, Sendable {
 
     static let seededJobID = "job-seeded-1"
 
-    /// The pass whose focused suite owns the fixture's behavioral assertion.
-    var owningPass: String {
-        switch self {
-        case .createNeverLeaves, .createAcceptedResponseLost, .createDelayedThenUserCancels,
-             .cancelResponseLost, .transportAfterAttach, .localLegFailure,
-             .deathAfterImport, .deathAfterAck, .acknowledgedWithoutImport:
-            "01"
-        case .cloudParked, .parkedCloudUserCancel:
-            "03"
-        case .ownerBeforeClear:
-            "05"
-        }
-    }
-
     var clientSeam: ClientSeam? {
         switch self {
         case .createDelayedThenUserCancels: .userCancelDuringCreate
@@ -70,37 +56,6 @@ enum RemoteJobRecoveryFixture: String, CaseIterable, Sendable {
         case .createNeverLeaves, .createAcceptedResponseLost, .transportAfterAttach,
              .localLegFailure, .acknowledgedWithoutImport:
             nil
-        }
-    }
-
-    /// The persisted-reference and server-call assertion the owning test
-    /// must make, in addition to the user-facing state it checks.
-    var requiredAssertion: String {
-        switch self {
-        case .createNeverLeaves:
-            "Reference stays prepared or safely retryable; no /cancel; the same client request ID is reused."
-        case .createAcceptedResponseLost:
-            "Reference is createAttempted without a jobID; re-attach repeats the same client request ID and discovers exactly one server job."
-        case .createDelayedThenUserCancels:
-            "Cancel intent persists; the returned or discovered job receives exactly one user cancel; no orphaned reference."
-        case .cancelResponseLost:
-            "Persisted user intent suppresses re-attach; cleanup retries as the same intent, never as an error path."
-        case .transportAfterAttach:
-            "Reference remains attached with lastExit connectionLost; no /cancel; Resume polls the same job."
-        case .localLegFailure:
-            "Bounded local retry then lastExit localRequestFailed; reference remains attached; no /cancel."
-        case .deathAfterImport:
-            "Re-run import is idempotent; ack clears the reference; one transcript."
-        case .deathAfterAck:
-            "acknowledged with local provenance is success; no serverRejected copy; reference cleared."
-        case .acknowledgedWithoutImport:
-            "acknowledged without local provenance emits acknowledgedWithoutLocalImport; no ordinary server-rejection copy."
-        case .cloudParked:
-            "Queue item persists the remote park reason; snapshot and pipeline show Resume; no /cancel; Resume attaches the seeded job."
-        case .parkedCloudUserCancel:
-            "The .adDetection cancel path runs before queue deletion; exactly one /cancel; no re-attach afterwards."
-        case .ownerBeforeClear:
-            "Outcome carries completionDeliveryOwner captured before the reference clear and filters correctly."
         }
     }
 

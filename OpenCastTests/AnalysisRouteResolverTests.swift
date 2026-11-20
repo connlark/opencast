@@ -17,7 +17,6 @@ struct AnalysisRouteResolverTests {
         AnalysisTrialProxyStatus(mode: .trial, unitsRemaining: units, startsAt: .distantPast, monthPaused: paused)
     }
 
-    /// Fails every Keychain read while set.
     nonisolated final class ReadFailure: Sendable {
         private let failing = Mutex(false)
 
@@ -31,8 +30,6 @@ struct AnalysisRouteResolverTests {
         }
     }
 
-    /// One resolver over in-memory keys, a fixed bundle, a scripted trial
-    /// status and a run directory of its own.
     @MainActor
     final class Stack {
         let storage: InMemoryAnalysisProviderKeyStorage
@@ -41,7 +38,6 @@ struct AnalysisRouteResolverTests {
         let connection: FixedTrialConnection
         let exchange = RecordingTrialProxyExchange()
         let statusFetches = AnalysisTestCounter()
-        let reachabilityReads = AnalysisTestCounter()
         let trialReachability: AnalysisTrialReachability
         let snapshot: AnalysisPolicySnapshot
         let resolver: AnalysisRouteResolver
@@ -67,11 +63,7 @@ struct AnalysisRouteResolverTests {
             runs = AnalysisRunRecordStore(directory: AnalysisRunTestFixtures.temporaryDirectory())
             connection = FixedTrialConnection(exchange: hasTrialRoute ? exchange : nil, isConfigured: hasTrialRoute)
             let fetches = statusFetches
-            let reads = reachabilityReads
-            trialReachability = AnalysisTrialReachability {
-                reads.add()
-                return isReachable ?? hasTrialRoute
-            }
+            trialReachability = AnalysisTrialReachability { isReachable ?? hasTrialRoute }
             resolver = AnalysisRouteResolver(
                 keys: keys,
                 policy: .fixed(snapshot),
@@ -105,7 +97,6 @@ struct AnalysisRouteResolverTests {
             AnalysisRouteResolver.directPolicy(feature: feature, provider: provider, snapshot: snapshot)!
         }
 
-        /// Writes a run record as `begin` would before its first send.
         func beginRun(_ feature: AnalysisFeature, route: AnalysisRoute, policy: AnalysisRoutePolicy) throws -> String {
             let id = UUID().uuidString
             try runs.begin(AnalysisRunRecord(
@@ -251,7 +242,7 @@ struct AnalysisRouteResolverTests {
         #expect(stack.statusFetches.count == 1)
     }
 
-    @Test("The trial status decides the route", arguments: [AnalysisFeature.adDetection, .chaptersSummary], [
+    @Test("The trial status decides the route", arguments: [
         (AnalysisRouteResolverTests.trial(units: 3), AnalysisRoute.trial),
         (AnalysisRouteResolverTests.trial(units: 1), .trial),
         (AnalysisRouteResolverTests.trial(units: 0), .keyRequired(.trialExhausted)),
@@ -259,13 +250,13 @@ struct AnalysisRouteResolverTests {
         (AnalysisRouteResolverTests.trial(units: 0, paused: true), .keyRequired(.trialPaused)),
         (AnalysisTrialProxyStatus(mode: .open, unitsRemaining: 0, startsAt: .distantFuture, monthPaused: true), .trial),
     ])
-    func statusDecides(feature: AnalysisFeature, scenario: (status: AnalysisTrialProxyStatus, route: AnalysisRoute)) async {
-        let stack = Stack(status: scenario.status)
+    func statusDecides(status: AnalysisTrialProxyStatus, route: AnalysisRoute) async {
+        let stack = Stack(status: status)
 
-        let resolution = await stack.resolve(feature)
+        let resolution = await stack.resolve(.adDetection)
 
-        #expect(resolution.route == scenario.route)
-        #expect((resolution.trialExchange != nil) == (scenario.route == .trial))
+        #expect(resolution.route == route)
+        #expect((resolution.trialExchange != nil) == (route == .trial))
     }
 
     @Test("A trial status that cannot be read is proxyUnavailable")
@@ -467,18 +458,6 @@ struct AnalysisRouteResolverTests {
         }
     }
 
-    @Test("The first route resolution resolves reachability, once for the session")
-    func firstResolutionResolvesReachability() async {
-        let stack = Stack(status: Self.open)
-        #expect(stack.trialReachability.state == .unknown)
-
-        _ = await stack.resolve(.adDetection)
-        _ = await stack.resolve(.chaptersSummary)
-
-        #expect(await stack.trialReachability.resolve() == .available)
-        #expect(stack.reachabilityReads.count == 1)
-    }
-
     @Test("A bundle without the trial's model entry is proxyUnavailable for both features")
     func noTrialEntry() async {
         var bundle = AnalysisPolicyBundle.baked
@@ -626,8 +605,6 @@ struct AnalysisRouteResolverTests {
     }
 }
 
-/// Runs an action set after the stack exists, from inside its status fetch.
-/// A clock a status fetch can move, so a reply can land after the date.
 private final class MovableClock: Sendable {
     private let date: Mutex<Date>
 

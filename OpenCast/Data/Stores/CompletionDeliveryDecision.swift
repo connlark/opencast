@@ -1,27 +1,15 @@
-/// How one local completion-delivery request ended. Each case is also the
-/// `completionDelivery` event the remote-job trail records for it.
 enum CompletionDeliveryDecision: Equatable {
     case scheduled
     case suppressed(Suppression)
-    /// The notification center refused the request.
     case addFailed
 
     enum Suppression: Equatable {
-        /// A remote owner delivers this completion, so the device stays
-        /// quiet.
         case remoteOwner
-        /// The person is in the app, and `willPresent` would banner it.
         case sceneActive
-        /// Notifications are denied or not yet determined.
         case unauthorized
-        /// The outcome never notifies, like a cancel or a connection-loss
-        /// park.
         case silentOutcome
     }
 
-    /// The trail event for this decision. A cleared reference leaves the
-    /// job ids out; the episode and purpose still correlate it with the
-    /// run's own events.
     func diagnosticEvent(
         episodeID: String,
         reference: RemoteTranscriptionJobReference?,

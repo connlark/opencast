@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// The question field and send button pinned under the conversation.
 struct TranscriptAskComposer: View {
     @Binding var draft: String
     let isResponding: Bool

@@ -15,7 +15,6 @@ struct EpisodeNoteDraft: Identifiable {
     var isEpisodeWide = false
     var resumesPlaybackOnDismiss = false
 
-    /// A new note at `timestamp` that carries the episode's display details.
     static func timestamped(
         episode: EpisodeListItemSnapshot,
         timestamp: TimeInterval,
@@ -32,7 +31,6 @@ struct EpisodeNoteDraft: Identifiable {
         )
     }
 
-    /// A whole-episode draft that edits `existing` when the episode already has one.
     static func wholeEpisode(episode: EpisodeListItemSnapshot, existing: EpisodeNoteRecord?) -> EpisodeNoteDraft {
         EpisodeNoteDraft(
             episodeID: episode.episodeID,
@@ -47,8 +45,7 @@ struct EpisodeNoteDraft: Identifiable {
         )
     }
 
-    /// Edits `note`, keeping its stored details and filling only the empty
-    /// ones from `episode`, which is nil once the episode no longer resolves.
+    /// `episode` is nil once the note's episode no longer resolves.
     static func editing(_ note: EpisodeNoteRecord, episode: EpisodeListItemSnapshot?) -> EpisodeNoteDraft {
         EpisodeNoteDraft(
             episodeID: note.episodeID,

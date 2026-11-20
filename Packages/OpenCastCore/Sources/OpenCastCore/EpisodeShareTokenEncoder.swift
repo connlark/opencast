@@ -1,11 +1,7 @@
 import Foundation
 import zlib
 
-/// Mints the version `1` share token: the payload tuple joined with `\n`, raw
-/// DEFLATE (level 9, windowBits −15, memLevel 9) primed with
-/// `EpisodeShareDictionary.v1`, then base64url without padding behind a `1`.
-/// System zlib rather than `Compression`, which cannot install a preset
-/// dictionary. Deflating a 1–2 KB tuple takes tens of microseconds.
+/// System zlib, not `Compression`, which cannot install a preset dictionary.
 public enum EpisodeShareTokenEncoder {
     public enum Error: Swift.Error, Equatable {
         case deflateInit

@@ -1,7 +1,5 @@
-/// Whether the create request for a persisted job reference may have reached
-/// the server. `createAttempted` without a `jobID` is a live recovery state:
-/// the response was lost or the process died, and only a repeated create with
-/// the same client request ID can say whether a paid job exists.
+/// `createAttempted` without a `jobID` is a live recovery state: only a repeated create with the
+/// same client request ID can say whether a paid job exists.
 nonisolated enum RemoteTranscriptionJobCreateState: String, Codable, Sendable {
     /// A client request ID is persisted; no create request has been sent.
     case prepared
@@ -10,7 +8,7 @@ nonisolated enum RemoteTranscriptionJobCreateState: String, Codable, Sendable {
     /// The create response was persisted together with its `jobID`.
     case attached
 
-    /// The inferred state for references persisted before this field existed.
+    /// For references persisted without this field.
     nonisolated static func inferred(jobID: String?) -> RemoteTranscriptionJobCreateState {
         jobID == nil ? .prepared : .attached
     }

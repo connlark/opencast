@@ -1,11 +1,8 @@
 import Foundation
 import Observation
 
-/// Whether the trial service can be used from this build and device, the
-/// fact behind "included until the date". It makes no request to opencast,
-/// but resolving can read `AppTransaction`, so a cold launch starts unknown,
-/// and unknown is never read as unavailable. Resolved once and kept for the
-/// session.
+/// Makes no request to opencast, but resolving can read `AppTransaction`, so a cold launch starts
+/// `unknown`, and `unknown` is never read as unavailable. Resolved once per session.
 @Observable
 final class AnalysisTrialReachability {
     enum State: Sendable, Equatable {
@@ -23,15 +20,10 @@ final class AnalysisTrialReachability {
         self.read = read
     }
 
-    /// Whether a free-tier Google key's ad detection can be handed to the
-    /// trial service: the service is reachable and the trial has not begun.
-    /// Decided with no request to opencast, so a paid key's run never waits
-    /// on opencast's service.
     func isHandoverWindowOpen(trialStartsAt: Date, now: Date) -> Bool {
         state == .available && now < trialStartsAt
     }
 
-    /// Starts this session's one resolution; every later caller shares it.
     @discardableResult
     func start() -> Task<State, Never> {
         if let resolution {
@@ -46,7 +38,6 @@ final class AnalysisTrialReachability {
         return resolution
     }
 
-    /// The resolved fact, waiting for it when it is still unknown.
     @discardableResult
     func resolve() async -> State {
         await start().value

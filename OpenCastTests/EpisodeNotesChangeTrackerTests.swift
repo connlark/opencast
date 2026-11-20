@@ -47,8 +47,6 @@ struct EpisodeNotesChangeTrackerTests {
             sidecarMigrators: [tracker],
             modelContext: context
         )
-        // How the coordinator reports a failed save: the re-keys stay pending
-        // in the context for the next save, so the views must re-fetch anyway.
         tracker.finishEpisodeSidecarMigration(committed: false)
         #expect(tracker.revision(for: "old") != old)
         #expect(tracker.revision(for: "new") != new)
@@ -75,7 +73,6 @@ struct EpisodeNotesChangeTrackerTests {
         let tracker = EpisodeNotesChangeTracker()
         let context = ModelContext(try OpenCastModelContainerFactory.make(inMemory: true))
         try EpisodeNoteStore.save("Moved", for: EpisodeNoteDraft(episodeID: "old", episodeTitle: "Episode", timestamp: 30), in: context)
-        // The app registers the tracker first for exactly this case.
         #expect(throws: FailingSidecarMigrator.Failure.self) {
             try EpisodeIdentityMigrationApplier.apply(
                 [EpisodeIdentityReconciler.Match(departedEpisodeID: "old", successorEpisodeID: "new")],

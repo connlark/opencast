@@ -1,16 +1,9 @@
-/// Fractional ordering keys for playlist items, so moving one item rewrites
-/// one row (a synced row per move, never a renumbered playlist).
-///
-/// A key is a non-empty base-36 fraction strictly between 0 and 1: its
-/// symbols are the digits after the radix point, and it never ends in the
-/// smallest symbol, so every value has exactly one spelling. The alphabet is
-/// ASCII-ordered, so plain `String` `<` (or a `.lexical` sort descriptor)
-/// orders keys by value; the default `.localizedStandard` comparator is
-/// numeric-aware and misorders them.
+/// A key is a base-36 fraction in (0, 1) that never ends in "0", so each value has one spelling.
+/// Order keys with `String` `<` or a `.lexical` sort descriptor: the default `.localizedStandard`
+/// comparator is numeric-aware and misorders them.
 nonisolated enum PlaylistSortKey {
     static let alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
-    /// Head inserts grow a key by one symbol every few inserts; past this
-    /// length the whole playlist is renumbered in one save.
+    /// Head inserts grow a key by one symbol every few inserts.
     static let renumberThreshold = 64
 
     private static let symbols = Array(alphabet)
@@ -54,8 +47,6 @@ nonisolated enum PlaylistSortKey {
         key.count > renumberThreshold
     }
 
-    /// `count` evenly spaced, strictly increasing keys of the shortest length
-    /// that fits them.
     static func renumbered(count: Int) -> [String] {
         precondition(count >= 0, "Cannot renumber a negative count")
         guard count > 0 else {
@@ -84,11 +75,8 @@ nonisolated enum PlaylistSortKey {
         }
     }
 
-    /// The fraction-part midpoint from rocicorp's fractional-indexing: strip
-    /// the common prefix (a missing lower digit reads as 0), then take the
-    /// middle digit when the first digits are more than one apart; otherwise
-    /// the upper's first digit alone when it has more digits, else keep the
-    /// lower's first digit and recurse towards 1.
+    /// The fraction-part midpoint from rocicorp's fractional-indexing; a missing lower digit reads
+    /// as 0.
     private static func midpoint(_ lower: ArraySlice<Int>, _ upper: ArraySlice<Int>?) -> [Int] {
         if let upper {
             var prefixLength = 0

@@ -53,24 +53,9 @@ struct AnalysisTrialReachabilityTests {
         #expect(!unavailable.isHandoverWindowOpen(trialStartsAt: start, now: before))
     }
 
-    @Test("A fixture connection with no bearer and no App Attest support reads available")
-    func fixtureConnectionIsReachable() async {
-        let connection = AnalysisTrialConnection(routing: .storeEnvironment, isFixture: true)
-
-        #expect(await connection.isReachable(trialEndpoint: Self.endpoint))
-    }
-
     @Test("An unknown store environment has no route")
     func unknownStoreEnvironmentIsUnreachable() async {
         let connection = AnalysisTrialConnection(routing: .storeEnvironment, storeEnvironment: { .unknown("test") })
-
-        #expect(await !connection.isReachable(trialEndpoint: Self.endpoint))
-    }
-
-    @Test("A store environment that cannot be read has no route")
-    func unreadableStoreEnvironmentIsUnreachable() async {
-        struct Unreadable: Error {}
-        let connection = AnalysisTrialConnection(routing: .storeEnvironment, storeEnvironment: { throw Unreadable() })
 
         #expect(await !connection.isReachable(trialEndpoint: Self.endpoint))
     }

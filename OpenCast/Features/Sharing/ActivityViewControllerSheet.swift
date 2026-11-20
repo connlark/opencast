@@ -1,11 +1,9 @@
 import SwiftUI
 
-/// Narrow UIKit wrapper for a share sheet presented programmatically (after
-/// an asynchronous export, for instance), which `ShareLink` cannot do.
+/// For a share sheet presented programmatically, which `ShareLink` cannot do.
 struct ActivityViewControllerSheet: UIViewControllerRepresentable {
     let items: [Any]
-    /// Runs when the sheet is torn down, after any activity has finished
-    /// reading the items; temporary files are removed here.
+    /// Runs at teardown, after any activity has finished reading the items.
     var onDismantle: (() -> Void)? = nil
 
     func makeCoordinator() -> Coordinator {

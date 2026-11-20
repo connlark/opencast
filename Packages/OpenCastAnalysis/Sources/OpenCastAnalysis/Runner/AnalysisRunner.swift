@@ -1,13 +1,5 @@
-/// Runs ad detection and Chapters & Summary on the device: builds the
-/// canonical requests, sends them through a provider transport, validates
-/// every answer exactly as the analysis services do, and returns the
-/// response the services would have returned, or the failure they would
-/// have reported. Fails closed: an answer that does not validate never
-/// yields a partial result.
-///
-/// Policies come from ``AnalysisPolicySnapshot`` (one feature's settings
-/// and the listener's provider entry); the run record keeps their
-/// `bundleVersion`, `settings.revision` and `model`.
+/// Returns what the analysis services would for the same answers, and fails closed: an answer
+/// that does not validate never yields a partial result.
 public struct AnalysisRunner: Sendable {
     public let transport: any AnalysisProviderTransport
     public let clock: any AnalysisClock
@@ -17,18 +9,15 @@ public struct AnalysisRunner: Sendable {
         self.clock = clock
     }
 
-    /// Detects skippable ad breaks across the whole episode.
     public func detectAds(_ request: AdAnalysisRequest, policy: AdDetectionAnalysisPolicy) async -> AnalysisOutcome {
         await adEngine(policy, canonicalThinking: policy.model.thinking).run(request)
     }
 
-    /// Generates chapters and the episode summary.
     public func generateChapters(_ request: TranscriptAnalysisRequest, policy: ChaptersSummaryAnalysisPolicy) async -> AnalysisOutcome {
         await chaptersEngine(policy).run(request)
     }
 
-    /// Detects ads with the canonical payload's thinking level chosen
-    /// explicitly; `nil` omits it. For replays of answers recorded without one.
+    /// `nil` leaves the thinking level out of the payload, for answers recorded without one.
     func detectAds(
         _ request: AdAnalysisRequest,
         policy: AdDetectionAnalysisPolicy,
@@ -37,9 +26,7 @@ public struct AnalysisRunner: Sendable {
         await adEngine(policy, canonicalThinking: canonicalThinking).run(request)
     }
 
-    /// Analyzes every ad-detection window independently and records what each
-    /// did, without the run's early stop on the first failure. For replay
-    /// comparison and diagnostics.
+    /// Unlike a run, does not stop at the first failed window.
     func traceAdWindows(
         _ request: AdAnalysisRequest,
         policy: AdDetectionAnalysisPolicy,
@@ -63,8 +50,7 @@ public struct AnalysisRunner: Sendable {
         return traces
     }
 
-    /// Generates chapters, skipping request validation as the service's
-    /// analysis step does, and records each attempt that got a reply.
+    /// Skips request validation, as the service's analysis step does.
     func traceChapters(
         _ request: TranscriptAnalysisRequest,
         policy: ChaptersSummaryAnalysisPolicy

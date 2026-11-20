@@ -1,12 +1,6 @@
 import Foundation
 import OpenCastCore
 
-/// Matches departed cache rows (episode IDs the feed no longer mints) onto
-/// their re-identified successors by identity material, tiered: guid →
-/// canonical audio URL → title+date → unambiguous title alone. A tier only
-/// pairs a key that maps to exactly one departed row and exactly one
-/// successor; ambiguous keys fall through to later tiers, and rows that never
-/// match are retained as off-feed back-catalog.
 nonisolated enum EpisodeIdentityReconciler {
     struct Candidate: Equatable, Sendable {
         let episodeID: String

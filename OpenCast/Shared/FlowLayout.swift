@@ -1,10 +1,7 @@
 import SwiftUI
 
-/// Wraps its subviews into centred lines, left to right, like words in a
-/// paragraph. A subview wider than a line is offered the line's width and
-/// never reported wider than it; a nil proposed width lays everything out on
-/// one line. `Layout` is not main-actor isolated, so neither is this type or
-/// anything its witnesses call.
+/// A nil proposed width lays everything out on one line. `Layout` is not main-actor
+/// isolated, so neither is this type or anything its witnesses call.
 nonisolated struct FlowLayout: Layout {
     var spacing: Double = 8
 
@@ -41,9 +38,7 @@ nonisolated struct FlowLayout: Layout {
         }
     }
 
-    /// Each subview's size and the offset ranges of the lines, filled
-    /// greedily. A line always takes at least one subview, so a zero width
-    /// yields one subview per line.
+    /// A line always takes at least one subview, so a zero width yields one subview per line.
     private func arrangement(
         of subviews: Subviews,
         maxWidth: CGFloat?

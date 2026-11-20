@@ -1,7 +1,5 @@
 import Foundation
 
-/// The copyable/shareable plain-text rendering of the diagnostics report;
-/// unredacted by design and generated from the exact rows the sheet shows.
 nonisolated enum EpisodeDiagnosticsReportText {
     static func make(
         episodeID: String,

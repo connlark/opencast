@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// The podcast episode list's glass filter menu, beside its sort menu.
 struct EpisodeFilterMenu: View {
     @Binding var filter: PodcastEpisodeFilter
 

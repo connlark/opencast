@@ -1,15 +1,12 @@
 import Foundation
 @preconcurrency import MediaPlayer
 
-/// Seam over a command's enable flag so the availability matrix is testable
-/// without `MPRemoteCommandCenter.shared()` (process-global system state).
 protocol RemoteCommandToggling: AnyObject {
     var isEnabled: Bool { get set }
 }
 
 extension MPRemoteCommand: RemoteCommandToggling {}
 
-/// The nine commands whose availability `updateAvailability` manages.
 struct RemoteCommandAvailabilitySurface {
     let play: any RemoteCommandToggling
     let pause: any RemoteCommandToggling

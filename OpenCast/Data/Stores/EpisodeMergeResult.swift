@@ -1,6 +1,5 @@
 import Foundation
 
-/// Outcome of the diagnostics "Merge Duplicate Episodes" sweep.
 nonisolated struct EpisodeMergeResult: Equatable, Sendable {
     var feedsProcessed = 0
     var episodesMigrated = 0

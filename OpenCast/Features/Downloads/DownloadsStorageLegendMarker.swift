@@ -1,9 +1,5 @@
 import SwiftUI
 
-/// A legend entry's swatch, a dot in its segment's color. With
-/// Differentiate Without Color on, it grows to carry the segment's number,
-/// as the bar does, and a ring outlines it so pale fills stand apart from
-/// the row.
 struct DownloadsStorageLegendMarker: View {
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
     @ScaledMetric(relativeTo: .body) private var dotDiameter = 12

@@ -1,9 +1,6 @@
 import DeviceCheck
 import Foundation
 
-/// Reads Chapters & Summary jobs the analysis service accepted before this
-/// build ran the analysis on the device. Nothing here submits work: a server
-/// job is only ever polled to completion.
 nonisolated struct URLSessionEpisodeTranscriptAnalysisClient: EpisodeTranscriptAnalysisClient {
     static let pollTimeout: TimeInterval = 30
 

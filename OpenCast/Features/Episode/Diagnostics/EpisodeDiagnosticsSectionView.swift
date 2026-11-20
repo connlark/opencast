@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Renders one diagnostics section: its rows once available and a spinner
-/// while loading or refining.
 struct EpisodeDiagnosticsSectionView: View {
     let id: EpisodeDiagnosticsSectionID
     let state: EpisodeDiagnosticsSectionState

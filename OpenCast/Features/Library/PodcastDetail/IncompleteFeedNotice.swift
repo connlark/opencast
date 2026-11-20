@@ -26,9 +26,8 @@ struct IncompleteFeedNotice: View {
                 }
                 if isRefreshing { ProgressView().accessibilityLabel("Loading feed") }
             }
-            // The show page puts this notice in its hero's List row, where
-            // default-style buttons make the whole row one target that fires
-            // both. Borderless buttons take only their labels' 44 pt targets.
+            // In the hero's List row default-style buttons make the whole row one target that
+            // fires both; borderless ones take only their own taps.
             .buttonStyle(.borderless)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

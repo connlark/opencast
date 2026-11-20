@@ -1,4 +1,3 @@
-/// Everything one Chapters & Summary attempt did, for replay comparison.
 public struct ChaptersAttemptTrace: Sendable, Hashable {
     public var attempt: Int
     public var thinking: String
@@ -7,10 +6,6 @@ public struct ChaptersAttemptTrace: Sendable, Hashable {
     public var result: Result<ChaptersValidatedAnalysis, ChaptersRejection>?
 }
 
-/// The whole-run budget of a Chapters & Summary run. Every call's deadline
-/// is the smaller of its level's cap and what is left; a call never starts
-/// with less than the floor left, and a pause is refused when it would not
-/// leave room for the call after it.
 struct ChaptersRunBudget: Sendable {
     let clock: any AnalysisClock
     let deadline: Double
@@ -47,9 +42,6 @@ struct ChaptersRunBudget: Sendable {
     }
 }
 
-/// The transport ladder for one Chapters & Summary attempt: at most
-/// `maxTries` sends, of which timeouts may claim at most
-/// `maxTimeoutResends` resends.
 struct ChaptersTransportLadder {
     enum Failure: Equatable {
         case timeout
@@ -91,9 +83,6 @@ struct ChaptersTransportLadder {
     }
 }
 
-/// One Chapters & Summary run: one request per episode, coalesced above the
-/// threshold, up to the attempt limit with every retry at the escalated
-/// thinking level, validated in unit space and again in original ids.
 struct ChaptersRunEngine: Sendable {
     let policy: ChaptersSummaryPolicy
     let model: AnalysisModelEntry
@@ -127,7 +116,6 @@ struct ChaptersRunEngine: Sendable {
         return await runValidated(request, trace: &trace)
     }
 
-    /// The run after request validation, as the service's analysis step.
     func runValidated(
         _ request: TranscriptAnalysisRequest,
         trace: inout [ChaptersAttemptTrace]

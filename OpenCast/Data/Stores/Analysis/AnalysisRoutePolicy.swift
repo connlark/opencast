@@ -1,6 +1,5 @@
 import OpenCastAnalysis
 
-/// The policy a resolved route runs under, for one feature.
 nonisolated enum AnalysisRoutePolicy: Sendable, Equatable {
     case adDetection(AdDetectionAnalysisPolicy)
     case chaptersSummary(ChaptersSummaryAnalysisPolicy)

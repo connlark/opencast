@@ -1,8 +1,6 @@
 import OpenCastPlayback
 import SwiftUI
 
-/// Full-width ad-span rail plus a human caption, shown once ad analysis has
-/// completed for the episode.
 struct EpisodeAdSpanTimelineView: View {
     static let outdatedCaption = "Ad analysis outdated — rerun from the menu"
     static let detachedCaption = "Ad skips unavailable for this audio. Detect Ads Again to restore them."
@@ -11,8 +9,7 @@ struct EpisodeAdSpanTimelineView: View {
     let duration: TimeInterval
     let zoneTiers: EpisodeAdAnalysisZoneTiers
     let isStale: Bool
-    /// The analysis no longer matches a completed download, so none of its
-    /// spans can skip.
+    /// The analysis no longer matches a completed download, so none of its spans can skip.
     let isDetached: Bool
 
     var body: some View {
@@ -35,9 +32,7 @@ struct EpisodeAdSpanTimelineView: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// A stale analysis has no spans to show, so it says so whether or not
-    /// its download is still there. A detached one that found no spans lost
-    /// no skips, so it keeps the empty caption.
+    /// A detached analysis that found no spans lost no skips, so it keeps the empty caption.
     static func caption(for summary: EpisodeAdSpanSummary?, isStale: Bool, isDetached: Bool) -> String {
         if isStale {
             return outdatedCaption

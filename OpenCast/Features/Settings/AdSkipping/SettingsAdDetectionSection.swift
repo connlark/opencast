@@ -1,9 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// Where Detect Ads passes run. "Ask First Time" (no stored preference)
-/// re-arms the first-tap dialog; the cloud choice appears only when the
-/// remote transcription surface is visible at all.
 struct SettingsAdDetectionSection: View {
     private enum ModeChoice: String, CaseIterable, Identifiable {
         case ask

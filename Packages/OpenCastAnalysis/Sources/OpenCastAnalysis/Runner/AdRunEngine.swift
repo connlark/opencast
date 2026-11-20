@@ -1,6 +1,4 @@
-/// Everything one ad-detection window did, for replay comparison and
-/// diagnostics. Holds ids, codes and the canonical payloads (which carry
-/// transcript text, so traces stay on the device or in private evidence).
+/// The payloads carry transcript text: keep traces on the device or in private evidence.
 public struct AdWindowTrace: Sendable, Hashable {
     public struct Attempt: Sendable, Hashable {
         public var parsed: AdParsedAnswer
@@ -11,22 +9,17 @@ public struct AdWindowTrace: Sendable, Hashable {
     public var payload: JSONValue
     /// `nil` when the first request produced no reply.
     public var initial: Attempt?
-    /// The corrective payload, or the code that stopped it being built.
     public var repairPayload: Result<JSONValue, AnalysisCodeError>?
     public var repair: Attempt?
     public var result: Result<AdWindowResult, AnalysisFailure>?
 }
 
-/// A window that passed: its answer, usage and notices.
 public struct AdWindowResult: Sendable, Hashable {
     public var output: AdModelOutput
     public var usage: AnalysisUsage?
     public var notices: [String]
 }
 
-/// One ad-detection run: windows, the per-window ladder of transport
-/// attempts and the one repair, then cross-window reconciliation, the
-/// global alarms and the response.
 struct AdRunEngine: Sendable {
     let policy: AdDetectionPolicy
     let model: AnalysisModelEntry
@@ -105,7 +98,6 @@ struct AdRunEngine: Sendable {
         }
     }
 
-    /// Reconciles the windows' answers against the whole transcript.
     func finish(_ request: AdAnalysisRequest, results: [AdWindowResult]) -> AnalysisOutcome {
         var output = AdModelOutput(spans: [])
         var usage: AnalysisUsage?
@@ -115,8 +107,7 @@ struct AdRunEngine: Sendable {
             usage = AnalysisUsage.combine(usage, result.usage)
             notices.append(contentsOf: result.notices)
         }
-        // Multi-window global alarms have no isolated corrective scope: stop
-        // with the evidence intact, never publish a subset.
+        // No one window can repair a global alarm, so the run fails rather than publish a subset.
         let validated = AdValidator.validate(request, output, policy: policy)
         guard validated.isComplete else {
             return .failed(Self.failure(.adAnalysisIncomplete, issues: validated.issues))
@@ -137,9 +128,6 @@ struct AdRunEngine: Sendable {
         ))
     }
 
-    /// One window: the first request, and when its answer does not validate,
-    /// exactly one corrective request that must keep every verified break
-    /// and every locatable rejected candidate.
     func analyzeWindow(
         _ index: Int,
         _ window: AdAnalysisRequest,
@@ -246,8 +234,6 @@ struct AdRunEngine: Sendable {
         return failure
     }
 
-    /// Sends one payload with the transport ladder: retryable statuses and
-    /// transport failures back off and resend up to `attempts` sends.
     func call(
         _ payload: JSONValue,
         attempts: Int,

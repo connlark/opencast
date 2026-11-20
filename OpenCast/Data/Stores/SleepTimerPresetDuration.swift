@@ -1,7 +1,5 @@
 import Foundation
 
-/// A duration the listener can put in one of the sleep timer's six preset
-/// slots.
 enum SleepTimerPresetDuration: Int, CaseIterable, Identifiable, Comparable, Codable {
     case five = 5
     case ten = 10

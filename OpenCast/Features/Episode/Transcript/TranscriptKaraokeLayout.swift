@@ -2,10 +2,8 @@ import Foundation
 import OpenCastTranscription
 import os
 
-/// Precomputed karaoke layout for one segment: each display-repaired word
-/// onset paired with the end index of that word's text, resolved by a single
-/// forward scan (the schema's word join invariant). Built once when a segment
-/// becomes active so per-sample rendering never searches the string.
+/// Built once when a segment becomes active, so per-sample rendering never searches the string.
+/// The single forward scan relies on the schema's word join invariant.
 nonisolated struct TranscriptKaraokeLayout: Equatable, Sendable {
     #if DEBUG
     private static let logger = Logger(subsystem: "com.connor.opencast", category: "karaoke")
@@ -16,10 +14,7 @@ nonisolated struct TranscriptKaraokeLayout: Equatable, Sendable {
     private let wordStarts: [TimeInterval]
     private let wordUpperBounds: [String.Index]
 
-    /// nil when the segment has no words, display repair exceeds its fallback
-    /// thresholds, or any word fails to scan — callers fall back to line-level
-    /// rendering. `handoff` is the next segment's display start (`.infinity`
-    /// for the last segment).
+    /// Nil when the segment has no words, repair exceeds its thresholds, or a word fails to scan.
     init?(segment: OpenCastTranscriptSegment, handoff: TimeInterval) {
         guard let repaired = TranscriptKaraokeDisplayCues.repairedWords(
             for: segment,
@@ -52,9 +47,7 @@ nonisolated struct TranscriptKaraokeLayout: Equatable, Sendable {
         wordUpperBounds = upperBounds
     }
 
-    /// End index of the last word whose onset is at or before `time`;
-    /// `text.startIndex` when nothing is spoken yet. Equal onsets share an
-    /// upper bound scan order, so a whole group reveals in one lookup.
+    /// `text.startIndex` when nothing is spoken yet. A group of equal onsets reveals in one lookup.
     func spokenUpperBound(at time: TimeInterval) -> String.Index {
         var low = 0
         var high = wordStarts.count

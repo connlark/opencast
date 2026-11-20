@@ -1,8 +1,5 @@
 import Foundation
 
-/// Helpers shared by the opt-in benchmark and evaluation harness runners
-/// (transcription and search): launch-argument parsing, report-file naming,
-/// environment identifiers, and JSON report writing.
 nonisolated enum BenchmarkHarnessSupport {
     static func argumentValue(
         from arguments: [String],

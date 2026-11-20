@@ -1,8 +1,5 @@
 import Foundation
 
-/// A worker's answer to one job poll: still running with its requested
-/// poll-after, or the finished response. Shared by the ad and transcript
-/// analysis clients, whose workers speak the same job envelope.
 nonisolated enum AnalysisJobPollOutcome<Response: Decodable & Sendable & Equatable>: Decodable, Sendable, Equatable {
     case running(pollAfter: TimeInterval)
     case completed(Response)

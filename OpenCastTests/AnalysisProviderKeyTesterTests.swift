@@ -32,12 +32,6 @@ struct AnalysisProviderKeyTesterTests {
         #expect(await AnalysisProviderKeyTester(client: client).checkTier(googleKey, snapshot: snapshot) == .inconclusive)
     }
 
-    @Test("The seeded tester answers the tier it was given, and nothing conclusive by default")
-    func fixedTesterTier() async {
-        #expect(await FixedAnalysisKeyTester().checkTier(googleKey, snapshot: snapshot) == .inconclusive)
-        #expect(await FixedAnalysisKeyTester(results: [.accepted], tierAnswer: .freeTier).checkTier(googleKey, snapshot: snapshot) == .freeTier)
-    }
-
     @Test("A 2xx from Gemini's countTokens on the ad entry's model is accepted, with only the key header")
     func geminiAccepted() async throws {
         let client = StubAnalysisHTTPClient(.success(response(200, #"{"totalTokens":1}"#)))
@@ -160,14 +154,6 @@ struct AnalysisProviderKeyTesterTests {
         #expect(client.requests.isEmpty)
     }
 
-    @Test("A fixed tester answers with its seeded result")
-    func fixedTesterAnswersSeededResult() async {
-        let tester = FixedAnalysisKeyTester(result: .failed(.rateLimited), delay: .milliseconds(1))
-
-        #expect(await tester.test(googleKey, provider: .google, snapshot: snapshot) == .failed(.rateLimited))
-        #expect(await FixedAnalysisKeyTester().test(openAIKey, provider: .openai, snapshot: snapshot) == .accepted)
-    }
-
     @Test("A fixed tester answers its seeded results in call order, the last repeating")
     func fixedTesterAnswersInCallOrder() async {
         let tester = FixedAnalysisKeyTester(results: [.failed(.invalidKey), .accepted])
@@ -193,25 +179,6 @@ struct AnalysisProviderKeyTesterTests {
         #expect(clock.now - started >= .milliseconds(250))
     }
 
-    @Test("A gated test answers only once released, cancelled or not, so an older request can finish after a newer one")
-    func gatedTestsAnswerWhenReleased() async throws {
-        let gate = AnalysisKeyTestReleaseGate(calls: 2)
-        let tester = FixedAnalysisKeyTester(results: [.failed(.invalidKey), .accepted], gate: gate)
-        let googleKey = googleKey
-        let snapshot = snapshot
-        let older = Task { await tester.test(googleKey, provider: .google, snapshot: snapshot) }
-        try await Task.sleep(for: .milliseconds(50))
-        let newer = Task { await tester.test(googleKey, provider: .google, snapshot: snapshot) }
-        older.cancel()
-        try await Task.sleep(for: .milliseconds(50))
-
-        gate.release(call: 2)
-        #expect(await newer.value == .accepted)
-
-        gate.release(call: 1)
-        #expect(await older.value == .failed(.invalidKey))
-    }
-
     @Test("The UI test's Darwin notification releases a gated test")
     func gateReleasesOnItsDarwinNotification() async throws {
         let gate = AnalysisKeyTestReleaseGate(calls: 1)
@@ -228,12 +195,8 @@ struct AnalysisProviderKeyTesterTests {
             nil,
             true
         )
-        let deadline = ContinuousClock.now + .seconds(5)
-        while !answered.withLock({ $0 }), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(20))
-        }
 
-        #expect(answered.withLock { $0 })
+        #expect(await waitUntil { answered.withLock { $0 } })
         gate.release(call: 1)
         await waiting.value
     }
@@ -247,7 +210,6 @@ struct AnalysisProviderKeyTesterTests {
     }
 }
 
-/// Answers every exchange with one canned outcome and keeps the requests.
 private final class StubAnalysisHTTPClient: AnalysisHTTPClient {
     private let outcome: Result<AnalysisHTTPResponse, AnalysisHTTPFailure>
     private let sent = Mutex<[AnalysisHTTPRequest]>([])

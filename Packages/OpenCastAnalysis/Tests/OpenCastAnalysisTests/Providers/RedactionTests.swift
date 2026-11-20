@@ -3,8 +3,6 @@ import Foundation
 @testable import OpenCastAnalysisProviders
 import Testing
 
-/// No header value and no fragment of a key reaches a thrown error's
-/// description, a log line or a recorded fixture.
 @Suite("Redaction")
 struct RedactionTests {
     static let echoedFragment = "ECHOED-REQUEST-FRAGMENT"

@@ -40,8 +40,6 @@ struct SyncRepairResult: Equatable, Sendable {
             + tombstonedPlaylistItemRecordsDeleted
     }
 
-    /// True when the pass deleted or rewrote playlist or playlist item rows,
-    /// so the playlist store must reload.
     var playlistRowsChanged: Bool {
         duplicatePlaylistRecordsFound > 0
             || playlistGroupsMerged > 0
@@ -57,8 +55,7 @@ struct SyncRepairResult: Equatable, Sendable {
         duplicateRecordsFound > 0 || tombstonedRecordsDeleted > 0 || normalizedProgressRecords > 0
     }
 
-    /// True when the repair pass changed the store at all, including
-    /// bookkeeping-only tombstone expiry that shouldn't read as "Repaired".
+    /// Includes tombstone expiry, which is bookkeeping and must not read as "Repaired".
     var hasChanges: Bool {
         hasIssues || expiredTombstonesDeleted > 0
     }

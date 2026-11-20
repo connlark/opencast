@@ -2,9 +2,6 @@ import Foundation
 import Testing
 import UserNotifications
 
-/// The seam trio (guardrails roster): the extension's artwork session is
-/// injectable, so expiry, failure, and cancellation behavior are pinned
-/// without real network.
 @Suite("Notification service session seam")
 struct NotificationServiceSeamTests {
     @Test("Non-2xx artwork downloads deliver the notification without an attachment")
@@ -60,21 +57,27 @@ struct NotificationServiceSeamTests {
         service.serviceExtensionTimeWillExpire()
 
         _ = try #require(await delivered.first())
-        // Post-delivery, the hung download must be torn down — URLProtocol
-        // observes the cancellation as stopLoading.
         #expect(await ArtworkStubProtocol.requestStopped(forHost: host))
     }
 
-    @Test("Source gate: the artwork session stays injectable")
-    func sourceGateArtworkSessionSeam() throws {
-        let serviceSource = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appending(path: "OpenCastNotificationService/NotificationService.swift")
-        let source = try String(contentsOf: serviceSource, encoding: .utf8)
-        #expect(!source.contains("URLSession.shared.downloadTask"))
-        #expect(source.contains("var artworkSession"))
-        #expect(source.contains("task.delegate = byteCapDelegate"))
+    @Test("Artwork declaring more than 10 MiB is abandoned and the notification delivers without it")
+    func oversizedDeclaredArtworkIsAbandoned() async throws {
+        let host = ArtworkStubProtocol.uniqueHost()
+        ArtworkStubProtocol.register(
+            .holdingAfterFirstChunk(declaredLength: 10_485_761, chunkSize: 1_024, chunkCount: 4),
+            forHost: host
+        )
+        let service = NotificationService()
+        service.artworkSession = Self.stubbedSession()
+
+        let delivered = DeliveryRecorder()
+        service.didReceive(Self.artworkRequest(host: host)) { content in
+            delivered.record(content)
+        }
+
+        let content = try #require(await delivered.first())
+        #expect(content.attachments.isEmpty)
+        #expect(await ArtworkStubProtocol.requestStoppedWithBodyLeft(forHost: host))
     }
 
     private static func stubbedSession() -> URLSession {
@@ -171,7 +174,6 @@ struct ArtworkDownloadByteCapDelegateTests {
     }
 }
 
-/// Records deliveries across the extension's off-main callbacks.
 private final class DeliveryRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var contents: [UNNotificationContent] = []
@@ -189,13 +191,8 @@ private final class DeliveryRecorder: @unchecked Sendable {
     }
 
     func first() async -> UNNotificationContent? {
-        for _ in 0..<1_000 {
-            if let first = firstSnapshot() {
-                return first
-            }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        return nil
+        _ = await waitUntil { firstSnapshot() != nil }
+        return firstSnapshot()
     }
 
     private func firstSnapshot() -> UNNotificationContent? {
@@ -212,15 +209,19 @@ final class ArtworkStubProtocol: URLProtocol, @unchecked Sendable {
         case respond(statusCode: Int, body: Data)
         case hang
         case stream(declaredLength: Int?, chunkSize: Int, chunkCount: Int)
+        case holdingAfterFirstChunk(declaredLength: Int, chunkSize: Int, chunkCount: Int)
     }
 
     private struct HostState: Sendable {
         var mode: Mode
         var started = false
         var stopped = false
+        var finishedSending = false
+        var stoppedWithBodyLeft = false
     }
 
     private static let states = LockedBox<[String: HostState]>([:])
+    private let stopSignal = DispatchSemaphore(value: 0)
 
     static func uniqueHost() -> String {
         "stub-\(UUID().uuidString.lowercased()).example"
@@ -231,22 +232,15 @@ final class ArtworkStubProtocol: URLProtocol, @unchecked Sendable {
     }
 
     static func requestStarted(forHost host: String) async {
-        for _ in 0..<1_000 {
-            if states.withLock({ $0[host]?.started == true }) {
-                return
-            }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
+        _ = await waitUntil { states.withLock { $0[host]?.started == true } }
     }
 
     static func requestStopped(forHost host: String) async -> Bool {
-        for _ in 0..<1_000 {
-            if states.withLock({ $0[host]?.stopped == true }) {
-                return true
-            }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        return false
+        await waitUntil { states.withLock { $0[host]?.stopped == true } }
+    }
+
+    static func requestStoppedWithBodyLeft(forHost host: String) async -> Bool {
+        await requestStopped(forHost: host) && states.withLock { $0[host]?.stoppedWithBodyLeft == true }
     }
 
     private static func host(of request: URLRequest) -> String {
@@ -279,7 +273,7 @@ final class ArtworkStubProtocol: URLProtocol, @unchecked Sendable {
             )!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: body)
-            client?.urlProtocolDidFinishLoading(self)
+            finishSending(host: host)
         case .hang:
             break
         case .stream(let declaredLength, let chunkSize, let chunkCount):
@@ -294,10 +288,8 @@ final class ArtworkStubProtocol: URLProtocol, @unchecked Sendable {
                 headerFields: headers
             )!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            // Paced off-thread delivery: the session must get time to fire
-            // didWriteData between chunks so a byte-cap delegate's cancel can
-            // land mid-stream; synchronous delivery would hand over the whole
-            // body before any progress callback runs.
+            // Paced off-thread: synchronous delivery hands over the whole body
+            // before any didWriteData runs, so a byte-cap cancel never lands mid-stream.
             let chunk = Data(repeating: 0xAB, count: chunkSize)
             DispatchQueue.global().async { [weak self] in
                 guard let self else {
@@ -311,16 +303,59 @@ final class ArtworkStubProtocol: URLProtocol, @unchecked Sendable {
                     usleep(5_000)
                 }
                 if !Self.states.withLock({ $0[host]?.stopped == true }) {
-                    self.client?.urlProtocolDidFinishLoading(self)
+                    self.finishSending(host: host)
                 }
+            }
+        case .holdingAfterFirstChunk(let declaredLength, let chunkSize, let chunkCount):
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Length": "\(declaredLength)"]
+            )!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            let chunk = Data(repeating: 0xAB, count: chunkSize)
+            client?.urlProtocol(self, didLoad: chunk)
+            // The hold stays under the request's 20 s idle timeout, which would
+            // otherwise stop the request with body left on its own.
+            DispatchQueue.global().async { [weak self] in
+                guard let self, self.stopSignal.wait(timeout: .now() + 10) == .timedOut else {
+                    return
+                }
+                for _ in 1..<chunkCount {
+                    self.client?.urlProtocol(self, didLoad: chunk)
+                }
+                self.finishSending(host: host)
             }
         }
     }
 
     override func stopLoading() {
         let host = Self.host(of: request)
-        Self.states.withLock { $0[host]?.stopped = true }
+        Self.states.withLock { states in
+            states[host]?.stopped = true
+            if states[host]?.finishedSending == false {
+                states[host]?.stoppedWithBodyLeft = true
+            }
+        }
+        stopSignal.signal()
     }
+
+    private func finishSending(host: String) {
+        Self.states.withLock { $0[host]?.finishedSending = true }
+        client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
+private func waitUntil(_ condition: () -> Bool) async -> Bool {
+    let deadline = ContinuousClock.now + .seconds(60)
+    while ContinuousClock.now < deadline {
+        if condition() {
+            return true
+        }
+        try? await Task.sleep(for: .milliseconds(10))
+    }
+    return condition()
 }
 
 private final class LockedBox<Value>: @unchecked Sendable {

@@ -1,9 +1,5 @@
 import CarPlay
 
-/// Owns the shared Now Playing template: the custom button row, the Up Next and
-/// album-artist affordances, and the observer that delivers their taps. The
-/// system can present the shared template on the app's behalf at any time, so
-/// this is configured when the car connects rather than when the app pushes it.
 final class CarPlayNowPlayingConfigurator: NSObject {
     // The CarPlay asset table sizes now-playing glyphs at 20pt; anything larger
     // than `CPNowPlayingButtonMaximumImageSize` is scaled down by the system.
@@ -38,10 +34,8 @@ final class CarPlayNowPlayingConfigurator: NSObject {
         template.updateNowPlayingButtons(makeButtons(for: state))
     }
 
-    /// The shared template outlives the connection, so a configurator that stays
-    /// attached would keep handling taps for a session that is gone. The row
-    /// itself is left alone: nothing renders it until the next connect, which
-    /// rebuilds it.
+    /// The shared template outlives the connection, so the observer must detach. The row is
+    /// left as it is: the next connect rebuilds it.
     func tearDown() {
         template.remove(self)
         appliedState = nil
@@ -59,13 +53,11 @@ final class CarPlayNowPlayingConfigurator: NSObject {
         voiceBoost.isEnabled = state.canToggleVoiceBoost
         voiceBoost.isSelected = state.isVoiceBoostOn
 
-        // Sleep and all ad controls remain phone-only.
         return [rate, voiceBoost]
     }
 
-    /// Image buttons are recolored by the system, so the glyph ships as a plain
-    /// template symbol. An empty image falls back to a system placeholder glyph
-    /// rather than failing the row.
+    /// The system recolors image buttons, so the glyph is a plain template symbol. CarPlay shows
+    /// a placeholder for an empty image rather than failing the row.
     private func glyphButton(
         systemImageName: String,
         handler: @escaping () -> Void

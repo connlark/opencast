@@ -1,6 +1,3 @@
-/// The model's Chapters & Summary answer before validation. Unknown fields
-/// are tolerated; missing fields, wrong types and floats in id fields reject
-/// the answer.
 public struct ChaptersModelOutput: Sendable, Hashable {
     public struct Chapter: Sendable, Hashable {
         public var title: String
@@ -64,20 +61,15 @@ public struct ChaptersModelOutput: Sendable, Hashable {
     }
 }
 
-/// A Chapters & Summary answer reduced to what validation needs.
 public struct ChaptersParsedAnswer: Sendable, Hashable {
     public var output: ChaptersModelOutput?
     public var usage: AnalysisUsage?
-    /// `gemini_finish_reason:<reason>` for a non-STOP finish.
     public var warnings: [String]
     /// The parse failure code when there is no output.
     public var failure: String?
 }
 
-/// Reads one answer the way the Chapters & Summary service does. A
-/// MAX_TOKENS finish is a hard failure (a truncated schema-constrained
-/// answer can still be a valid JSON prefix), as is any other non-STOP
-/// finish.
+/// A truncated answer can still be valid JSON, so any finish other than STOP rejects it.
 public enum ChaptersAnswerParser {
     public static let malformedResponse = "malformed_gemini_response"
     public static let missingText = "missing_gemini_text"

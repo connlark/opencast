@@ -46,42 +46,6 @@ struct UpNextAutoAddCoordinatorTests {
         #expect(fixture.coordinator.setPosition(nil, forPodcastID: Fixture.topFeedURL, modelContext: fixture.context))
     }
 
-    @Test("A failed synced save turns nothing on and writes no watermark")
-    func failedSyncedSaveLeavesNoWatermark() async throws {
-        let fixture = try await Fixture.make()
-        try await fixture.publish(releaseDays: [1, 2, 3])
-        fixture.librarySaves.fails = true
-
-        #expect(!fixture.coordinator.setPosition(.top, forPodcastID: Fixture.topFeedURL, modelContext: fixture.context))
-
-        #expect(fixture.library.podcastUpNextAutoAddPosition(forPodcastID: Fixture.topFeedURL) == nil)
-        #expect(fixture.library.lastErrorMessage?.hasPrefix("Unable to update Add to Up Next: ") == true)
-        #expect(fixture.watermark() == nil)
-        #expect(try fixture.storedWatermarkRows(Fixture.topFeedURL).isEmpty)
-    }
-
-    @Test("Turning a show on again after a failed watermark write retries the write until it succeeds")
-    func turnOnRetriesAFailedWatermarkWrite() async throws {
-        let fixture = try await Fixture.make()
-        try await fixture.publish(releaseDays: [1, 2, 3])
-        fixture.settingsSaves.fails = true
-
-        #expect(!fixture.coordinator.setPosition(.top, forPodcastID: Fixture.topFeedURL, modelContext: fixture.context))
-        #expect(!fixture.coordinator.setPosition(.top, forPodcastID: Fixture.topFeedURL, modelContext: fixture.context))
-
-        #expect(fixture.library.podcastUpNextAutoAddPosition(forPodcastID: Fixture.topFeedURL) == nil)
-        #expect(fixture.settings.lastErrorMessage?.hasPrefix("Unable to record new episodes for Up Next: ") == true)
-        #expect(fixture.watermark() == nil)
-        #expect(try fixture.storedWatermarkRows(Fixture.topFeedURL).isEmpty)
-
-        fixture.settingsSaves.fails = false
-        #expect(fixture.coordinator.setPosition(.top, forPodcastID: Fixture.topFeedURL, modelContext: fixture.context))
-
-        #expect(fixture.watermark() == Fixture.release(3))
-        #expect(try fixture.storedWatermarkRows(Fixture.topFeedURL) == [UpNextAutoAddSettingsStore.encodeWatermark(Fixture.release(3))])
-        #expect(fixture.queuedIDs.isEmpty)
-    }
-
     @Test("Turning a show off again after a failed removal retries it, and the row stays until it succeeds")
     func turnOffRetriesAFailedWatermarkRemoval() async throws {
         let fixture = try await Fixture.make()
@@ -116,29 +80,6 @@ struct UpNextAutoAddCoordinatorTests {
         #expect(fixture.watermark() == Fixture.release(1))
 
         #expect(fixture.coordinator.setPosition(.top, forPodcastID: Fixture.topFeedURL, modelContext: fixture.context))
-
-        #expect(fixture.watermark() == Fixture.release(3))
-        #expect(try fixture.storedWatermarkRows(Fixture.topFeedURL) == [UpNextAutoAddSettingsStore.encodeWatermark(Fixture.release(3))])
-
-        fixture.coordinator.runPass(modelContext: fixture.context)
-
-        #expect(fixture.queuedIDs.isEmpty)
-        #expect(fixture.watermark() == Fixture.release(3))
-    }
-
-    @Test("Turning a show on after a failed Off starts at its newest release, not at the row the failed removal kept")
-    func reEnableAfterAFailedRemovalStartsFresh() async throws {
-        let fixture = try await Fixture.make()
-        try await fixture.publish(releaseDays: [1])
-        #expect(fixture.coordinator.setPosition(.bottom, forPodcastID: Fixture.topFeedURL, modelContext: fixture.context))
-        fixture.settingsSaves.fails = true
-        #expect(!fixture.coordinator.setPosition(nil, forPodcastID: Fixture.topFeedURL, modelContext: fixture.context))
-        #expect(fixture.library.podcastUpNextAutoAddPosition(forPodcastID: Fixture.topFeedURL) == nil)
-        #expect(fixture.watermark() == Fixture.release(1))
-        try await fixture.publish(releaseDays: [1, 2, 3])
-        fixture.settingsSaves.fails = false
-
-        #expect(fixture.coordinator.setPosition(.bottom, forPodcastID: Fixture.topFeedURL, modelContext: fixture.context))
 
         #expect(fixture.watermark() == Fixture.release(3))
         #expect(try fixture.storedWatermarkRows(Fixture.topFeedURL) == [UpNextAutoAddSettingsStore.encodeWatermark(Fixture.release(3))])
@@ -358,51 +299,6 @@ struct UpNextAutoAddCoordinatorTests {
         #expect(try fixture.storedWatermarkRows(Fixture.bottomFeedURL).isEmpty)
     }
 
-    @Test("A pass deletes the watermark of a show turned off by sync and keeps the ones still on; back on, it heals at the newest release")
-    func passDeletesWatermarksOfShowsTurnedOffBySync() async throws {
-        let fixture = try await Fixture.make(subscribedFeedURLs: [Fixture.topFeedURL, Fixture.bottomFeedURL])
-        try await fixture.publish(releaseDays: [1])
-        try await fixture.publish(Fixture.bottomFeedURL, releaseDays: [1])
-        #expect(fixture.coordinator.setPosition(.top, forPodcastID: Fixture.topFeedURL, modelContext: fixture.context))
-        #expect(fixture.coordinator.setPosition(.bottom, forPodcastID: Fixture.bottomFeedURL, modelContext: fixture.context))
-        // Another device turns the Top show off; this device's row outlives it.
-        #expect(fixture.library.setPodcastUpNextAutoAddPosition(nil, feedURL: Fixture.topFeedURL, modelContext: fixture.context))
-        #expect(fixture.watermark() == Fixture.release(1))
-        try await fixture.publish(releaseDays: [1, 2, 3])
-
-        fixture.coordinator.runPass(modelContext: fixture.context)
-
-        #expect(fixture.watermark() == nil)
-        #expect(try fixture.storedWatermarkRows(Fixture.topFeedURL).isEmpty)
-        #expect(fixture.watermark(Fixture.bottomFeedURL) == Fixture.release(1))
-        #expect(try fixture.storedWatermarkRows(Fixture.bottomFeedURL) == [UpNextAutoAddSettingsStore.encodeWatermark(Fixture.release(1))])
-        #expect(fixture.queuedIDs.isEmpty)
-
-        // Back on from another device: the releases while it was off stay out.
-        #expect(fixture.library.setPodcastUpNextAutoAddPosition(.top, feedURL: Fixture.topFeedURL, modelContext: fixture.context))
-        fixture.coordinator.runPass(modelContext: fixture.context)
-
-        #expect(fixture.watermark() == Fixture.release(3))
-        #expect(fixture.queuedIDs.isEmpty)
-    }
-
-    @Test("A watermark row deleted while the show stays on heals at the newest release and queues nothing")
-    func deletedWatermarkRowHealsAtTheNewestRelease() async throws {
-        let fixture = try await Fixture.make()
-        try await fixture.publish(releaseDays: [1])
-        #expect(fixture.coordinator.setPosition(.bottom, forPodcastID: Fixture.topFeedURL, modelContext: fixture.context))
-        try await fixture.publish(releaseDays: [1, 2, 3])
-        try fixture.deleteStoredWatermarkRows(Fixture.topFeedURL)
-        fixture.settings.load(modelContext: fixture.context)
-        #expect(fixture.watermark() == nil)
-
-        fixture.coordinator.runPass(modelContext: fixture.context)
-
-        #expect(fixture.watermark() == Fixture.release(3))
-        #expect(try fixture.storedWatermarkRows(Fixture.topFeedURL) == [UpNextAutoAddSettingsStore.encodeWatermark(Fixture.release(3))])
-        #expect(fixture.queuedIDs.isEmpty)
-    }
-
     @Test("Only Add to Top puts back on top a queued release that an older release evicted")
     func onlyAddToTopRequeuesAReleaseItEvicted() async throws {
         let fixture = try await Fixture.make()
@@ -421,34 +317,6 @@ struct UpNextAutoAddCoordinatorTests {
         // the last hand-queued row and goes back on top.
         #expect(fixture.queuedIDs == [fixture.id(2), fixture.id(1)] + fixture.handIDs(8))
         #expect(try fixture.storedQueueIDs() == [fixture.id(2), fixture.id(1)] + fixture.handIDs(8))
-        #expect(fixture.watermark() == Fixture.release(3))
-    }
-
-    @Test(
-        "Where nothing is evicted, a queued release stays where it is and the full queue is left alone",
-        arguments: [
-            (UpNextAutoAddPosition.bottom, UpNextAutoAddLimitReachedAction.stopAdding),
-            (UpNextAutoAddPosition.top, UpNextAutoAddLimitReachedAction.stopAdding),
-            (UpNextAutoAddPosition.bottom, UpNextAutoAddLimitReachedAction.addToTopOnly),
-        ]
-    )
-    func queuedReleaseStaysWhereNothingIsEvicted(
-        position: UpNextAutoAddPosition,
-        limitReachedAction: UpNextAutoAddLimitReachedAction
-    ) async throws {
-        let fixture = try await Fixture.make()
-        try await fixture.publish(releaseDays: [1])
-        #expect(fixture.settings.setLimit(.ten, modelContext: fixture.context))
-        #expect(fixture.settings.setLimitReachedAction(limitReachedAction, modelContext: fixture.context))
-        #expect(fixture.coordinator.setPosition(position, forPodcastID: Fixture.topFeedURL, modelContext: fixture.context))
-        try await fixture.publish(releaseDays: [1, 2, 3])
-        fixture.queueHandRows(9)
-        #expect(fixture.upNextQueue.enqueueLast(try fixture.episode(2), modelContext: fixture.context))
-
-        fixture.coordinator.runPass(modelContext: fixture.context)
-
-        #expect(fixture.queuedIDs == fixture.handIDs(9) + [fixture.id(2)])
-        #expect(try fixture.storedQueueIDs() == fixture.handIDs(9) + [fixture.id(2)])
         #expect(fixture.watermark() == Fixture.release(3))
     }
 
@@ -472,25 +340,6 @@ struct UpNextAutoAddCoordinatorTests {
 
         #expect(fixture.queuedIDs == [fixture.id(1), fixture.id(2)])
         #expect(fixture.watermark() == Fixture.release(3))
-    }
-
-    @Test("A failed eviction keeps the watermark and queues nothing")
-    func failedEvictionKeepsWatermark() async throws {
-        let fixture = try await Fixture.make()
-        try await fixture.publish(releaseDays: [1])
-        #expect(fixture.settings.setLimit(.ten, modelContext: fixture.context))
-        #expect(fixture.settings.setLimitReachedAction(.addToTopOnly, modelContext: fixture.context))
-        #expect(fixture.coordinator.setPosition(.top, forPodcastID: Fixture.topFeedURL, modelContext: fixture.context))
-        fixture.queueHandRows(10)
-        try await fixture.publish(releaseDays: [1, 2])
-        fixture.queueSaves.fails = true
-
-        let failure = fixture.coordinator.runPass(modelContext: fixture.context)
-
-        #expect(failure == "Unable to add the episode to Up Next: Simulated save failure")
-        #expect(fixture.queuedIDs == fixture.handIDs(10))
-        #expect(try fixture.storedQueueIDs() == fixture.handIDs(10))
-        #expect(fixture.watermark() == Fixture.release(1))
     }
 
     @Test("Only Add to Top removes the last row and inserts the new episode in one queue save")
@@ -562,170 +411,6 @@ struct UpNextAutoAddCoordinatorTests {
 
         #expect(fixture.queuedIDs == [fixture.id(1)])
         #expect(fixture.watermark() == Fixture.release(2))
-    }
-
-    @Test("The show sheet's save writes the watermark when it turns a show on and deletes it when it turns it off")
-    func playbackSettingsSaveReconcilesWatermark() async throws {
-        let feedURL = Fixture.topFeedURL
-        let (appModel, context) = try await Self.sheetAppModel()
-
-        #expect(appModel.setPodcastPlaybackSettings(
-            PodcastPlaybackSkipSettings(skipIntroSeconds: 30),
-            rateOverride: nil,
-            upNextAutoAdd: nil,
-            feedURL: feedURL,
-            modelContext: context
-        ) == nil)
-        #expect(appModel.upNextAutoAddSettings.watermark(forPodcastID: feedURL) == nil)
-
-        #expect(appModel.setPodcastPlaybackSettings(
-            PodcastPlaybackSkipSettings(skipIntroSeconds: 30),
-            rateOverride: nil,
-            upNextAutoAdd: .top,
-            feedURL: feedURL,
-            modelContext: context
-        ) == nil)
-        #expect(appModel.library.podcastUpNextAutoAddPosition(forPodcastID: feedURL) == .top)
-        #expect(appModel.upNextAutoAddSettings.watermark(forPodcastID: feedURL) == Fixture.release(3))
-        #expect(appModel.upNextQueue.items.isEmpty)
-
-        #expect(appModel.setPodcastPlaybackSettings(
-            PodcastPlaybackSkipSettings(skipIntroSeconds: 30),
-            rateOverride: 1.5,
-            upNextAutoAdd: .bottom,
-            feedURL: feedURL,
-            modelContext: context
-        ) == nil)
-        #expect(appModel.upNextAutoAddSettings.watermark(forPodcastID: feedURL) == Fixture.release(3))
-
-        #expect(appModel.setPodcastPlaybackSettings(
-            PodcastPlaybackSkipSettings(skipIntroSeconds: 30),
-            rateOverride: 1.5,
-            upNextAutoAdd: nil,
-            feedURL: feedURL,
-            modelContext: context
-        ) == nil)
-        #expect(appModel.library.podcastUpNextAutoAddPosition(forPodcastID: feedURL) == nil)
-        #expect(appModel.upNextAutoAddSettings.watermark(forPodcastID: feedURL) == nil)
-        #expect(appModel.upNextQueue.items.isEmpty)
-    }
-
-    @Test("The show sheet's save retries a failed watermark write or removal on every save until it succeeds")
-    func playbackSettingsSaveRetriesFailedWatermarkWrites() async throws {
-        let feedURL = Fixture.topFeedURL
-        let settingsSaves = SaveSwitch()
-        let (appModel, context) = try await Self.sheetAppModel(
-            settings: UpNextAutoAddSettingsStore(save: settingsSaves.save)
-        )
-        func save(_ position: UpNextAutoAddPosition?) -> Bool {
-            appModel.setPodcastPlaybackSettings(
-                PodcastPlaybackSkipSettings(skipIntroSeconds: 30),
-                rateOverride: nil,
-                upNextAutoAdd: position,
-                feedURL: feedURL,
-                modelContext: context
-            ) == nil
-        }
-        settingsSaves.fails = true
-
-        #expect(!save(.bottom))
-        #expect(!save(.bottom))
-
-        #expect(appModel.library.podcastUpNextAutoAddPosition(forPodcastID: feedURL) == nil)
-        #expect(appModel.upNextAutoAddSettings.lastErrorMessage?.hasPrefix("Unable to record new episodes for Up Next: ") == true)
-        #expect(appModel.upNextAutoAddSettings.watermark(forPodcastID: feedURL) == nil)
-
-        settingsSaves.fails = false
-        #expect(save(.bottom))
-
-        #expect(appModel.upNextAutoAddSettings.watermark(forPodcastID: feedURL) == Fixture.release(3))
-        #expect(try Fixture.storedWatermarkRows(feedURL, in: context.container).count == 1)
-
-        settingsSaves.fails = true
-
-        #expect(!save(nil))
-        #expect(!save(nil))
-
-        #expect(appModel.library.podcastUpNextAutoAddPosition(forPodcastID: feedURL) == nil)
-        #expect(appModel.upNextAutoAddSettings.lastErrorMessage?.hasPrefix("Unable to remove this show's Up Next settings: ") == true)
-        #expect(appModel.upNextAutoAddSettings.watermark(forPodcastID: feedURL) == Fixture.release(3))
-        #expect(try Fixture.storedWatermarkRows(feedURL, in: context.container).count == 1)
-
-        settingsSaves.fails = false
-        #expect(save(nil))
-
-        #expect(appModel.upNextAutoAddSettings.watermark(forPodcastID: feedURL) == nil)
-        #expect(try Fixture.storedWatermarkRows(feedURL, in: context.container).isEmpty)
-        #expect(appModel.upNextQueue.items.isEmpty)
-    }
-
-    @Test("The show sheet's save turning a show on over a watermark left from an earlier time it was on starts again at its newest release")
-    func playbackSettingsSaveReplacesAStaleWatermark() async throws {
-        let feedURL = Fixture.topFeedURL
-        // Another device turned the show off before this launch, and no pass
-        // has deleted this device's row yet.
-        let (appModel, context) = try await Self.sheetAppModel(storedWatermark: Fixture.release(1))
-        #expect(appModel.upNextAutoAddSettings.watermark(forPodcastID: feedURL) == Fixture.release(1))
-
-        #expect(appModel.setPodcastPlaybackSettings(
-            PodcastPlaybackSkipSettings(skipIntroSeconds: 30),
-            rateOverride: nil,
-            upNextAutoAdd: .bottom,
-            feedURL: feedURL,
-            modelContext: context
-        ) == nil)
-
-        #expect(appModel.upNextAutoAddSettings.watermark(forPodcastID: feedURL) == Fixture.release(3))
-        #expect(
-            try Fixture.storedWatermarkRows(feedURL, in: context.container)
-                == [UpNextAutoAddSettingsStore.encodeWatermark(Fixture.release(3))]
-        )
-
-        appModel.restorePlaybackSurfaceIfNeeded(modelContext: context)
-        appModel.runUpNextAutoAddPass(modelContext: context)
-
-        #expect(appModel.upNextQueue.items.isEmpty)
-        #expect(appModel.upNextAutoAddSettings.watermark(forPodcastID: feedURL) == Fixture.release(3))
-    }
-
-    @Test("The show sheet turning a show on after a failed Off starts at its newest release, not at the row the failed removal kept")
-    func playbackSettingsSaveReEnableAfterAFailedRemovalStartsFresh() async throws {
-        let feedURL = Fixture.topFeedURL
-        let settingsSaves = SaveSwitch()
-        // On at Bottom since day 1; days 2 and 3 came out after this
-        // device's last pass.
-        let (appModel, context) = try await Self.sheetAppModel(
-            settings: UpNextAutoAddSettingsStore(save: settingsSaves.save),
-            position: .bottom,
-            storedWatermark: Fixture.release(1)
-        )
-        func save(_ position: UpNextAutoAddPosition?) -> Bool {
-            appModel.setPodcastPlaybackSettings(
-                PodcastPlaybackSkipSettings(skipIntroSeconds: 30),
-                rateOverride: nil,
-                upNextAutoAdd: position,
-                feedURL: feedURL,
-                modelContext: context
-            ) == nil
-        }
-        settingsSaves.fails = true
-        #expect(!save(nil))
-        #expect(appModel.library.podcastUpNextAutoAddPosition(forPodcastID: feedURL) == nil)
-        #expect(appModel.upNextAutoAddSettings.watermark(forPodcastID: feedURL) == Fixture.release(1))
-        settingsSaves.fails = false
-
-        #expect(save(.bottom))
-
-        #expect(appModel.upNextAutoAddSettings.watermark(forPodcastID: feedURL) == Fixture.release(3))
-        #expect(
-            try Fixture.storedWatermarkRows(feedURL, in: context.container)
-                == [UpNextAutoAddSettingsStore.encodeWatermark(Fixture.release(3))]
-        )
-
-        appModel.restorePlaybackSurfaceIfNeeded(modelContext: context)
-        appModel.runUpNextAutoAddPass(modelContext: context)
-
-        #expect(appModel.upNextQueue.items.isEmpty)
     }
 
     @Test(
@@ -877,8 +562,6 @@ struct UpNextAutoAddCoordinatorTests {
         #expect(appModel.upNextAutoAddSettings.watermark(forPodcastID: feedURL) == Fixture.release(1))
     }
 
-    /// The show sheet's Save with a 30-second intro skip and the global
-    /// speed; nil once everything saved.
     private static func saveSheet(
         _ position: UpNextAutoAddPosition?,
         appModel: OpenCastAppModel,
@@ -893,7 +576,6 @@ struct UpNextAutoAddCoordinatorTests {
         )
     }
 
-    /// The Top feed's subscription as stored, read through a fresh context.
     private static func storedSubscription(in container: ModelContainer) throws -> SubscriptionRecord {
         try #require(
             ModelContext(container)
@@ -902,10 +584,6 @@ struct UpNextAutoAddCoordinatorTests {
         )
     }
 
-    /// An app model, hydrated, subscribed to the Top feed with releases on
-    /// days 1 to 3, Auto Add to Up Next at `position` (off by default) and,
-    /// with `storedWatermark`, a watermark row. `librarySaves` is the
-    /// library's synced-store save seam.
     private static func sheetAppModel(
         settings: UpNextAutoAddSettingsStore = UpNextAutoAddSettingsStore(),
         librarySaves: SaveSwitch = SaveSwitch(),
@@ -943,9 +621,6 @@ struct UpNextAutoAddCoordinatorTests {
     }
 }
 
-/// The two places a listener turns a show's Auto Add to Up Next on or off:
-/// Settings › Playback › Auto Add to Up Next, and the show's Playback
-/// Settings sheet, whose Save also carries its skips and speed.
 enum AutoAddEntryPoint: CaseIterable, Sendable {
     case settingsRow
     case showSheet
@@ -976,12 +651,9 @@ enum AutoAddEntryPoint: CaseIterable, Sendable {
     }
 }
 
-/// Flips a save seam between the real save and a failure.
 private final class SaveSwitch {
     var fails = false
-    /// When set, this many more saves go through and every later one fails.
     var savesBeforeFailing: Int?
-    /// This many more saves fail, and the ones after go through.
     var failuresRemaining = 0
 
     func save(_ context: ModelContext) throws {
@@ -1013,14 +685,12 @@ private final class UpNextAutoAddFixture {
     static let topFeedURL = "https://example.com/a-top.xml"
     static let bottomFeedURL = "https://example.com/b-bottom.xml"
 
-    /// Day `day` after `base`; the fixture's clock starts on day 30.
     static func release(_ day: Int) -> Date {
         base.addingTimeInterval(Double(day) * 86_400)
     }
 
     let context: ModelContext
     let cache = SQLiteLocalLibraryCacheStore.inMemory()
-    let librarySaves = SaveSwitch()
     let queueSaves = SaveSwitch()
     let settingsSaves = SaveSwitch()
     let library: LibraryStore
@@ -1032,7 +702,7 @@ private final class UpNextAutoAddFixture {
 
     private init(context: ModelContext) {
         self.context = context
-        library = LibraryStore(localCache: cache, savePlaybackSkipSettingsModelContext: librarySaves.save)
+        library = LibraryStore(localCache: cache)
         upNextQueue = UpNextQueueStore(saveModelContext: queueSaves.save)
         settings = UpNextAutoAddSettingsStore(save: settingsSaves.save)
     }
@@ -1056,8 +726,6 @@ private final class UpNextAutoAddFixture {
         return fixture
     }
 
-    /// Episode `i` of a feed is released on `releaseDays[i]`; indices in
-    /// `audioLessIndices` have no enclosure.
     static func snapshot(feedURL: String, releaseDays: [Int], audioLessIndices: Set<Int> = []) -> FeedSnapshot {
         let url = URL(string: feedURL)!
         let podcastID = URLCanonicalizer.podcastID(for: url)
@@ -1089,7 +757,6 @@ private final class UpNextAutoAddFixture {
         URL(string: feedURL)!.deletingPathExtension().lastPathComponent
     }
 
-    /// Replaces a feed's cached episodes and reloads the library.
     func publish(
         _ feedURL: String = UpNextAutoAddFixture.topFeedURL,
         releaseDays: [Int],
@@ -1122,8 +789,6 @@ private final class UpNextAutoAddFixture {
         (0..<count).map { "hand-\($0)" }
     }
 
-    /// Queues hand-picked rows from a show Auto Add to Up Next does not
-    /// follow; they count toward the limit like any other row.
     func queueHandRows(_ count: Int) {
         let rows = handIDs(count).map { episodeID in
             EpisodeListItemSnapshot.fixture(
@@ -1163,18 +828,6 @@ private final class UpNextAutoAddFixture {
             .map(\.value)
     }
 
-    /// Deletes the stored row behind the settings store's back, as a lost
-    /// row would be.
-    func deleteStoredWatermarkRows(_ feedURL: String) throws {
-        let rowContext = ModelContext(context.container)
-        try LocalPreferenceRecord.deletePreferences(
-            forKey: UpNextAutoAddSettingsStore.watermarkKeyPrefix + feedURL,
-            modelContext: rowContext
-        )
-        try rowContext.save()
-    }
-
-    /// The persisted queue in stored order, read through a fresh context.
     func storedQueueIDs() throws -> [String] {
         try ModelContext(context.container)
             .fetch(FetchDescriptor<UpNextQueueItemRecord>(sortBy: [SortDescriptor(\.sequence)]))

@@ -1,10 +1,8 @@
 import Foundation
 import OpenCastTranscription
 
-/// Selects the segments a recap covers and trims them to a token budget
-/// measured with the on-device tokenizer, which matches PCC's count. Trimming
-/// always drops the earliest segments, so a "so far" window loses its oldest
-/// samples before any of its recent fifteen minutes.
+/// The on-device tokenizer matches PCC's count. Trimming drops the earliest segments, so a "so
+/// far" window loses its oldest samples before any of its recent fifteen minutes.
 nonisolated enum TranscriptRecapWindowBuilder {
     static let defaultTokenBudget = 6_000
     static let minimumTokenBudget = 1_000
@@ -19,10 +17,6 @@ nonisolated enum TranscriptRecapWindowBuilder {
     private static let estimatedCharactersPerToken = 4
     private static let promptTimeLocale = Locale(identifier: "en_US_POSIX")
 
-    /// The segments the window would cover before any budgeting; nil when
-    /// the listener has not played far enough for the kind or no transcript
-    /// precedes the playhead. A transcript shorter than the playhead (the
-    /// audio outran it, or it is simply short) is covered to its end.
     static func candidateSegments(
         kind: TranscriptRecapWindowKind,
         segments: [OpenCastTranscriptSegment],
@@ -85,8 +79,6 @@ nonisolated enum TranscriptRecapWindowBuilder {
         )
     }
 
-    /// One line per segment, `[#id m:ss] text`, with a gap marker wherever
-    /// the ids jump so the model knows a stretch was omitted.
     static func promptText(for segments: [OpenCastTranscriptSegment]) -> String {
         var lines: [String] = []
         lines.reserveCapacity(segments.count)
@@ -127,8 +119,6 @@ nonisolated enum TranscriptRecapWindowBuilder {
         }
     }
 
-    /// How many leading segments to drop so the remaining prompt text is at
-    /// most `targetCharacters` long; always leaves one segment.
     private static func dropCount(
         from segments: [OpenCastTranscriptSegment],
         toFitCharacters targetCharacters: Int

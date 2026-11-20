@@ -1,12 +1,10 @@
 import SwiftUI
 
-/// A utility circle's diameter and label fonts. The scaled 52 pt circle never
-/// grows past the resolved play-button diameter at the same Dynamic Type size,
-/// and never shrinks below the 44 pt tap target.
+/// The diameter stays between the 44 pt tap target and the play-button diameter resolved at
+/// the same Dynamic Type size.
 nonisolated struct PlayerUtilityCircleSize: Equatable {
-    /// title3's and body's share of the default circle. A circle clamped to
-    /// the play button keeps these proportions; Dynamic Type alone would
-    /// overflow it, so the clamped labels take an explicit point size.
+    /// A circle clamped to the play button keeps these shares of the default circle: Dynamic Type
+    /// alone would overflow it.
     private static let glyphShare = 20.0 / PlayerUtilityCircleChrome.defaultDiameter
     private static let speedTextShare = 17.0 / PlayerUtilityCircleChrome.defaultDiameter
 

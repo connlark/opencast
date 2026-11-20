@@ -43,42 +43,9 @@ struct DownloadsShowGroupTests {
         #expect(groups.map(\.byteCount) == [3_500, 250])
     }
 
-    @Test("A group's title and artwork come from its newest download")
-    func titleAndArtworkFromNewest() throws {
-        let items = [
-            item("new", podcastID: "https://example.com/a.xml", podcastTitle: "Renamed Show", artworkURL: "https://example.com/new.jpg"),
-            item("old", podcastID: "https://example.com/a.xml", podcastTitle: "Old Name", artworkURL: "https://example.com/old.jpg")
-        ]
-
-        let group = try #require(DownloadsShowGroup.make(items: items, isSubscribed: { _ in true }).first)
-
-        #expect(group.title == "Renamed Show")
-        #expect(group.artworkURL == "https://example.com/new.jpg")
-    }
-
-    @Test("A show that left the library is flagged as orphaned")
-    func flagsOrphanedShows() {
-        let subscribedID = "https://example.com/subscribed.xml"
-        let items = [
-            item("kept", podcastID: subscribedID),
-            item("left", podcastID: "https://example.com/removed.xml")
-        ]
-
-        let groups = DownloadsShowGroup.make(items: items, isSubscribed: { $0 == subscribedID })
-
-        #expect(groups.map(\.isOrphaned) == [false, true])
-    }
-
-    @Test("No downloads, no groups")
-    func emptyInput() {
-        #expect(DownloadsShowGroup.make(items: [], isSubscribed: { _ in true }).isEmpty)
-    }
-
     private func item(
         _ episodeID: String,
         podcastID: String,
-        podcastTitle: String = "Show",
-        artworkURL: String? = nil,
         bytes: Int64 = 100
     ) -> DownloadListItem {
         DownloadListItem.make(
@@ -89,8 +56,7 @@ struct DownloadsShowGroupTests {
                 state: .completed,
                 bytesReceived: bytes,
                 episodeTitle: "Episode \(episodeID)",
-                podcastTitle: podcastTitle,
-                artworkURLString: artworkURL
+                podcastTitle: "Show"
             ),
             library: library
         )

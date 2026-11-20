@@ -1,9 +1,7 @@
 import Foundation
 
-/// The audio container a completed download holds. AVFoundation, AVAudioFile
-/// and Speech pick a local file's reader from its extension, so a download
-/// whose enclosure URL names no audio extension is named after the format
-/// its bytes or its response prove.
+/// AVFoundation, AVAudioFile and Speech pick a local file's reader from its extension, so a
+/// download without an audio extension is named after the format its bytes prove.
 nonisolated enum EpisodeDownloadAudioFormat: String, Sendable {
     case mp3, aac, m4a, ogg, wav, flac, aiff, caf
 
@@ -41,9 +39,7 @@ nonisolated enum EpisodeDownloadAudioFormat: String, Sendable {
         knownExtensions.contains(extensionName.lowercased())
     }
 
-    /// The format a container or frame header proves. An ID3v2 tag proves
-    /// nothing (MP3 and ADTS both carry one), so a tagged file is classified
-    /// only by `sniff(fileAt:)`, which steps over the tag.
+    /// An ID3v2 tag proves nothing (MP3 and ADTS both carry one); `sniff(fileAt:)` steps over it.
     static func sniff(_ header: Data) -> Self? {
         let bytes = Array(header.prefix(headerByteCount))
         func hasASCII(_ signature: String, at offset: Int) -> Bool {
@@ -134,8 +130,6 @@ nonisolated enum EpisodeDownloadAudioFormat: String, Sendable {
         return formatsByMIMEType[essence.trimmingCharacters(in: .whitespaces).lowercased()]
     }
 
-    /// The lowercased extension of a response's suggested filename when it is
-    /// a known audio extension.
     static func fromFilename(_ filename: String?) -> String? {
         guard let filename, let dotIndex = filename.lastIndex(of: ".") else {
             return nil

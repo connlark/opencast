@@ -1,10 +1,8 @@
-/// Which original segments one coalesced unit covers.
 public struct ChaptersUnitRemap: Sendable, Hashable {
     public var originalStartID: Int64
     public var originalEndID: Int64
 }
 
-/// The model-facing view of a Chapters & Summary request.
 public struct ChaptersPreparedRequest: Sendable, Hashable {
     public var modelRequest: TranscriptAnalysisRequest
     /// `nil` on the raw path. Otherwise model ids are zero-based unit
@@ -12,10 +10,7 @@ public struct ChaptersPreparedRequest: Sendable, Hashable {
     public var remap: [ChaptersUnitRemap]?
 }
 
-/// Deterministic segment coalescing for dense, long transcripts: the
-/// model's id discipline degrades with the number of ids in the prompt, so
-/// transcripts above the threshold are joined into units with a private
-/// remap back to the original ids.
+/// The model's id discipline degrades with the number of ids, so long transcripts are coalesced.
 public enum ChaptersPreparation {
     public static let tooLong = "transcript_too_long"
 
@@ -72,9 +67,6 @@ public enum ChaptersPreparation {
         }
     }
 
-    /// Before adding each next segment, close the current unit when it
-    /// already spans the minimum, joining would exceed the character limit,
-    /// or the silence gap is too long.
     static func coalesce(
         _ segments: [AnalysisSegment],
         policy: ChaptersSummaryPolicy

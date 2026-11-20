@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Calm explanation for every non-available state, with Apple's own
-/// limit-increase flow offered only when the quota is the reason.
 struct TranscriptIntelligenceUnavailableView: View {
     let availability: TranscriptIntelligenceAvailability
     var featureName = "Recap"

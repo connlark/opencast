@@ -1,14 +1,9 @@
 import Foundation
 
-/// The app's hard bounds on every bundle value. Each maximum is the limit the
-/// workers' validators were qualified with (`analysis-policy.schema.json`
-/// states the same numbers and the generator's tests tie them to the worker
-/// constants), so a signed bundle may only tighten. One value out of bounds
-/// rejects the whole bundle. Widening a bound is an app release plus the
-/// golden suite.
+/// Each maximum is a limit the workers were qualified with, so a signed bundle may only tighten.
+/// `analysis-policy.schema.json` states the same numbers.
 public enum AnalysisPolicyClamp {
-    /// Inclusive bounds by JSON path. Model-entry paths cover every entry in
-    /// the list.
+    /// Model-entry paths have no index: they bound every entry in the list.
     public static let bounds: [String: ClosedRange<Double>] = [
         "features.ad_detection.window.segments": 200...800,
         "features.ad_detection.window.overlap": 60...120,
@@ -36,16 +31,12 @@ public enum AnalysisPolicyClamp {
         "trial.lifetime_units": 0...5,
     ]
 
-    /// Longest prompt, in UTF-8 bytes.
     public static let maximumPromptBytes = 65_536
-    /// Largest response schema, in UTF-8 bytes of its compact JSON.
     public static let maximumResponseSchemaBytes = 65_536
-    /// Longest picker label, in Unicode scalars.
     public static let maximumLabelScalars = 64
     public static let maximumVersionHeaders = 8
 
-    /// Checks every value and relation; the first violation rejects the
-    /// bundle. Does not check `minAppBuild` (the baked copy is exempt).
+    /// Leaves the app-build comparison to the caller: the baked copy is exempt from `minAppBuild`.
     public static func validate(_ bundle: AnalysisPolicyBundle) throws(AnalysisPolicyRejection) {
         guard bundle.schemaVersion == 1 else {
             throw .unsupportedSchemaVersion(bundle.schemaVersion)
@@ -196,7 +187,7 @@ public enum AnalysisPolicyClamp {
         }
     }
 
-    /// Model ids are interpolated into request paths: 1-128 of `[A-Za-z0-9._-]`.
+    /// Model ids are interpolated into request paths.
     static func isValidModelID(_ value: String) -> Bool {
         (1...128).contains(value.utf8.count) && value.utf8.allSatisfy { byte in
             (byte >= 0x30 && byte <= 0x39) || (byte >= 0x41 && byte <= 0x5A) || (byte >= 0x61 && byte <= 0x7A)
@@ -204,11 +195,7 @@ public enum AnalysisPolicyClamp {
         }
     }
 
-    /// A key page, checked on the bundle's raw text exactly as the generator
-    /// checks it (before any `URL` normalises it): at most 256 bytes,
-    /// `https://`, a host of lowercase letters, digits, dots and hyphens,
-    /// then nothing or a safe path, so no user info, port, query, fragment,
-    /// encoded byte or non-ASCII character passes.
+    /// Checks the raw text, before any `URL` normalises it.
     static func isValidKeyPage(_ raw: String) -> Bool {
         let scheme = "https://"
         guard raw.utf8.count <= 256, raw.hasPrefix(scheme) else { return false }
@@ -222,7 +209,6 @@ public enum AnalysisPolicyClamp {
         return hostIsValid && (path.isEmpty || isSafePath(path))
     }
 
-    /// The host of an `https` URL with no user info, port, query or fragment.
     static func httpsHost(_ url: URL) -> String? {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               components.scheme == "https",
@@ -236,7 +222,6 @@ public enum AnalysisPolicyClamp {
         return host
     }
 
-    /// Visible ASCII only, as the generator requires.
     static func isSafePath(_ path: String) -> Bool {
         path.hasPrefix("/") && path.utf8.count <= 256 && path.utf8.allSatisfy { $0 >= 0x21 && $0 < 0x7F }
             && !path.contains("..") && !path.contains("//")

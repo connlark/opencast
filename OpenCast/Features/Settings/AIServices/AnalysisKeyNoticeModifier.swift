@@ -1,8 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// Presents the one-time key notice for a gate, from the context that owns
-/// it (beside that context's ad-detection mode dialog).
 struct AnalysisKeyNoticeModifier: ViewModifier {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
@@ -14,9 +12,7 @@ struct AnalysisKeyNoticeModifier: ViewModifier {
             .sheet(isPresented: $gate.isNoticePresented, onDismiss: gate.didDismiss) {
                 AnalysisKeyNoticeSheet(onOK: ok, onLearnMore: learnMore)
                     .environment(appModel)
-                    // Now Playing styles its content; the notice reads as an
-                    // ordinary sheet wherever it comes from (the layout sets
-                    // its own colors).
+                    // Now Playing styles its content; this keeps the notice an ordinary sheet.
                     .font(.body)
             }
             .sheet(item: $gate.helpDestination) { destination in

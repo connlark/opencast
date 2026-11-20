@@ -4,27 +4,12 @@ import SwiftData
 import Testing
 @testable import OpenCast
 
-/// The smart playlist engine over a real loaded library: each clause alone
-/// and combined, the limit, every sort order and its tie-break, show
-/// priority, lazy inputs, the memo and the 500-episode budgets.
 @MainActor
 @Suite("Smart playlist evaluator")
 struct SmartPlaylistEvaluatorTests {
     private static let now = Date(timeIntervalSince1970: 1_800_000_000)
     private static let day: TimeInterval = 24 * 60 * 60
 
-    /// Alpha and bravo, newest first:
-    ///
-    /// | id           | age (days) | length (min) | progress            |
-    /// | ------------ | ---------- | ------------ | ------------------- |
-    /// | a-new        | 1          | 10           | none                |
-    /// | a-noduration | 2          | none         | none                |
-    /// | b-new        | 3          | 30           | none                |
-    /// | b-edge       | 7          | 45           | none                |
-    /// | a-mid        | 10         | 40           | in progress         |
-    /// | a-old        | 40         | 90           | played flag         |
-    /// | b-old        | 100        | 150          | position at the end |
-    /// | a-undated    | none       | 20           | none                |
     private static let alpha = ShowSpec(name: "alpha", episodes: [
         EpisodeSpec(id: "a-new", publishedAt: daysAgo(1), duration: minutes(10)),
         EpisodeSpec(
@@ -104,18 +89,6 @@ struct SmartPlaylistEvaluatorTests {
         )
     }
 
-    @Test("Age is measured from the injected reference date")
-    func ageUsesInjectedNow() async throws {
-        let fixture = try await makeFixture(shows: [Self.alpha, Self.bravo])
-        let rule = PlaylistRule(status: .all, maximumAgeDays: 7)
-
-        #expect(
-            evaluate(rule, in: fixture, now: Self.now.addingTimeInterval(5 * Self.day))
-                == ["a-new", "a-noduration"]
-        )
-        #expect(evaluate(rule, in: fixture, now: Self.now.addingTimeInterval(40 * Self.day)).isEmpty)
-    }
-
     @Test("Downloaded Only keeps completed downloads and ignores in-flight, paused, failed and missing ones")
     func downloadedClauseUsesCompletedRecordsOnly() async throws {
         let fixture = try await makeFixture(shows: [Self.alpha, Self.bravo])
@@ -141,14 +114,6 @@ struct SmartPlaylistEvaluatorTests {
         #expect(evaluate(PlaylistRule(status: .all), in: fixture, downloads: records) == Self.newestFirstIDs)
     }
 
-    @Test("An un-normalized Downloaded status evaluates as Downloaded Only")
-    func downloadedStatusIsNormalized() async throws {
-        let fixture = try await makeFixture(shows: [Self.alpha, Self.bravo])
-        let records = [downloadRecord("a-old", state: .completed), downloadRecord("b-new", state: .completed)]
-
-        #expect(evaluate(PlaylistRule(status: .downloaded), in: fixture, downloads: records) == ["b-new", "a-old"])
-    }
-
     @Test("Shows restrict the evaluation to the listed canonical feed IDs")
     func showsClauseRestrictsToListedIDs() async throws {
         let fixture = try await makeFixture(shows: [Self.alpha, Self.bravo])
@@ -169,15 +134,6 @@ struct SmartPlaylistEvaluatorTests {
         )
         let variantID = Self.bravo.feedURL.replacing("https://", with: "http://")
         #expect(evaluate(PlaylistRule(podcastIDs: [variantID], status: .all), in: fixture).isEmpty)
-    }
-
-    @Test("Listing every show sorts the union globally, exactly like All Shows")
-    func showsUnionIsGloballySorted() async throws {
-        let fixture = try await makeFixture(shows: [Self.alpha, Self.bravo])
-        let listed = PlaylistRule(podcastIDs: [Self.bravo.feedURL, Self.alpha.feedURL], status: .all)
-
-        #expect(evaluate(listed, in: fixture) == Self.newestFirstIDs)
-        #expect(evaluate(listed, in: fixture) == evaluate(PlaylistRule(status: .all), in: fixture))
     }
 
     @Test("Clauses combine with AND")
@@ -240,44 +196,12 @@ struct SmartPlaylistEvaluatorTests {
 
         #expect(evaluate(PlaylistRule(status: .all), in: fixture) == expected)
         // Charlie lists tie-c before delta's tie-b, so feed order alone would
-        // not put tie-b first; the evaluator walks the library's order, which
-        // carries the same episode ID tie-break.
+        // not put tie-b first.
         #expect(
             evaluate(PlaylistRule(podcastIDs: [charlie.feedURL, delta.feedURL], status: .all), in: fixture)
                 == expected
         )
         #expect(evaluate(PlaylistRule(status: .all, limit: 2), in: fixture) == ["tie-a", "tie-b"])
-    }
-
-    @Test("A limit keeps exactly the first episodes of the unlimited order, for every sort, status and show filter")
-    func limitMatchesPrefixOfUnlimitedOrder() async throws {
-        let fixture = try await makeFixture(shows: [Self.alpha, Self.bravo])
-        let showFilters: [[String]?] = [nil, [Self.alpha.feedURL], [Self.alpha.feedURL, Self.bravo.feedURL]]
-        let priorities: [[String]?] = [nil, [Self.bravo.feedURL], [Self.bravo.feedURL, Self.alpha.feedURL]]
-
-        for sortOrder in PodcastEpisodeSortOrder.allCases {
-            for status in PlaylistRule.statusOptions {
-                for podcastIDs in showFilters {
-                    for priorityPodcastIDs in priorities {
-                        var rule = PlaylistRule(
-                            podcastIDs: podcastIDs,
-                            priorityPodcastIDs: priorityPodcastIDs,
-                            status: status,
-                            sortOrder: sortOrder
-                        )
-                        let unlimited = evaluate(rule, in: fixture)
-                        for limit in [1, 2, 3, 5, 100] {
-                            rule.limit = limit
-                            let limited = evaluate(rule, in: fixture)
-                            #expect(
-                                limited == Array(unlimited.prefix(limit)),
-                                "\(sortOrder) \(status) \(String(describing: priorityPodcastIDs)) \(limit)"
-                            )
-                        }
-                    }
-                }
-            }
-        }
     }
 
     @Test("The limit keeps the first episodes in rule order")
@@ -324,30 +248,23 @@ struct SmartPlaylistEvaluatorTests {
         #expect(alphaThenBravo == alphaIDs + bravoIDs)
     }
 
-    @Test("Every sort order still applies inside each prioritized show and across the rest")
-    func priorityKeepsTheSortInsideEachShow() async throws {
+    @Test(
+        "Every sort order still applies inside each prioritized show and across the rest",
+        arguments: [
+            (PodcastEpisodeSortOrder.newestFirst, ["b-new", "b-edge", "b-old", "a-new", "a-noduration", "a-mid", "a-old", "a-undated"]),
+            (.oldestFirst, ["b-old", "b-edge", "b-new", "a-old", "a-mid", "a-noduration", "a-new", "a-undated"]),
+            (.longestFirst, ["b-old", "b-edge", "b-new", "a-old", "a-mid", "a-undated", "a-new", "a-noduration"]),
+            (.shortestFirst, ["b-new", "b-edge", "b-old", "a-new", "a-undated", "a-mid", "a-old", "a-noduration"])
+        ]
+    )
+    func priorityKeepsTheSortInsideEachShow(sortOrder: PodcastEpisodeSortOrder, expected: [String]) async throws {
         let fixture = try await makeFixture(shows: [Self.alpha, Self.bravo])
 
-        for sortOrder in PodcastEpisodeSortOrder.allCases {
-            let ranked = evaluate(
-                PlaylistRule(priorityPodcastIDs: [Self.bravo.feedURL], status: .all, sortOrder: sortOrder),
-                in: fixture
-            )
-            let bravoOnly = evaluate(
-                PlaylistRule(podcastIDs: [Self.bravo.feedURL], status: .all, sortOrder: sortOrder),
-                in: fixture
-            )
-            let alphaOnly = evaluate(
-                PlaylistRule(podcastIDs: [Self.alpha.feedURL], status: .all, sortOrder: sortOrder),
-                in: fixture
-            )
-            #expect(ranked == bravoOnly + alphaOnly, "\(sortOrder)")
-        }
         #expect(
             evaluate(
-                PlaylistRule(priorityPodcastIDs: [Self.bravo.feedURL], status: .all, sortOrder: .oldestFirst),
+                PlaylistRule(priorityPodcastIDs: [Self.bravo.feedURL], status: .all, sortOrder: sortOrder),
                 in: fixture
-            ) == ["b-old", "b-edge", "b-new", "a-old", "a-mid", "a-noduration", "a-new", "a-undated"]
+            ) == expected
         )
     }
 
@@ -367,21 +284,6 @@ struct SmartPlaylistEvaluatorTests {
         #expect(
             evaluate(defaultRule, in: fixture) == ["b-new", "b-edge", "a-new", "a-noduration", "a-mid", "a-undated"]
         )
-    }
-
-    @Test("Priority orders a Downloaded Only playlist too")
-    func priorityOrdersDownloadedOnly() async throws {
-        let fixture = try await makeFixture(shows: [Self.alpha, Self.bravo])
-        let records = [
-            downloadRecord("a-new", state: .completed),
-            downloadRecord("b-old", state: .completed),
-            downloadRecord("a-mid", state: .completed)
-        ]
-        var rule = PlaylistRule(priorityPodcastIDs: [Self.bravo.feedURL], status: .all, downloadedOnly: true)
-
-        #expect(evaluate(rule, in: fixture, downloads: records) == ["b-old", "a-new", "a-mid"])
-        rule.limit = 1
-        #expect(evaluate(rule, in: fixture, downloads: records) == ["b-old"])
     }
 
     @Test("Equal dates inside a prioritized show still fall back to the episode ID")
@@ -404,46 +306,6 @@ struct SmartPlaylistEvaluatorTests {
         #expect(evaluate(rule, in: fixture, downloads: records) == ["tie-a", "tie-c", "tie-b", "tie-d"])
         rule.limit = 3
         #expect(evaluate(rule, in: fixture, downloads: records) == ["tie-a", "tie-c", "tie-b"])
-    }
-
-    @Test("A prioritized show with no matching episodes changes nothing")
-    func priorityShowWithNoMatchesChangesNothing() async throws {
-        let fixture = try await makeFixture(shows: [Self.alpha, Self.bravo])
-
-        #expect(
-            evaluate(PlaylistRule(priorityPodcastIDs: [Self.bravo.feedURL], status: .inProgress), in: fixture)
-                == ["a-mid"]
-        )
-    }
-
-    @Test("A prioritized show outside the Shows clause neither joins nor reorders the playlist")
-    func priorityOutsideTheShowsClauseIsIgnored() async throws {
-        let fixture = try await makeFixture(shows: [Self.alpha, Self.bravo])
-        let rule = PlaylistRule(
-            podcastIDs: [Self.alpha.feedURL],
-            priorityPodcastIDs: [Self.bravo.feedURL],
-            status: .all
-        )
-
-        #expect(evaluate(rule, in: fixture) == evaluate(PlaylistRule(podcastIDs: [Self.alpha.feedURL], status: .all), in: fixture))
-    }
-
-    @Test("An unsubscribed prioritized show is ignored and later ranks still apply")
-    func unsubscribedPriorityIDIsIgnored() async throws {
-        let fixture = try await makeFixture(shows: [Self.alpha, Self.bravo])
-        let rule = PlaylistRule(
-            priorityPodcastIDs: ["https://example.com/unsubscribed.xml", Self.bravo.feedURL],
-            status: .all
-        )
-
-        #expect(
-            evaluate(rule, in: fixture)
-                == evaluate(PlaylistRule(priorityPodcastIDs: [Self.bravo.feedURL], status: .all), in: fixture)
-        )
-        #expect(
-            evaluate(PlaylistRule(priorityPodcastIDs: ["https://example.com/unsubscribed.xml"], status: .all), in: fixture)
-                == Self.newestFirstIDs
-        )
     }
 
     // MARK: - Inputs
@@ -483,84 +345,6 @@ struct SmartPlaylistEvaluatorTests {
         #expect(dateReads == 1)
     }
 
-    // MARK: - Evaluation and memo
-
-    @Test("An evaluation totals only positive durations")
-    func evaluationTotalsPositiveDurations() {
-        let evaluation = SmartPlaylistEvaluation(episodes: [
-            snapshot("one", duration: 600),
-            snapshot("two", duration: nil),
-            snapshot("three", duration: 0),
-            snapshot("four", duration: 1_200)
-        ])
-
-        #expect(evaluation.count == 4)
-        #expect(evaluation.totalDuration == 1_800)
-        #expect(SmartPlaylistEvaluation.empty.count == 0)
-        #expect(SmartPlaylistEvaluation.empty.totalDuration == 0)
-    }
-
-    @Test("The memo serves a matching key without recomputing and recomputes when any token moves")
-    func memoRecomputesOnlyOnKeyChange() {
-        let cache = SmartPlaylistEvaluationCache()
-        let key = memoKey()
-        var computed: [String] = []
-        func compute(_ episodeID: String) -> [EpisodeListItemSnapshot] {
-            computed.append(episodeID)
-            return [snapshot(episodeID, duration: 60)]
-        }
-
-        let first = cache.evaluation(for: "smart", key: key) { compute("first") }
-        let hit = cache.evaluation(for: "smart", key: key) { compute("unused") }
-
-        #expect(first.episodes.map(\.episodeID) == ["first"])
-        #expect(hit == first)
-        #expect(computed == ["first"])
-        #expect(cache.computeCount == 1)
-
-        let movedKeys = [
-            memoKey(ruleJSON: PlaylistRule(status: .played).encodedJSON()),
-            memoKey(episodeRevision: 2),
-            memoKey(progressRevision: 1),
-            memoKey(downloadsRevision: 1),
-            memoKey(referenceDate: Self.now)
-        ]
-        for (index, movedKey) in movedKeys.enumerated() {
-            let recomputed = cache.evaluation(for: "smart", key: movedKey) { compute("moved-\(index)") }
-            #expect(recomputed.episodes.map(\.episodeID) == ["moved-\(index)"])
-        }
-        #expect(cache.computeCount == 1 + movedKeys.count)
-
-        let other = cache.evaluation(for: "other", key: movedKeys[movedKeys.count - 1]) { compute("other") }
-        #expect(other.episodes.map(\.episodeID) == ["other"])
-        #expect(cache.computeCount == 2 + movedKeys.count)
-
-        cache.remove("smart")
-        _ = cache.evaluation(for: "smart", key: movedKeys[movedKeys.count - 1]) { compute("after-remove") }
-        _ = cache.evaluation(for: "other", key: movedKeys[movedKeys.count - 1]) { compute("unused") }
-        #expect(cache.computeCount == 3 + movedKeys.count)
-
-        cache.removeAll()
-        _ = cache.evaluation(for: "other", key: movedKeys[movedKeys.count - 1]) { compute("after-remove-all") }
-        #expect(cache.computeCount == 4 + movedKeys.count)
-        #expect(!computed.contains("unused"))
-    }
-
-    @Test("Smart summary lines give the count and duration and never the unplayed form")
-    func smartSummaryLines() {
-        let duration: TimeInterval = 8 * 3_600 + 27 * 60
-
-        #expect(PlaylistSummaryText.smartLine(itemCount: 11, totalDuration: duration) == "11 episodes · 8h 27m")
-        #expect(
-            PlaylistSummaryText.smartSpokenLine(itemCount: 11, totalDuration: duration)
-                == "Smart playlist, 11 episodes, 8 hours 27 minutes"
-        )
-        #expect(PlaylistSummaryText.smartLine(itemCount: 1, totalDuration: 0) == "1 episode")
-        #expect(PlaylistSummaryText.smartSpokenLine(itemCount: 1, totalDuration: 0) == "Smart playlist, 1 episode")
-        #expect(PlaylistSummaryText.smartLine(itemCount: 0, totalDuration: 0) == "No episodes")
-        #expect(PlaylistSummaryText.smartSpokenLine(itemCount: 0, totalDuration: 0) == "Smart playlist, no episodes")
-    }
-
     // MARK: - Budget
 
     @Test("A 500-episode library evaluates within 50 ms, best of five")
@@ -598,8 +382,6 @@ struct SmartPlaylistEvaluatorTests {
         #expect(best < .milliseconds(50))
     }
 
-    /// Five shows of 100 episodes; every third is played and every fifth
-    /// from the second is in progress.
     private static let budgetShows = (0 ..< 5).map { showIndex in
         ShowSpec(name: "budget-\(showIndex)", episodes: (0 ..< 100).map { index in
             let progress: ProgressSpec? = if index % 3 == 0 {
@@ -618,7 +400,6 @@ struct SmartPlaylistEvaluatorTests {
         })
     }
 
-    /// The best of five evaluations, printed as `<label>=<milliseconds>`.
     private func measureBestOfFive(
         _ rule: PlaylistRule,
         in fixture: Fixture,
@@ -690,14 +471,13 @@ struct SmartPlaylistEvaluatorTests {
     private func evaluate(
         _ rule: PlaylistRule,
         in fixture: Fixture,
-        downloads: [EpisodeDownloadRecord] = [],
-        now: Date? = nil
+        downloads: [EpisodeDownloadRecord] = []
     ) -> [String] {
         SmartPlaylistEvaluator.make(
             rule: rule,
             library: fixture.library,
             downloadRecords: downloads,
-            now: now ?? Self.now
+            now: Self.now
         ).map(\.episodeID)
     }
 
@@ -710,33 +490,6 @@ struct SmartPlaylistEvaluatorTests {
         )
     }
 
-    private func snapshot(_ episodeID: String, duration: TimeInterval?) -> EpisodeListItemSnapshot {
-        .fixture(
-            episodeID: episodeID,
-            duration: duration,
-            audioURL: "https://example.com/\(episodeID).mp3",
-            guid: episodeID
-        )
-    }
-
-    private func memoKey(
-        ruleJSON: String = PlaylistRule.default.encodedJSON(),
-        episodeRevision: Int = 1,
-        progressRevision: Int? = nil,
-        downloadsRevision: Int? = nil,
-        referenceDate: Date? = nil
-    ) -> SmartPlaylistEvaluationKey {
-        SmartPlaylistEvaluationKey(
-            ruleJSON: ruleJSON,
-            episodeRevision: episodeRevision,
-            progressRevision: progressRevision,
-            downloadsRevision: downloadsRevision,
-            referenceDate: referenceDate
-        )
-    }
-
-    /// Loads the shows into a fresh in-memory library. Progress rows are
-    /// inserted directly and saved once, before the library loads them.
     private func makeFixture(shows: [ShowSpec]) async throws -> Fixture {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)

@@ -1,13 +1,11 @@
 import Foundation
 
-/// Display facts about the opencast-funded trial. The trial worker enforces
-/// the real limits; the app only shows them and picks the route.
+/// Display facts only: the trial worker enforces the real limits.
 public struct AnalysisTrialPolicy: Sendable, Equatable, Decodable {
     public var endpoint: URL
     /// Before this instant every install is served without a unit count.
     public var startsAt: Date
     public var lifetimeUnits: Int
-    /// The Google ad-detection entry the trial runs on.
     public var modelID: String
 
     enum CodingKeys: String, CodingKey {
@@ -18,7 +16,6 @@ public struct AnalysisTrialPolicy: Sendable, Equatable, Decodable {
     }
 }
 
-/// When the in-app notice about provider keys starts. Absent means no notice.
 public struct AnalysisNoticePolicy: Sendable, Equatable, Decodable {
     public var startsAt: Date
 

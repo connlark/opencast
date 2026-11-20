@@ -1,10 +1,5 @@
 import Foundation
 
-/// Backend selection for the podcast directory Worker (the Podcast
-/// Index supplement). The service is unauthenticated and read-only;
-/// DEBUG builds use the development lane with an environment override,
-/// release builds use the production custom domain. A disabled or
-/// unreachable Worker degrades to the Apple-only experience.
 struct PodcastDirectoryBackendConfiguration: Sendable {
     let workerBaseURL: URL
     let isEnabled: Bool
@@ -27,8 +22,6 @@ struct PodcastDirectoryBackendConfiguration: Sendable {
         URL(string: "https://directory.example.com")!
 
     #if DEBUG
-    /// UI tests stay on the deterministic Apple-only path unless a run
-    /// opts in with an explicit base URL override.
     nonisolated static func debug(environment: [String: String]) -> Self {
         let overrideURL = environment["OPENCAST_PODCAST_DIRECTORY_BASE_URL"]
             .flatMap(URL.init(string:))

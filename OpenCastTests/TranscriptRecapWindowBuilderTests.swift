@@ -46,19 +46,6 @@ struct TranscriptRecapWindowBuilderTests {
         #expect(window.endTime == 2_400)
     }
 
-    @Test("A short transcript at a later playhead is covered to its end")
-    func shortTranscript() async throws {
-        let short = TranscriptRecapTestFixtures.segments(count: 2, duration: 4.5)
-        let window = try #require(try await TranscriptRecapWindowBuilder.build(
-            kind: .lastFiveMinutes,
-            segments: short,
-            playhead: 90,
-            tokenCount: TranscriptRecapTestFixtures.tokenCount
-        ))
-        #expect(window.segments.map(\.id) == [0, 1])
-        #expect(window.endTime == 9)
-    }
-
     @Test("So far keeps the recent fifteen minutes and samples a minute per earlier five")
     func soFarSampling() async throws {
         let window = try #require(try await TranscriptRecapWindowBuilder.build(

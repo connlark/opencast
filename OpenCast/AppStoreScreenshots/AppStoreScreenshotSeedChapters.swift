@@ -3,12 +3,8 @@ import Foundation
 import OpenCastTranscription
 import SwiftData
 
-/// Seeds a completed Chapters & Summary analysis for the primary episode so
-/// episode detail renders the generated cards from records alone. Every
-/// currency condition the analysis store checks is satisfied from the same
-/// transcript document the transcript seed wrote: expected policy, matching
-/// fingerprint, whole-second `transcriptUpdatedAt`, normalized segment count,
-/// completed transcript state, and an on-disk document.
+/// The cards render only while every currency field matches the transcript seed's document:
+/// policy, fingerprint, whole-second `transcriptUpdatedAt` and normalized segment count.
 enum AppStoreScreenshotSeedChapters {
     static func seed(
         in context: ModelContext,

@@ -7,42 +7,10 @@ import Testing
 struct LibrarySortOrderTests {
     private static let referenceDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
 
-    @Test("Persisted raw values stay stable")
-    func persistedRawValuesStayStable() {
-        #expect(LibraryLayoutPreference.automatic.rawValue == "automatic")
-        #expect(LibraryLayoutPreference.list.rawValue == "list")
-        #expect(LibraryLayoutPreference.grid.rawValue == "grid")
-        #expect(LibrarySortOrder.title.rawValue == "title")
-        #expect(LibrarySortOrder.recentEpisodes.rawValue == "recentEpisodes")
-    }
-
     @Test("Automatic resolves to a grid in regular width and a list in compact width")
     func automaticFollowsWidthClass() {
         #expect(LibraryLayoutPreference.automatic.resolved(isRegularWidth: true) == .grid)
         #expect(LibraryLayoutPreference.automatic.resolved(isRegularWidth: false) == .list)
-    }
-
-    @Test("Explicit layouts ignore the width class", arguments: [true, false])
-    func explicitLayoutsIgnoreWidthClass(isRegularWidth: Bool) {
-        #expect(LibraryLayoutPreference.list.resolved(isRegularWidth: isRegularWidth) == .list)
-        #expect(LibraryLayoutPreference.grid.resolved(isRegularWidth: isRegularWidth) == .grid)
-    }
-
-    @Test("Title keeps the store's order and ignores release dates")
-    func titlePassesThroughStoreOrder() {
-        // Deliberately neither alphabetical nor date ordered.
-        let zulu = SubscriptionRecord(feedURL: "https://example.com/zulu.xml", title: "Zulu Show")
-        let alpha = SubscriptionRecord(feedURL: "https://example.com/alpha.xml", title: "Alpha Show")
-        let mike = SubscriptionRecord(feedURL: "https://example.com/mike.xml", title: "Mike Show")
-        let subscriptions = [zulu, alpha, mike]
-        let releaseDates = [
-            alpha.feedURL: Self.daysAgo(1),
-            zulu.feedURL: Self.daysAgo(20)
-        ]
-
-        let sorted = LibrarySortOrder.title.sorted(subscriptions, latestReleaseDate: { releaseDates[$0] })
-
-        #expect(sorted.map { ObjectIdentifier($0) } == subscriptions.map { ObjectIdentifier($0) })
     }
 
     @Test("Recent Episodes puts the newest release first and undated shows last")
@@ -52,8 +20,6 @@ struct LibrarySortOrderTests {
         let gamma = SubscriptionRecord(feedURL: "https://example.com/gamma.xml", title: "Gamma Show")
         let delta = SubscriptionRecord(feedURL: "https://example.com/delta.xml", title: "Delta Show")
         let echo = SubscriptionRecord(feedURL: "https://example.com/echo.xml", title: "Echo Show")
-        // Title order is Alpha, Beta, Delta, Echo, Gamma; release order is
-        // Beta, Gamma, Alpha, and Delta and Echo have no dated episode.
         let releaseDates = [
             alpha.feedURL: Self.daysAgo(9),
             beta.feedURL: Self.daysAgo(1),

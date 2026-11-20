@@ -100,9 +100,6 @@ struct EpisodeAdFreePassPresentation: Equatable {
 
     static let cloudVerifying = cloudPreparing(.cloudVerifying, statusText: "Verifying audio…")
 
-    /// Completed parts only, never a byte percentage: an unknown total
-    /// never reads "0 of 0", and all parts sent stays in the upload until
-    /// the runner reports the next phase.
     static func cloudUploadingExactCopy(completedParts: Int, totalParts: Int) -> EpisodeAdFreePassPresentation {
         let statusText = if totalParts <= 0 {
             "Preparing audio upload…"
@@ -153,7 +150,6 @@ struct EpisodeAdFreePassPresentation: Equatable {
         )
     }
 
-    /// The server job keeps running; Resume re-attaches the same job.
     static func remoteParked(_ reason: RemoteTranscriptionJobExit) -> EpisodeAdFreePassPresentation {
         EpisodeAdFreePassPresentation(
             stage: .cloudParked(reason),
@@ -175,8 +171,6 @@ struct EpisodeAdFreePassPresentation: Equatable {
         )
     }
 
-    /// A current analysis whose trusted download is gone: nothing is marked
-    /// for this audio, and a new pass restores the skips.
     static let detached = EpisodeAdFreePassPresentation(
         stage: .idle,
         phase: .idle,

@@ -13,12 +13,10 @@ nonisolated struct PlaylistSummary: Identifiable, Equatable, Sendable {
     var tintKey: String?
     let origin: PlaylistOrigin
     var itemCount: Int
-    /// Sum of the items' stored fallback durations; items without one add
-    /// nothing.
     var totalDuration: TimeInterval
     let createdAt: Date
     var updatedAt: Date
-    /// Up to four distinct shows in item order, for the mosaic cover.
+    /// Up to four distinct shows, in item order.
     var coverPodcastIDs: [String]
 
     var id: String {

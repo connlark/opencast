@@ -3,7 +3,6 @@ import OpenCastTranscription
 import Testing
 @testable import OpenCast
 
-/// Upload-only API fake: serves one scripted geometry and records calls.
 private final class FakeUploadOnlyAPI: RemoteTranscriptionAPI, @unchecked Sendable {
     private let lock = NSLock()
     let partCount: Int
@@ -64,7 +63,6 @@ private final class FakeUploadOnlyAPI: RemoteTranscriptionAPI, @unchecked Sendab
         )
     }
 
-    // Unused surface for these tests.
     func bootstrap() async throws -> OpenCastRemoteTranscriptionBootstrapResponse {
         throw RemoteTranscriptionHTTPError(statusCode: -1, code: "unused", detail: nil)
     }
@@ -171,7 +169,6 @@ struct RemoteTranscriptionUploadSessionTests {
         let api = FakeUploadOnlyAPI(partCount: 3, partSizeBytes: 64)
         let sourceFile = try makeSourceFile(byteCount: 64 * 2 + 10)
 
-        // Parts 1 and 2 already uploaded before the "relaunch".
         let persisted = RemoteTranscriptionUploadSession.PersistedState(
             uploadKeyID: "upload-key-1",
             partSizeBytes: 64,
@@ -201,7 +198,6 @@ struct RemoteTranscriptionUploadSessionTests {
         let completed = try #require(api.completedParts.first)
         #expect(completed.map(\.partNumber) == [1, 2, 3])
         #expect(completed.map(\.etag) == ["etag-1", "etag-2", "etag-3"])
-        // Completion cleans the persisted state.
         #expect(defaults.data(forKey: RemoteTranscriptionUploadSession.defaultsKey(jobID: jobID)) == nil)
     }
 
@@ -236,7 +232,6 @@ struct RemoteTranscriptionUploadSessionTests {
         )
         try await session.run()
 
-        // Stale ETags never survive into a different upload: both parts PUT.
         #expect(transport.putPartNumbers.sorted() == [1, 2])
         #expect(api.completedParts.first?.map(\.etag) == ["etag-1", "etag-2"])
     }

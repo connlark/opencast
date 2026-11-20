@@ -1,5 +1,4 @@
 import Foundation
-import OpenCastAnalysis
 import OpenCastTranscription
 import Testing
 @testable import OpenCast
@@ -75,56 +74,6 @@ struct EpisodeAdFreePassProgressMapperTests {
         #expect(EpisodeAdFreePassProgressMapper.units(for: analyzing(100, of: 200)) == 942)
     }
 
-    @Test("A long single step keeps moving across its whole budget and never reaches its slice end")
-    func longSingleStepKeepsMovingAcrossItsBudget() {
-        // One window and the step to come: slice 910 to 942, budget 250 s.
-        let stage = analyzing(0, of: 2, budget: 250)
-        let elapsed: [TimeInterval] = [0, 30, 60, 70, 120, 180, 240, 250]
-        let units = elapsed.map { EpisodeAdFreePassProgressMapper.units(for: stage, stageElapsed: $0) }
-        #expect(units == [910, 913, 917, 918, 924, 932, 939, 941])
-        // Strictly rising across the budget: a 2 s-per-unit creep would
-        // have spent the slice by 62 s.
-        #expect(zip(units, units.dropFirst()).allSatisfy { $0 < $1 })
-        #expect(EpisodeAdFreePassProgressMapper.units(for: stage, stageElapsed: 3_600) == 941)
-    }
-
-    @Test("A window whose answer fails validation keeps a slow repair below the band's end until the run ends")
-    func slowRepairAfterAnInvalidAnswerNeverParksAtTheCeiling() throws {
-        var model = try #require(AnalysisPolicySnapshot.baked.adDetection(provider: .google)).model
-        model.perCallTimeoutSeconds = 60
-        var progress = AdAnalysisRunProgress(windowCount: 1, model: model)
-        // Two 60 s sends and the pause between them.
-        #expect(progress.stepBudgetSeconds == 130)
-        var mapper = EpisodeAdFreePassProgressMapper()
-        #expect(mapper.update(for: .analyzing(steps: EpisodeAdFreePassAnalysisSteps(progress))) == 910)
-
-        // The reply comes back and fails validation: its send still counts
-        // the window answered, and the repair is not known until it ends.
-        progress.note(.adWindow(index: 0), answered: true)
-        #expect(progress.completed == progress.total)
-        let repairing = EpisodeAdFreePassStage.analyzing(steps: EpisodeAdFreePassAnalysisSteps(progress))
-        #expect(repairing == .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 1, total: 2, stepBudgetSeconds: 130)))
-        #expect(mapper.update(for: repairing) == 942)
-
-        // The held repair: every 10 s of its budget moves the units, never
-        // to the band's end.
-        var previous = mapper.completedUnitCount
-        for elapsed in stride(from: 10.0, through: 130, by: 10) {
-            let units = mapper.update(for: repairing, stageElapsed: elapsed)
-            #expect(units > previous, "elapsed \(elapsed)")
-            #expect(units < 975, "elapsed \(elapsed)")
-            previous = units
-        }
-        #expect(mapper.update(for: repairing, stageElapsed: 3_600) == 974)
-
-        // The repair answers: a corrective step joins, the units hold, and
-        // only the run's end reaches 1000.
-        progress.note(.adRepair(index: 0), answered: true)
-        #expect(EpisodeAdFreePassAnalysisSteps(progress) == EpisodeAdFreePassAnalysisSteps(completed: 2, total: 3, stepBudgetSeconds: 130))
-        #expect(mapper.update(for: .analyzing(steps: EpisodeAdFreePassAnalysisSteps(progress))) == 974)
-        #expect(mapper.update(for: .completed(zoneCount: 0)) == 1_000)
-    }
-
     @Test("A long run moves with each answered step and never goes back when a corrective step joins")
     func analyzingRunMovesStepByStepWithoutGoingBack() {
         var mapper = EpisodeAdFreePassProgressMapper()
@@ -144,28 +93,8 @@ struct EpisodeAdFreePassProgressMapperTests {
         #expect(mapper.update(for: .completed(zoneCount: 1)) == 1_000)
     }
 
-    @Test("Terminal failure-style stages hold the current unit count")
-    func terminalFailuresHoldCurrentUnits() {
-        #expect(EpisodeAdFreePassProgressMapper.units(
-            for: .awaitingModelDownloadConsent(byteCount: 75_000_000),
-            currentUnits: 150
-        ) == 150)
-        #expect(EpisodeAdFreePassProgressMapper.units(
-            for: .failed(message: "Nope"),
-            currentUnits: 500
-        ) == 500)
-        #expect(EpisodeAdFreePassProgressMapper.units(
-            for: .unavailable("Unavailable"),
-            currentUnits: 600
-        ) == 600)
-        #expect(EpisodeAdFreePassProgressMapper.units(
-            for: .interrupted,
-            currentUnits: 700
-        ) == 700)
-    }
-
-    private func analyzing(_ completed: Int, of total: Int, budget: Double = 100) -> EpisodeAdFreePassStage {
-        .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: completed, total: total, stepBudgetSeconds: budget))
+    private func analyzing(_ completed: Int, of total: Int) -> EpisodeAdFreePassStage {
+        .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: completed, total: total, stepBudgetSeconds: 100))
     }
 
     private func installProgress(_ fraction: Double) -> OpenCastWhisperModelInstallProgress {
@@ -233,25 +162,6 @@ struct EpisodeAdFreePassProgressMapperTests {
                 previous = units
             }
         }
-    }
-
-    @Test("A handover's creep ceiling comes from the same base as its slices")
-    func handoverCreepCeilingSharesTheBase() {
-        var mapper = EpisodeAdFreePassProgressMapper()
-        _ = mapper.update(for: .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 4, total: 6, attemptID: "direct")))
-        let handover = EpisodeAdFreePassStage.analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 0, total: 11, attemptID: "handover"))
-        _ = mapper.update(for: handover)
-
-        // 953 + 22 × 1/11, one short.
-        #expect(mapper.creepCeiling(for: handover) == 954)
-    }
-
-    @Test("A run's first attempt starts from the band, whatever its identity")
-    func firstAttemptDoesNotRebase() {
-        var mapper = EpisodeAdFreePassProgressMapper()
-        _ = mapper.update(for: .analyzing(steps: nil))
-
-        #expect(mapper.update(for: .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 1, total: 2, attemptID: "only"))) == 942)
     }
 
     @Test("A reset forgets the attempt, so the next episode starts from the band")

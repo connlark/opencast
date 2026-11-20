@@ -1,7 +1,6 @@
 import Foundation
 
 extension ArtworkPreview {
-    /// Warm 8×8 gradient used only by episode-detail `#Preview`s.
     static var previewSample: ArtworkPreview? {
         var rgbData = Data(capacity: 8 * 8 * 3)
         for row in 0..<8 {

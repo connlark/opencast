@@ -1,6 +1,3 @@
-/// A transport that serves recorded answers instead of calling a provider:
-/// how archived model answers are replayed through the pipeline. A request
-/// with no recorded answer fails with ``AnalysisTransportError/notArchived``.
 public struct AnalysisReplayTransport: AnalysisProviderTransport {
     public let replies: [AnalysisProviderRequest.Purpose: AnalysisProviderReply]
 
@@ -14,8 +11,6 @@ public struct AnalysisReplayTransport: AnalysisProviderTransport {
     }
 }
 
-/// A clock that stands still and never waits, so a replay never runs out of
-/// budget and never sleeps.
 public struct AnalysisFrozenClock: AnalysisClock {
     public init() {}
 

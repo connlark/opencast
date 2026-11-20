@@ -1,4 +1,3 @@
-/// One transcript segment as the analysis services receive it.
 public struct AnalysisSegment: Sendable, Hashable {
     public var id: Int64
     public var start: Double
@@ -30,12 +29,10 @@ public struct AnalysisSegment: Sendable, Hashable {
     }
 }
 
-/// Transcript metadata of an ad-detection request.
 public struct AdAnalysisTranscript: Sendable, Hashable {
     public var languageCode: String
     public var audioDuration: Double
-    /// The feed's declared runtime. When the served file is longer, the
-    /// excess is counted as inserted advertising in the episode ad budget.
+    /// The runtime the feed declares, not the served file's.
     public var declaredDuration: Double?
     public var modelIdentifier: String?
     public var modelVersion: String?
@@ -93,7 +90,6 @@ public struct AdAnalysisTranscript: Sendable, Hashable {
     }
 }
 
-/// An ad-detection request: the episode's identity and its whole transcript.
 public struct AdAnalysisRequest: Sendable, Hashable {
     public var schemaVersion: UInt16
     public var requestID: String
@@ -135,7 +131,6 @@ public struct AdAnalysisRequest: Sendable, Hashable {
         ]
     )
 
-    /// Reads the request JSON the ad-analysis service accepts.
     public init(json: JSONValue) throws(StrictDecodingError) {
         let fields = try StrictDecoding.fields(json, Self.shape)
         schemaVersion = try StrictDecoding.unsigned(fields["schema_version"]!, as: UInt16.self)
@@ -157,8 +152,6 @@ public struct AdAnalysisRequest: Sendable, Hashable {
         self.segments = segments
     }
 
-    /// The same request restricted to `range` of its segments, as one
-    /// analysis window sees it.
     func window(_ range: Range<Int>) -> AdAnalysisRequest {
         var window = self
         window.segments = Array(segments[range])

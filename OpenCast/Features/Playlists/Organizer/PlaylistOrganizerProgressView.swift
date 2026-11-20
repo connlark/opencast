@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// The request in flight. A long Private Cloud Compute turn gets a second
-/// line after ten seconds, so the wait reads as progress rather than a hang.
 struct PlaylistOrganizerProgressView: View {
     private static let stillWorkingDelay: TimeInterval = 10
 
@@ -31,8 +29,6 @@ struct PlaylistOrganizerProgressView: View {
         let remaining = Self.stillWorkingDelay - Date.now.timeIntervalSince(startedAt)
         do {
             try await Task.sleep(for: .seconds(max(remaining, 0)))
-        } catch is CancellationError {
-            return
         } catch {
             return
         }

@@ -5,10 +5,8 @@ import SwiftData
 @Observable
 final class SyncStatusStore {
     private static let accountStatusRefreshInterval: TimeInterval = 30
-    /// How long launch and foreground work waits for an account answer before
-    /// carrying on without one. The check is a system round trip that
-    /// normally answers in milliseconds and has taken over 30 seconds on a
-    /// cold system; nothing the app shows should hang on it for that long.
+    /// The account check has taken over 30 seconds on a cold system, so launch and foreground
+    /// work stop waiting for it after this.
     static let defaultAccountStatusPatience: Duration = .seconds(10)
 
     private(set) var accountStatus: SyncAccountStatus = .notChecked
@@ -36,10 +34,8 @@ final class SyncStatusStore {
         self.accountStatusPatience = accountStatusPatience
     }
 
-    /// Refreshes the account status, waiting for the answer only as long as
-    /// the store's patience. A check that has not answered by then keeps
-    /// running and publishes its status whenever it arrives; the caller gets
-    /// the status known so far (`.checking` on a first check) and moves on.
+    /// A check still running at the deadline keeps going and publishes its status later; the
+    /// caller gets the status known so far.
     @discardableResult
     func refreshAccountStatusWithinPatience(force: Bool = false) async -> SyncAccountStatus {
         guard accountStatusRefreshTask != nil || force || shouldRefreshAccountStatus() else {
@@ -188,8 +184,6 @@ final class SyncStatusStore {
     }
 }
 
-/// Resumes a patience-bounded account wait exactly once, whichever of the
-/// answer and the timeout comes first.
 private final class AccountStatusWait {
     private var isFinished = false
 

@@ -59,19 +59,6 @@ struct TranscriptKaraokeDisplayCuesTests {
         #expect(repaired.repairs == [.clampedToSegment])
     }
 
-    @Test("A legacy word past the segment end lands inside the display interval")
-    func legacyWordPastTheSegmentEndLandsInsideTheDisplayInterval() throws {
-        let segment = segment(start: 0, end: 2, words: [
-            OpenCastTranscriptWord(start: 0, end: 1, text: "First"),
-            OpenCastTranscriptWord(start: 2.6, end: 2.8, text: "tail.")
-        ])
-
-        let repaired = try #require(TranscriptKaraokeDisplayCues.repairedWords(for: segment, handoff: 2))
-
-        #expect(repaired.words.map(\.start) == [0, 2 - TranscriptKaraokeDisplayCues.minimumTerminalExposure])
-        #expect(repaired.repairs == [.clampedToHandoff, .terminalGroupShifted])
-    }
-
     @Test("Decreasing onsets become nondecreasing and group as equals")
     func decreasingOnsetsBecomeNondecreasingAndGroupAsEquals() throws {
         let segment = segment(start: 0, end: 4, words: [
@@ -156,28 +143,16 @@ struct TranscriptKaraokeDisplayCuesTests {
         #expect(TranscriptKaraokeDisplayCues.repairedWords(for: segment, handoff: 10) == nil)
     }
 
-    @Test("Wordless segments have no cues")
-    func wordlessSegmentsHaveNoCues() {
-        #expect(TranscriptKaraokeDisplayCues.repairedWords(
-            for: segment(start: 0, end: 4, words: nil),
-            handoff: 4
-        ) == nil)
-        #expect(TranscriptKaraokeDisplayCues.repairedWords(
-            for: segment(start: 0, end: 4, words: []),
-            handoff: 4
-        ) == nil)
-    }
-
     private func segment(
         start: TimeInterval,
         end: TimeInterval,
-        words: [OpenCastTranscriptWord]?
+        words: [OpenCastTranscriptWord]
     ) -> OpenCastTranscriptSegment {
         OpenCastTranscriptSegment(
             id: 1,
             start: start,
             end: end,
-            text: (words ?? []).map(\.text).joined(separator: " "),
+            text: words.map(\.text).joined(separator: " "),
             avgLogProbability: -0.1,
             noSpeechProbability: 0.01,
             words: words

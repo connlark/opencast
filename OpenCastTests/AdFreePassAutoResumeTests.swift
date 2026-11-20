@@ -300,7 +300,6 @@ private final class AutoResumeCompletingTranscriber: EpisodeTranscribing, @unche
 private final class AutoResumeBackgroundScheduler: AdFreePassContinuedTaskScheduling {
     let supportsGPUResources = false
     private(set) var submitCallCount = 0
-    private(set) var cancelledIdentifiers: [String] = []
 
     func registerLaunchHandler(
         identifier: String,
@@ -313,7 +312,5 @@ private final class AutoResumeBackgroundScheduler: AdFreePassContinuedTaskSchedu
         submitCallCount += 1
     }
 
-    func cancel(identifier: String) {
-        cancelledIdentifiers.append(identifier)
-    }
+    func cancel(identifier: String) {}
 }

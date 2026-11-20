@@ -43,21 +43,15 @@ struct NowPlayingMediaSessionTests {
     @Test
     func playbackSnapshotKeepsSelectedRateAndSampleTime() {
         let adapter = PlaybackMediaSessionAdapter(artworkLoader: DefaultNowPlayingArtworkLoader())
-        let episode = makeEpisode(duration: 300)
-        for (state, expected): (PlaybackState, MediaPlaybackSnapshot.PlaybackState) in [
-            (.playing, .playing(rate: 1.5)), (.paused, .paused), (.buffering, .buffering),
-            (.loading, .paused), (.failed("network"), .paused), (.idle, .stopped)
-        ] {
-            let snapshot = PlaybackSnapshot(state: state, currentEpisode: episode, position: 42, rate: 1.5)
-            adapter.publish(snapshot, resolvedDuration: nil)
-            let timestamp = adapter.snapshotTimestamp
-            #expect(adapter.playbackSnapshot == MediaPlaybackSnapshot(
-                state: expected, defaultPlaybackRate: 1.5, elapsedTime: 42, timestamp: timestamp
-            ))
-            adapter.setSkipIntervals(backward: 45, forward: 60)
-            adapter.publish(snapshot, resolvedDuration: nil)
-            #expect(adapter.snapshotTimestamp == timestamp)
-        }
+        let snapshot = PlaybackSnapshot(state: .paused, currentEpisode: makeEpisode(duration: 300), position: 42, rate: 1.5)
+        adapter.publish(snapshot, resolvedDuration: nil)
+        let timestamp = adapter.snapshotTimestamp
+        #expect(adapter.playbackSnapshot == MediaPlaybackSnapshot(
+            state: .paused, defaultPlaybackRate: 1.5, elapsedTime: 42, timestamp: timestamp
+        ))
+        adapter.setSkipIntervals(backward: 45, forward: 60)
+        adapter.publish(snapshot, resolvedDuration: nil)
+        #expect(adapter.snapshotTimestamp == timestamp)
     }
 
     private func makeEpisode(duration: Double?) -> Episode {

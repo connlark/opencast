@@ -1,7 +1,5 @@
-/// Why a provider key could not be read or changed. Carries the Keychain
-/// operation and its status only: never key material or provider text.
+/// Carries the Keychain operation and status only, never key material or provider text.
 nonisolated enum AnalysisProviderKeyStoreError: Error, Equatable, Sendable {
-    /// `setSyncs` on a provider with no saved key.
     case notSaved
     /// The stored bytes are not a key.
     case unreadable
@@ -14,10 +12,8 @@ nonisolated enum AnalysisProviderKeyStoreError: Error, Equatable, Sendable {
         case delete
     }
 
-    /// Whether a save or switch with sync off that threw this had already
-    /// written this device's key: such a call fails at a delete only after
-    /// its write, so the key is saved here and only the synced copy's delete
-    /// failed. Any other failure saved nothing new.
+    /// A sync-off save fails at a delete only after its write, so a delete failure means this
+    /// device's key is saved and only the synced copy's delete failed.
     func savedLocallyLeavingSyncedCopy(syncs: Bool) -> Bool {
         guard !syncs, case .keychain(operation: .delete, _) = self else {
             return false
@@ -25,10 +21,8 @@ nonisolated enum AnalysisProviderKeyStoreError: Error, Equatable, Sendable {
         return true
     }
 
-    /// Whether a save with sync on that threw this had already written the
-    /// synced key: such a call fails at a delete only after its write, so
-    /// only this device's copy outlived it. That copy wins every read, so
-    /// what is in use has to be read, not assumed.
+    /// A sync-on save fails at a delete only after its write, so the synced key is saved and the
+    /// local copy outlived it. That copy wins every read: read what is in use, never assume it.
     func savedSyncedLeavingLocalCopy(syncs: Bool) -> Bool {
         guard syncs, case .keychain(operation: .delete, _) = self else {
             return false

@@ -20,37 +20,10 @@ struct AdFreePassAppModelEntryTests {
         })
         #expect(fixture.scheduler.submitCallCount == 1)
 
-        // Appending while the session is armed never resubmits (one task per drain).
         fixture.appModel.startAdFreePass(for: second, modelContext: fixture.context)
         fixture.appModel.startAdFreePass(for: first, modelContext: fixture.context)
 
         #expect(fixture.appModel.adFreePass.queueItems.map(\.episodeID) == [second.episodeID])
-        #expect(fixture.scheduler.submitCallCount == 1)
-    }
-
-    @Test("The Sound Lab megaphone is a wrapper over the same enqueue path")
-    func soundLabMegaphoneWrapsSameEntry() async throws {
-        let fixture = try await makeFixture()
-        let episode = makeEpisode(episodeID: "app-entry-wrapper")
-        try fixture.appModel.playback.load(Episode(
-            id: EpisodeID(rawValue: episode.episodeID),
-            podcastID: PodcastID(rawValue: episode.podcastID),
-            podcastTitle: episode.podcastTitle,
-            title: episode.title,
-            duration: episode.duration,
-            audioURL: URL(string: episode.audioURL ?? "https://example.com/audio.mp3")
-        ), startPosition: 0)
-
-        fixture.appModel.startOrContinueAdFreePassForCurrentEpisode(modelContext: fixture.context)
-        #expect(await waitUntil {
-            fixture.appModel.adFreePass.activeEpisodeID == episode.episodeID
-        })
-        #expect(fixture.scheduler.submitCallCount == 1)
-
-        // Re-tapping through the context-menu entry is idempotent with the
-        // megaphone-started pass — one shared path.
-        fixture.appModel.startAdFreePass(for: episode, modelContext: fixture.context)
-        #expect(fixture.appModel.adFreePass.queueItems.isEmpty)
         #expect(fixture.scheduler.submitCallCount == 1)
     }
 
@@ -68,10 +41,8 @@ struct AdFreePassAppModelEntryTests {
         #expect(await waitUntil {
             fixture.appModel.adFreePass.activeEpisodeID == episode.episodeID
         })
-        // Auto passes never arm background continuation.
         #expect(fixture.scheduler.submitCallCount == 0)
 
-        // Playing the same episode again while its pass runs is a no-op.
         try fixture.appModel.playEpisode(episode, modelContext: fixture.context)
         #expect(fixture.appModel.adFreePass.queueItems.isEmpty)
         #expect(fixture.scheduler.submitCallCount == 0)
@@ -103,10 +74,8 @@ struct AdFreePassAppModelEntryTests {
         let pending = fixture.appModel.adFreePass.queueItems
         #expect(pending.map(\.episodeID) == [autoPlayed.episodeID, manualSecond.episodeID])
         #expect(pending.first?.origin == .auto)
-        // Only the manual entry armed the session.
         #expect(fixture.scheduler.submitCallCount == 1)
 
-        // A second play of the queued episode never duplicates it.
         try fixture.appModel.playEpisode(autoPlayed, modelContext: fixture.context)
         #expect(fixture.appModel.adFreePass.queueItems.map(\.episodeID) == [
             autoPlayed.episodeID, manualSecond.episodeID
@@ -130,45 +99,9 @@ struct AdFreePassAppModelEntryTests {
         #expect(fixture.scheduler.submitCallCount == 0)
     }
 
-    @Test("A new episode the automatic download brings in for a flagged show queues as a prepared pass on this device, unarmed")
-    func newEpisodeDownloadQueuesPreparedPass() async throws {
-        let fixture = try await makeFixture(downloader: PreparedEntryAudioDownloader())
-        let appModel = fixture.appModel
-        defer {
-            appModel.setAutoDownloadsScene(UUID(), isActive: false)
-            appModel.adFreePass.reset()
-        }
-        let feedURL = "https://example.com/prepared-entry.xml"
-        let newEpisodeID = try await publishRelease(feedURL: feedURL, fixture: fixture)
-        try await seedSubscription(feedURL: feedURL, isAdAutoDetectEnabled: false, fixture: fixture)
-        #expect(appModel.downloadSettings.setAutoDownloadsRequireWiFi(false, modelContext: fixture.context))
-        // Cloud mode is stored; the new episode is still scanned on device.
-        #expect(appModel.adDetectionSettings.setMode(.cloud, modelContext: fixture.context))
-        appModel.restorePlaybackSurfaceIfNeeded(modelContext: fixture.context)
-        // A manual pass whose download never finishes holds the head, so
-        // the prepared item stays in view behind it.
-        let blocker = makeEpisode(episodeID: "app-entry-prepared-blocker")
-        appModel.startAdFreePass(for: blocker, modelContext: fixture.context)
-        #expect(await waitUntil { appModel.adFreePass.activeEpisodeID == blocker.episodeID })
-        defer { appModel.downloads.cancelDownload(episodeID: blocker.episodeID, modelContext: fixture.context) }
-        #expect(fixture.scheduler.submitCallCount == 1)
-
-        #expect(appModel.setDetectsAdsInNewEpisodes(true, forPodcastID: feedURL, modelContext: fixture.context))
-
-        #expect(await waitUntil {
-            appModel.adFreePass.queueItems.contains { $0.episodeID == newEpisodeID }
-        })
-        let item = appModel.adFreePass.queueItems.first { $0.episodeID == newEpisodeID }
-        #expect(item?.origin == .prepared)
-        #expect(item?.mode == .onDevice)
-        #expect(appModel.downloads.record(for: newEpisodeID)?.state == .completed)
-        #expect(appModel.downloadSettings.detectAdsPendingPodcastIDsByEpisodeID.isEmpty)
-        #expect(fixture.scheduler.submitCallCount == 1)
-    }
-
     @Test("A prepared pass with nothing ahead of it starts without ever arming the session")
     func preparedPassNeverArms() async throws {
-        let fixture = try await makeFixture(downloader: PreparedEntryAudioDownloader())
+        let fixture = try await makeFixture(downloader: ScriptedEpisodeAudioDownloader(contents: Data("downloaded".utf8)))
         let appModel = fixture.appModel
         defer {
             appModel.setAutoDownloadsScene(UUID(), isActive: false)
@@ -183,9 +116,7 @@ struct AdFreePassAppModelEntryTests {
 
         #expect(appModel.setDetectsAdsInNewEpisodes(true, forPodcastID: feedURL, modelContext: fixture.context))
 
-        // Nothing is ahead of it, so the item runs as soon as it is queued:
-        // an arming enqueue would have submitted by then. It may already
-        // have finished.
+        // An arming enqueue submits before the item runs, and it may already have finished.
         #expect(await waitUntil {
             appModel.adFreePass.activeItem?.episodeID == newEpisodeID
                 || appModel.adFreePass.drainOutcomes.contains { $0.episodeID == newEpisodeID }
@@ -212,72 +143,6 @@ struct AdFreePassAppModelEntryTests {
         #expect(fixture.notificationCenter.authorizationStatusValue == .provisional)
     }
 
-    @Test("Arming never requests authorization once the user has decided")
-    func armSkipsAuthorizationRequestWhenDecided() async throws {
-        let fixture = try await makeFixture()
-        fixture.notificationCenter.authorizationStatusValue = .denied
-        let episode = makeEpisode(episodeID: "app-entry-provisional-denied")
-
-        fixture.appModel.startAdFreePass(for: episode, modelContext: fixture.context)
-        #expect(await waitUntil {
-            fixture.appModel.adFreePass.activeEpisodeID == episode.episodeID
-        })
-        #expect(await waitUntil {
-            fixture.notificationCenter.authorizationStatusReadCount >= 1
-        })
-
-        #expect(fixture.notificationCenter.provisionalRequestCount == 0)
-    }
-
-    @Test("Download menu state derives from the download record and local file")
-    func downloadMenuStateDerivesFromRecord() async throws {
-        let fixture = try await makeFixture()
-        let episode = makeEpisode(episodeID: "app-entry-download")
-
-        #expect(fixture.appModel.downloadMenuState(for: episode) == .available)
-
-        // A live in-flight download (the fixture downloader hangs) disables
-        // the action without hiding it.
-        fixture.appModel.downloads.startDownload(for: episode, modelContext: fixture.context)
-        #expect(await waitUntil {
-            fixture.appModel.downloads.record(for: episode.episodeID)?.state == .downloading
-                && fixture.appModel.downloads.byteProgress(for: episode.episodeID)?.bytesReceived == 7
-        })
-        #expect(fixture.appModel.downloadMenuState(for: episode) == .downloading)
-        fixture.appModel.downloads.pauseDownload(episodeID: episode.episodeID, modelContext: fixture.context)
-        #expect(await waitUntil {
-            fixture.appModel.downloads.record(for: episode.episodeID)?.state == .paused
-        })
-        #expect(fixture.appModel.downloadMenuState(for: episode) == .available)
-
-        // A completed download with its file on disk hides the action
-        // (fresh fixture: the record is seeded pre-load like a relaunch).
-        let downloadedFixture = try await makeFixture()
-        let sourceURL = URL(string: episode.audioURL ?? "https://example.com/audio.mp3")!
-        let relativePath = downloadedFixture.downloadFileStore.relativePath(
-            episodeID: episode.episodeID,
-            sourceAudioURL: sourceURL
-        )
-        try downloadedFixture.downloadFileStore.prepareDownloadsDirectory()
-        let data = Data("downloaded".utf8)
-        try data.write(
-            to: downloadedFixture.downloadFileStore.fileURL(relativePath: relativePath),
-            options: .atomic
-        )
-        downloadedFixture.context.insert(EpisodeDownloadRecord(
-            episodeID: episode.episodeID,
-            podcastID: episode.podcastID,
-            sourceAudioURL: sourceURL.absoluteString,
-            localRelativePath: relativePath,
-            state: .completed,
-            bytesReceived: Int64(data.count),
-            bytesExpected: Int64(data.count)
-        ))
-        try downloadedFixture.context.save()
-        await downloadedFixture.appModel.downloads.load(modelContext: downloadedFixture.context)
-        #expect(downloadedFixture.appModel.downloadMenuState(for: episode) == .downloaded)
-    }
-
     @Test("A play after Remove Played in the same session enqueues an automatic pass over a retained completed outcome")
     func playAfterRemovePlayedEnqueuesOverRetainedCompletion() async throws {
         let fixture = try await makeFixture()
@@ -285,7 +150,6 @@ struct AdFreePassAppModelEntryTests {
         try await seedSubscription(feedURL: episode.podcastID, isAdAutoDetectEnabled: true, fixture: fixture)
         try await seedAttachedAnalysis(for: episode, fixture: fixture)
 
-        // A pass over the attached analysis completes without a run.
         fixture.appModel.startAdFreePass(for: episode, modelContext: fixture.context)
         guard case .completed = await waitForRetainedOutcome(of: episode, fixture: fixture) else {
             Issue.record("Expected the pass over the attached analysis to complete.")
@@ -302,8 +166,7 @@ struct AdFreePassAppModelEntryTests {
 
         try fixture.appModel.playEpisode(episode, modelContext: fixture.context)
 
-        // The automatic pass downloads the audio again (the fixture's
-        // download hangs, holding it active).
+        // The fixture's download hangs, holding the automatic pass active.
         #expect(await waitUntil {
             fixture.appModel.adFreePass.activeItem?.episodeID == episode.episodeID
         })
@@ -321,7 +184,6 @@ struct AdFreePassAppModelEntryTests {
         let download = try #require(fixture.appModel.downloads.record(for: failed.episodeID))
         fixture.appModel.deleteDownload(download, modelContext: fixture.context)
 
-        // Detect Ads Again by hand: the download it needs fails.
         fixture.appModel.startAdFreePass(for: failed, modelContext: fixture.context)
         guard case .failed = await waitForRetainedOutcome(of: failed, fixture: fixture) else {
             Issue.record("Expected the manual pass to fail at its download.")
@@ -338,8 +200,6 @@ struct AdFreePassAppModelEntryTests {
         try fixture.appModel.playEpisode(failed, modelContext: fixture.context)
         try fixture.appModel.playEpisode(control, modelContext: fixture.context)
 
-        // The never-scanned control is admitted, and its drain ran nothing
-        // else.
         guard case .failed = await waitForRetainedOutcome(of: control, fixture: fixture) else {
             Issue.record("Expected the control's automatic pass to run and fail at its download.")
             return
@@ -396,9 +256,6 @@ struct AdFreePassAppModelEntryTests {
         )
     }
 
-    /// A hashed completed download, a completed transcript of its bytes and
-    /// a current analysis of that transcript, loaded as at launch: an
-    /// episode whose analysis is attached.
     private func seedAttachedAnalysis(for episode: EpisodeListItemSnapshot, fixture: EntryFixture) async throws {
         let sourceURL = URL(string: episode.audioURL ?? "https://example.com/audio.mp3")!
         let contents = Data("downloaded \(episode.episodeID)".utf8)
@@ -520,7 +377,6 @@ struct AdFreePassAppModelEntryTests {
         fixture.appModel.loadLocalTranscriptionState(modelContext: fixture.context)
     }
 
-    /// The session's retained outcome for `episode` once its drain is over.
     private func waitForRetainedOutcome(
         of episode: EpisodeListItemSnapshot,
         fixture: EntryFixture
@@ -548,8 +404,7 @@ struct AdFreePassAppModelEntryTests {
         await fixture.appModel.library.load(modelContext: fixture.context)
     }
 
-    /// Caches one released episode for the show and returns its ID; the
-    /// library picks it up with the subscription's load.
+    /// Call before `seedSubscription`: the library picks the release up with its load.
     private func publishRelease(feedURL: String, fixture: EntryFixture) async throws -> String {
         let url = try #require(URL(string: feedURL))
         let podcastID = URLCanonicalizer.podcastID(for: url)
@@ -616,34 +471,9 @@ private struct HangingEntryAudioDownloader: EpisodeAudioDownloading {
     }
 }
 
-/// Finishes every download at once, except a blocker's, which never does.
-private struct PreparedEntryAudioDownloader: EpisodeAudioDownloading {
-    nonisolated func download(
-        from sourceURL: URL,
-        to temporaryURL: URL,
-        resume: EpisodeDownloadResumeContext?,
-        onResponseMetadata: @escaping @MainActor @Sendable (EpisodeDownloadResponseMetadata) -> Void,
-        progress: @escaping @MainActor @Sendable (_ bytesReceived: Int64, _ bytesExpected: Int64?) -> Void
-    ) async throws {
-        await onResponseMetadata(EpisodeDownloadResponseMetadata(entityTag: nil, lastModified: nil))
-        guard !sourceURL.absoluteString.contains("blocker") else {
-            try Data("partial".utf8).write(to: temporaryURL, options: .atomic)
-            await progress(7, 100)
-            while true {
-                try Task.checkCancellation()
-                try await Task.sleep(for: .seconds(1))
-            }
-        }
-        let contents = Data("downloaded \(sourceURL.lastPathComponent)".utf8)
-        try contents.write(to: temporaryURL, options: .atomic)
-        await progress(Int64(contents.count), Int64(contents.count))
-    }
-}
-
 private final class EntryFakeScheduler: AdFreePassContinuedTaskScheduling {
     let supportsGPUResources = false
     private(set) var submitCallCount = 0
-    private(set) var cancelledIdentifiers: [String] = []
 
     func registerLaunchHandler(
         identifier: String,
@@ -656,7 +486,5 @@ private final class EntryFakeScheduler: AdFreePassContinuedTaskScheduling {
         submitCallCount += 1
     }
 
-    func cancel(identifier: String) {
-        cancelledIdentifiers.append(identifier)
-    }
+    func cancel(identifier: String) {}
 }

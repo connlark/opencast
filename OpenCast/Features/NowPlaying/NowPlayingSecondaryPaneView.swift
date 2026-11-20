@@ -1,19 +1,13 @@
 import SwiftUI
 
-/// The segmented secondary pane: Up Next, Transcript, Chapters and Show
-/// Notes, each the view its sheet or page already uses, embedded so its
-/// actions keep the player and the pane on screen. `content` nil draws a
-/// placeholder: an open sheet is already showing the selected destination.
 struct NowPlayingSecondaryPaneView: View {
     @Environment(OpenCastAppModel.self) private var appModel
 
     @Binding var selection: NowPlayingSecondaryPane
     let content: NowPlayingSecondaryPane?
-    /// The window's safe rectangle and any band or occlusion, already
-    /// converted into this pane's coordinates.
+    /// In this pane's coordinates.
     var contentInsets = EdgeInsets()
 
-    /// The picker's gap below the pane's top inset.
     static let pickerTopPadding: CGFloat = 12
 
     var body: some View {

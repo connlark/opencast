@@ -1,9 +1,6 @@
 #if DEBUG
 import Foundation
 
-/// DEBUG-only provider so simulators (which report Apple Speech unsupported)
-/// can render the Apple-branch settings/onboarding surfaces in UI tests and
-/// screenshots. Never performs real installs.
 struct DebugForcedAppleSpeechAssetProvider: AppleSpeechAssetProviding {
     enum ForcedState: String {
         case installed

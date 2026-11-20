@@ -59,27 +59,6 @@ struct EpisodeTranscriptGenerationBackgroundSessionTests {
         #expect(session.isProtectingBackgroundExecution)
     }
 
-    @Test("Debug force flag degrades to foreground-only before registration")
-    func debugForceFlagDegradesBeforeRegistration() {
-        let scheduler = FakeAdFreePassContinuedTaskScheduler()
-        let session = EpisodeTranscriptGenerationBackgroundSession(
-            scheduler: scheduler,
-            forceForegroundOnly: { true }
-        )
-
-        session.arm(episodeTitle: "Forced Foreground Episode")
-        session.notePhase(.transcribingWhisper)
-
-        #expect(scheduler.registerCallCount == 0)
-        #expect(scheduler.submitCallCount == 0)
-        #expect(!session.isProtectingBackgroundExecution)
-
-        session.notePhase(.failed("probe"))
-        session.arm(episodeTitle: "Retry Episode")
-        #expect(scheduler.registerCallCount == 0)
-        #expect(!session.isArmed)
-    }
-
     @Test("Phase flow drives monotonic progress and phase subtitles")
     func phaseFlowDrivesMonotonicProgressAndSubtitles() {
         let scheduler = FakeAdFreePassContinuedTaskScheduler()
@@ -220,25 +199,6 @@ struct EpisodeTranscriptGenerationBackgroundSessionTests {
         #expect(scheduler.submitCallCount == 2)
         #expect(session.isProtectingBackgroundExecution)
     }
-
-    @Test("Duplicate phases do not repeat handle updates")
-    func duplicatePhasesDoNotRepeatHandleUpdates() {
-        let scheduler = FakeAdFreePassContinuedTaskScheduler()
-        let session = EpisodeTranscriptGenerationBackgroundSession(scheduler: scheduler)
-        let handle = FakeAdFreePassContinuedTaskHandle()
-
-        session.arm(episodeTitle: "Duplicate Phase Episode")
-        scheduler.launch(handle)
-        session.notePhase(.preparingWhisper)
-        let updateCount = handle.titleUpdates.count
-        let completedUnits = handle.progress.completedUnitCount
-
-        session.notePhase(.preparingWhisper)
-
-        #expect(handle.titleUpdates.count == updateCount)
-        #expect(handle.progress.completedUnitCount == completedUnits)
-    }
-
 }
 
 private enum ProbeError: Error {

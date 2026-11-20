@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// The footer-slot affordance that replaces explanatory paragraphs on
-/// Settings sub-screens (Apple's own "About X & Privacy…" convention). It
-/// owns its sheet so link sites need no extra state.
 struct HelpFooterLink: View {
     @Environment(OpenCastAppModel.self) private var appModel
 

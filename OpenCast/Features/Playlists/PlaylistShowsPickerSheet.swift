@@ -1,13 +1,6 @@
 import SwiftUI
 
-/// Picks the shows a smart playlist draws from. All Shows is on only while
-/// the rule names no shows, so new subscriptions join it; picking a show
-/// narrows the rule to the listed shows, and unchecking the last listed show
-/// returns to All Shows. Each pick reports the new rule at once through
-/// `onChange`, and the rows read the rule the sheet is handed, so the list
-/// updates in place and keeps its scroll position.
 struct PlaylistShowsPickerSheet: View {
-    /// Above this many shows the search field stays in view.
     private static let searchThreshold = 10
 
     @Environment(OpenCastAppModel.self) private var appModel
@@ -22,9 +15,8 @@ struct PlaylistShowsPickerSheet: View {
         let shows = appModel.library.uniqueSubscriptions
 
         NavigationStack {
-            // Always attached: removing a conditional `.searchable` mid-update
-            // can strand the system's search dismissal. A short list only
-            // tucks the field away until the listener pulls down.
+            // Always attached: removing a conditional `.searchable` mid-update can strand the
+            // system's search dismissal.
             showList(shows)
                 .searchable(
                     text: $searchText,

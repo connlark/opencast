@@ -1,15 +1,12 @@
 import Foundation
 
-/// Build large-catalog lookup tables before publishing to SwiftUI. Keeping
-/// these values together also avoids exposing partially rebuilt indexes.
+/// Published as one value so no reader sees partly rebuilt indexes.
 nonisolated struct LibraryEpisodeIndexes: Sendable {
     let byID: [String: Int]
     let byPodcastID: [String: [Int]]
     let visibleIDs: Set<String>
     let latestContentChangeByPodcastID: [String: Date]
-    /// Each show's dated episodes, newest publication first; undated
-    /// episodes are omitted. Lets release-date lookups stop at the first
-    /// episode older than what they need.
+    /// Each show's dated episodes, newest first; undated episodes are left out.
     let releaseOrderByPodcastID: [String: [Int]]
 
     init(episodes: [EpisodeListItemSnapshot]) {
@@ -33,8 +30,6 @@ nonisolated struct LibraryEpisodeIndexes: Sendable {
         self.byPodcastID = byPodcastID
         visibleIDs = Set(byID.keys)
         self.latestContentChangeByPodcastID = latestContentChangeByPodcastID
-        // The cache already publishes newest-first, so this sort is normally
-        // a linear pass; it keeps the lookups correct for any source order.
         releaseOrderByPodcastID = datedByPodcastID.mapValues { entries in
             entries
                 .sorted { lhs, rhs in

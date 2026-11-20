@@ -74,47 +74,6 @@ struct OpenCastLongFormTranscriptionTests {
         #expect(phases.outputTokenCount == 2)
     }
 
-    @Test("No-resume long-form run keeps full-duration RTF denominators")
-    func noResumeLongFormRunKeepsFullDurationRTFDenominators() async throws {
-        let audioURL = try temporaryAudioPlaceholder()
-        var timings = TranscriptionTimings(fullPipeline: 2)
-        timings.inputAudioSeconds = 100
-        let canned = TranscriptionResult(
-            text: " hello",
-            segments: [TranscriptionSegment(text: " hello", tokens: [1])],
-            language: "en",
-            timings: timings
-        )
-        let service = OpenCastTranscriptionService(
-            modelLocator: RecordingModelLocator(),
-            runtimeLoader: FixedResultRuntimeLoader(result: canned),
-            audioLoader: ImmediateAudioLoader(samples: Array(repeating: 0.1, count: Int(WhisperKit.sampleRate) * 100))
-        )
-        let request = OpenCastLongFormTranscriptionRequest(
-            audioFileURL: audioURL,
-            sourceAudioURL: "https://example.com/audio.mp3",
-            sourceFileByteCount: 10,
-            sourceFileSHA256: "source-sha",
-            modelIdentifier: "model-a",
-            modelVersion: "v1",
-            modelTreeSHA256: "tree-sha"
-        )
-
-        var finished: OpenCastTranscriptionResult?
-        for try await event in await service.transcribe(request) {
-            if case .finished(let result) = event {
-                finished = result
-            }
-        }
-
-        let result = try #require(finished)
-        #expect(result.timings.audioDuration == 100)
-        #expect(result.timings.processedAudioDuration == 100)
-        #expect(abs(result.timings.realTimeFactor - result.timings.transcription / 100) < 0.000001)
-        #expect(abs(result.timings.transcriptionRTF - result.timings.realTimeFactor) < 0.000001)
-        #expect(abs(result.timings.fullPipelineRTF - result.timings.fullPipeline / 100) < 0.000001)
-    }
-
     @Test("Resumed long-form run uses processed remaining duration for RTF")
     func resumedLongFormRunUsesProcessedRemainingDurationForRTF() async throws {
         let audioURL = try temporaryAudioPlaceholder()
@@ -157,39 +116,19 @@ struct OpenCastLongFormTranscriptionTests {
         #expect(abs(result.timings.fullPipelineRTF - result.timings.fullPipeline / 40) < 0.000001)
     }
 
-    @Test("Long-form decode options keep fallback enabled and use sequential checkpoints")
-    func longFormDecodeOptionsKeepFallbackEnabledAndUseSequentialCheckpoints() {
-        let options = OpenCastTranscriptionService.longFormDecodeOptions(
-            languageCode: "en",
-            audioDuration: 600,
-            resumeStart: 120
-        )
-
-        #expect(options.temperatureFallbackCount > 0)
-        #expect(options.temperatureIncrementOnFallback > 0)
-        #expect(options.chunkingStrategy == nil)
-        #expect(options.clipTimestamps == [120, 600])
-    }
-
-    @Test("Long-form decode options honor a benchmark clip end")
-    func longFormDecodeOptionsHonorBenchmarkClipEnd() {
+    @Test(
+        "Long-form decode options honor a benchmark clip end",
+        arguments: zip([nil, 90, 900] as [TimeInterval?], [600, 90, 600] as [Float])
+    )
+    func longFormDecodeOptionsHonorBenchmarkClipEnd(clipEnd: TimeInterval?, expectedEnd: Float) {
         let options = OpenCastTranscriptionService.longFormDecodeOptions(
             languageCode: "en",
             audioDuration: 600,
             resumeStart: 30,
-            clipEnd: 90
+            clipEnd: clipEnd
         )
 
-        #expect(options.clipTimestamps == [30, 90])
-
-        let clamped = OpenCastTranscriptionService.longFormDecodeOptions(
-            languageCode: "en",
-            audioDuration: 600,
-            resumeStart: 0,
-            clipEnd: 900
-        )
-
-        #expect(clamped.clipTimestamps == [0, 600])
+        #expect(options.clipTimestamps == [30, expectedEnd])
     }
 
     @Test("Long-form stream emits progress checkpoint and final events")

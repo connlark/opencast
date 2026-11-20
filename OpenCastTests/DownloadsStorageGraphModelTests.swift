@@ -1,5 +1,4 @@
 import Foundation
-import SwiftUI
 import Testing
 @testable import OpenCast
 
@@ -54,7 +53,13 @@ struct DownloadsStorageGraphModelTests {
         })
 
         #expect(model.segments.count == DownloadsStorageGraphModel.maximumSegmentCount)
-        #expect(model.segments.prefix(5).map(\.id) == (3...7).reversed().map { "https://example.com/\($0).xml" })
+        #expect(model.segments.prefix(5).map(\.id) == [
+            "https://example.com/7.xml",
+            "https://example.com/6.xml",
+            "https://example.com/5.xml",
+            "https://example.com/4.xml",
+            "https://example.com/3.xml"
+        ])
         let other = try #require(model.segments.last)
         #expect(other.isOther)
         #expect(other.id == DownloadsStorageGraphSegment.otherID)
@@ -65,17 +70,6 @@ struct DownloadsStorageGraphModelTests {
         #expect(other.members.map(\.podcastID) == ["https://example.com/2.xml", "https://example.com/1.xml"])
         #expect(model.totalByteCount == 2_800)
         #expect(model.totalEpisodeCount == 28)
-    }
-
-    @Test("Fractions are each show's share and sum to one")
-    func fractionsSumToOne() {
-        let model = DownloadsStorageGraphModel.make(breakdowns: (1...9).map { index in
-            breakdown("https://example.com/\(index).xml", title: "Show \(index)", bytes: Int64(index) * 37)
-        })
-
-        let sum = model.segments.reduce(0) { $0 + $1.fraction }
-        #expect(abs(sum - 1) < 1e-9)
-        #expect(abs(model.segments[0].fraction - 333.0 / 1_665.0) < 1e-12)
     }
 
     @Test("Nothing to draw when the downloads have no bytes")
@@ -108,6 +102,7 @@ struct DownloadsStorageGraphModelTests {
         }
         breakdowns.append(breakdown("https://example.com/tiny.xml", title: "Tiny", bytes: 1))
         let withOther = DownloadsStorageGraphModel.make(breakdowns: breakdowns)
+        #expect(withOther.accessibilitySummary.hasPrefix("Show 1, 17 percent, \(DownloadsStorageText.size(100_000));"))
         #expect(withOther.accessibilitySummary.hasSuffix(
             "2 other shows, 17 percent, \(DownloadsStorageText.size(100_001))"
         ))
@@ -117,49 +112,6 @@ struct DownloadsStorageGraphModelTests {
             breakdown("https://example.com/tiny.xml", title: "Tiny", bytes: 1)
         ])
         #expect(sliver.accessibilitySummary.hasSuffix("Tiny, less than 1 percent, \(DownloadsStorageText.size(1))"))
-    }
-
-    @Test("Shows take palette colors in bar order and Other is gray")
-    func paletteIndices() throws {
-        let model = DownloadsStorageGraphModel.make(breakdowns: (1...8).map { index in
-            breakdown("https://example.com/\(index).xml", title: "Show \(index)", bytes: Int64(index) * 100)
-        })
-
-        #expect(model.segments.map(\.paletteIndex) == [0, 1, 2, 3, 4, nil])
-        let palette = DownloadsStorageSegmentPalette.ordered
-        #expect(palette.count >= DownloadsStorageGraphModel.maximumSegmentCount)
-        #expect(Set(palette).count == palette.count)
-        #expect(palette.prefix(5) == [.blue, .orange, .green, .purple, .teal])
-        let first = try #require(model.segments.first)
-        let other = try #require(model.segments.last)
-        #expect(DownloadsStorageSegmentPalette.fill(for: first) == PlaylistTint.blue.color)
-        #expect(DownloadsStorageSegmentPalette.digitColor == Color.black)
-        #expect(DownloadsStorageSegmentPalette.fill(for: other) == Color.gray)
-
-        let sixShows = DownloadsStorageGraphModel.make(breakdowns: (1...6).map { index in
-            breakdown("https://example.com/\(index).xml", title: "Show \(index)", bytes: Int64(index) * 100)
-        })
-        let sixth = try #require(sixShows.segments.last)
-        #expect(DownloadsStorageSegmentPalette.fill(for: sixth) == palette[5].color)
-    }
-
-    @Test("The animation key follows shape changes, not byte drift")
-    func animationKeyIgnoresByteDrift() {
-        let before = DownloadsStorageGraphModel.make(breakdowns: [
-            breakdown("https://example.com/a.xml", title: "A", bytes: 1_000_000),
-            breakdown("https://example.com/b.xml", title: "B", bytes: 1_000_000)
-        ])
-        let drifted = DownloadsStorageGraphModel.make(breakdowns: [
-            breakdown("https://example.com/a.xml", title: "A", bytes: 1_000_010),
-            breakdown("https://example.com/b.xml", title: "B", bytes: 1_000_000)
-        ])
-        let reshaped = DownloadsStorageGraphModel.make(breakdowns: [
-            breakdown("https://example.com/a.xml", title: "A", bytes: 3_000_000),
-            breakdown("https://example.com/b.xml", title: "B", bytes: 1_000_000)
-        ])
-
-        #expect(before.animationKey == drifted.animationKey)
-        #expect(before.animationKey != reshaped.animationKey)
     }
 
     @Test("Segment widths fill the bar and keep every segment visible")

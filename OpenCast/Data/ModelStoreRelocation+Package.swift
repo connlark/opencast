@@ -1,10 +1,8 @@
 import Foundation
 
 nonisolated extension ModelStoreRelocation {
-    /// The store package at one URL, by the package rule: the main file, its
-    /// `-wal`, `-shm` and `-journal`, and every directory beside it named
-    /// `.<stem>_…` (Core Data's support directory) or `<stem>_…` (CloudKit
-    /// mirroring's assets directory).
+    /// The main file, its `-wal`, `-shm` and `-journal`, and the directories beside it named
+    /// `.<stem>_…` (Core Data support) or `<stem>_…` (CloudKit mirroring assets).
     nonisolated struct Package {
         nonisolated enum EntryName {
             case store
@@ -16,12 +14,10 @@ nonisolated extension ModelStoreRelocation {
             case outside
         }
 
-        /// The entries beside the store, classified by name and by type.
         nonisolated struct Inventory {
             /// The `-wal`, `-shm` and `-journal` files present.
             var sidecars: [String] = []
             var companions: [String] = []
-            /// Package-named entries of an unforeseen name or type.
             var unforeseen: [String] = []
         }
 

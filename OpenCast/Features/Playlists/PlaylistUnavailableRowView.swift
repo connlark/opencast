@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// A playlist item whose episode no longer resolves, drawn from the title,
-/// show and artwork the item kept when it was added. It cannot play; the only
-/// action is removing it.
 struct PlaylistUnavailableRowView: View {
     let item: PlaylistItem
 

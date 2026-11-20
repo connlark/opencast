@@ -1,10 +1,5 @@
 import Foundation
 
-/// The shows a smart playlist's cover draws, most dominant first. A show's
-/// dominance is how many of the evaluated episodes it holds; a tie goes to
-/// the show whose first episode comes earlier in rule order. Shows without
-/// artwork are passed over, and a show whose artwork another drawn show
-/// already uses is too, so the cover never stacks the same image twice.
 nonisolated struct SmartPlaylistCoverSources: Equatable, Sendable {
     static let maximumShowCount = 3
     static let empty = SmartPlaylistCoverSources(artworkURLs: [])
@@ -12,9 +7,6 @@ nonisolated struct SmartPlaylistCoverSources: Equatable, Sendable {
     /// At most three, most dominant first.
     let artworkURLs: [URL]
 
-    /// Prefers the show's current artwork and falls back to the first of its
-    /// episodes that carries artwork, as the manual cover does. One pass over
-    /// the episodes, then a sort of the distinct shows.
     static func make(
         episodes: [EpisodeListItemSnapshot],
         podcastArtworkURL: (String) -> URL?
@@ -39,7 +31,6 @@ nonisolated struct SmartPlaylistCoverSources: Equatable, Sendable {
         return SmartPlaylistCoverSources(artworkURLs: artworkURLs)
     }
 
-    /// One show's share of a smart playlist's episodes.
     private nonisolated struct Tally {
         let firstIndex: Int
         private(set) var episodeCount = 0

@@ -5,11 +5,6 @@ import FoundationModels
 import OSLog
 import UIKit
 
-/// Launch-arg probe: does a Private Cloud Compute call succeed while the app is
-/// backgrounded under a `BGContinuedProcessingTask`? Writes a JSON report to
-/// `Documents/pcc-bg-probe.json`; an optional full window request at
-/// `Documents/pcc-bg-probe.request.json` (helper input format) runs in the
-/// background phase when present.
 enum PCCBackgroundProbe {
     nonisolated static let requestArgument = "--pcc-bg-probe"
     nonisolated static let requestEnvironmentKey = "OPENCAST_PCC_BG_PROBE"
@@ -159,7 +154,6 @@ enum PCCBackgroundProbe {
                     await runCall(phase: repeatIndex == 0 ? "background-window" : "background-window-\(repeatIndex + 1)", request: fileRequest)
                     guard !Task.isCancelled else { return }
                     if lastStepWasRateLimited, retrySeconds > 0 {
-                        // Find the recovery time: small call every 20 s.
                         let retryStart = clock.now
                         var attempt = 0
                         var recovered = false
@@ -192,9 +186,8 @@ enum PCCBackgroundProbe {
                 handle.updateTitle("Skip Promos & Ads", subtitle: "PCC probe: lock the device now (\(lockPauseSeconds)s)")
                 handle.progress.completedUnitCount = 700
                 note("lock-pause-start", ["state": appState, "protected_data": UIApplication.shared.isProtectedDataAvailable])
-                // Keep reporting progress during the wait: a continued
-                // processing task that goes quiet for ~75 s was expired by
-                // the system on the first iPhone run.
+                // Keep reporting progress: the system expires a continued
+                // processing task that goes quiet for about 75 s.
                 var protectedTransitions: [[String: Any]] = []
                 var lastProtected = UIApplication.shared.isProtectedDataAvailable
                 var didRunLockedCalls = false
@@ -211,8 +204,6 @@ enum PCCBackgroundProbe {
                         protectedTransitions.append(["tick": tick, "protected_data": protectedNow, "at": Date.now.ISO8601Format()])
                         lastProtected = protectedNow
                     }
-                    // Fire the real test the moment the device locks: PCC calls
-                    // while protected data is unavailable.
                     if !protectedNow, !didRunLockedCalls {
                         didRunLockedCalls = true
                         handle.updateTitle("Skip Promos & Ads", subtitle: "PCC probe: calling PCC while locked")

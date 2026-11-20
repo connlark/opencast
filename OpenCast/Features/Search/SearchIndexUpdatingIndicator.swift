@@ -1,11 +1,5 @@
 import SwiftUI
 
-/// Unobtrusive row explaining that results currently come from the bounded
-/// title/podcast-title fallback because the derived search index is not ready.
-/// Surfaces show it only while `EpisodeSearchSession.isIndexedSearchUnavailable`
-/// is set; it disappears as soon as the index answers again. In the Full Text
-/// scope it also carries the scope-unavailability affordance, because the
-/// scope bar cannot restyle an active segment.
 struct SearchIndexUpdatingIndicator: View {
     var mode: EpisodeSearchMode = .episodes
 

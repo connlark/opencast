@@ -10,10 +10,7 @@ struct NowPlayingSkipZoneRail: View {
     let duration: TimeInterval
     let zones: [PlaybackSkipZone]
     let displayOnlyZones: [PlaybackSkipZone]
-    /// Chapter start times, drawn as dots so they read like the stock
-    /// slider's ticks without changing the slider itself.
     var chapterMarkers: [TimeInterval] = []
-    /// Private note times, drawn like chapter dots in the accent color.
     var noteMarkers: [TimeInterval] = []
 
     @Environment(\.accessibilityDifferentiateWithoutColor) private var differentiateWithoutColor
@@ -72,8 +69,6 @@ struct NowPlayingSkipZoneRail: View {
         }
     }
 
-    /// Without color, note dots become rings so they differ from chapter dots
-    /// by shape as well.
     private func drawNoteMarkers(in context: inout GraphicsContext, size: CGSize) {
         guard duration.isFinite, duration > 0, size.width > 0, size.height > 0 else {
             return

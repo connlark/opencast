@@ -1,15 +1,11 @@
-/// One model a feature may run on, with the exact settings it was qualified
-/// with. The picker shows `label`; the app sends the rest unchanged.
 public struct AnalysisModelEntry: Sendable, Equatable, Decodable {
     public var provider: AnalysisProvider
     public var modelID: String
     public var label: String
-    /// Provider-neutral thinking level: Gemini `thinkingLevel`, OpenAI
-    /// `reasoning.effort`.
+    /// Provider-neutral: Gemini `thinkingLevel`, OpenAI `reasoning.effort`.
     public var thinking: String
     public var maxOutputTokens: Int
-    /// Upper bound for one provider call; the pipeline may allot less when a
-    /// run needs several waves of windows.
+    /// An upper bound: a run with several waves of windows may allot a call less.
     public var perCallTimeoutSeconds: Int
     /// Wall-clock allowance for the whole run, retries and repair included.
     public var runBudgetSeconds: Int
@@ -25,9 +21,8 @@ public struct AnalysisModelEntry: Sendable, Equatable, Decodable {
     }
 }
 
-/// Decodes a model list, skipping entries whose provider this build does
-/// not know so a later bundle can add a provider without failing older apps.
-/// An entry for a known provider must decode completely.
+/// Skips entries whose provider this build does not know, so a later bundle can add a provider
+/// without failing older apps.
 struct KnownProviderModelEntries: Decodable {
     let entries: [AnalysisModelEntry]
 

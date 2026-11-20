@@ -1,8 +1,7 @@
 import Foundation
 
 extension RSSFeedParser {
-    /// Blocking file and XML work belongs to the preparation task's concurrent
-    /// executor. Original and recovery attempts have independent SQLite stores.
+    /// Blocking file and XML work: it must stay off the caller's actor.
     @concurrent
     public func prepare(fileURL: URL, feedURL: URL, transferIssue: FeedIncompleteReason? = nil) async throws -> PreparedFeed {
         try await prepare(

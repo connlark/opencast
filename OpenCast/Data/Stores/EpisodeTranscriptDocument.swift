@@ -22,10 +22,7 @@ nonisolated struct EpisodeTranscriptDocument: Codable, Sendable, Equatable {
     var createdAt: Date
     var updatedAt: Date
 
-    // Schema 3 additive provenance. All optional so schema 1/2 documents keep
-    // decoding; `modelIdentifier`/`modelVersion` continue to carry honest
-    // compatibility values for older logic, and remote documents never claim
-    // a local model tree hash (`modelTreeSHA256` stays empty for them).
+    // Optional so schema 1 and 2 documents still decode.
     var transcriptionEngine: String? = nil
     var providerModelIdentifier: String? = nil
     var providerModelRevision: String? = nil

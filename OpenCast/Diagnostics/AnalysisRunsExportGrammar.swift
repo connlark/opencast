@@ -1,9 +1,5 @@
 import Foundation
 
-/// The closed grammars the analysis-runs export checks its free-form
-/// fields against. A value that fails becomes `invalid`, so a signed policy
-/// or a damaged run record can never carry prose, an address or a key into
-/// the export.
 nonisolated enum AnalysisRunsExportGrammar {
     static let invalid = "invalid"
 

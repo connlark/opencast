@@ -1,16 +1,6 @@
 import SwiftUI
 
-/// The show page's per-visit settings: what it lists and what it searches.
-///
-/// A show opened from the Group by Podcast Inbox carries the Inbox's filter,
-/// Hide Up Next and archive scope (archived episodes hidden, or only they
-/// listed) in its route for that visit only
-/// (`AppRoute.podcastDetail(feedURL:episodeListOverride:)`); picking a
-/// filter on the page ends them and Show Hidden Episodes lists what Hide Up
-/// Next and the archive scope hid. The page's episode search (shown or not, its
-/// query and mode) decides what the page lists too.
 struct PodcastDetailVisit: Equatable {
-    /// The page's episode search while it is shown.
     struct Search: Equatable {
         var query = ""
         var mode = EpisodeSearchMode.episodes
@@ -20,7 +10,6 @@ struct PodcastDetailVisit: Equatable {
     /// Nil while the search is hidden.
     var search: Search?
 
-    /// A new visit: the route's own override, no search.
     init(route: AppRoute) {
         if case .podcastDetail(_, let override) = route {
             episodeListOverride = override
@@ -28,28 +17,17 @@ struct PodcastDetailVisit: Equatable {
     }
 }
 
-/// The visits of one section's pages, kept above a two-pane root's
-/// containers: a switch between them (a fold, a rotation) rebuilds every
-/// page, and the route keeps its payload (it is the page's identity), so a
-/// rebuilt page would otherwise start its visit again from the route.
-///
-/// A visit is keyed by its complete route and lasts while the section's path
-/// still holds that route: replacing the path, popping the page or clearing
-/// the path ends it, and opening the route again starts afresh. A page
-/// cannot tell which of several equal routes it is, so the ledger keeps a
-/// visit only while its route appears once in the path; pages whose route
-/// appears more than once keep their visits to themselves, each its own.
+/// Kept above the containers because a switch rebuilds every page. A visit
+/// lasts while the path holds its route, and is kept here only while the route
+/// appears once: a page cannot tell which of several equal routes it is.
 struct TwoPaneRootVisitLedger: Equatable {
     private var podcastDetailVisits: [AppRoute: PodcastDetailVisit] = [:]
-    /// The Notes page's search query, per visit, as the show page's search.
     private var notesSearchQueries: [AppRoute: String] = [:]
 
     func podcastDetailVisit(for route: AppRoute) -> PodcastDetailVisit {
         podcastDetailVisits[route] ?? PodcastDetailVisit(route: route)
     }
 
-    /// The visit of the one page that shows `route` in `path`, or nil when
-    /// the path holds the route more than once (or not at all).
     func podcastDetailVisit(for route: AppRoute, in path: [AppRoute]) -> PodcastDetailVisit? {
         Self.holdsOnce(route, in: path) ? podcastDetailVisit(for: route) : nil
     }
@@ -70,7 +48,6 @@ struct TwoPaneRootVisitLedger: Equatable {
         notesSearchQueries[route] = query
     }
 
-    /// Ends every visit whose route the path no longer holds.
     mutating func retainVisits(in path: [AppRoute]) {
         guard !podcastDetailVisits.isEmpty || !notesSearchQueries.isEmpty else {
             return
@@ -81,8 +58,6 @@ struct TwoPaneRootVisitLedger: Equatable {
     }
 }
 
-/// One section's visit ledger, owned by its `TwoPaneRoot` above both
-/// containers.
 @Observable
 final class TwoPaneRootVisitState {
     private(set) var ledger = TwoPaneRootVisitLedger()
@@ -114,13 +89,9 @@ final class TwoPaneRootVisitState {
     }
 }
 
-/// The ledger as one hosting stack's pages see it (`TwoPaneRootWriter`).
-/// Reads reach the ledger while the page's route appears once in the path;
-/// writes land only while that stack is current, so a page torn down by a
-/// switch or a new detail root (whose search ends as it goes) cannot end the
-/// visit the rebuilt page is about to show. Where there is no visit (no
-/// two-pane root, or a route the path holds twice) a page keeps its visit in
-/// its own state.
+/// Writes land only while this stack is current, so a page torn down by a
+/// switch (its search ending as it goes) cannot end the visit the rebuilt page
+/// is about to show. Without a visit here, a page keeps it in its own state.
 struct TwoPaneRootVisitScope {
     let state: TwoPaneRootVisitState
     /// For the log only.
@@ -141,7 +112,6 @@ struct TwoPaneRootVisitScope {
         state.setPodcastDetailVisit(visit, for: route)
     }
 
-    /// The Notes page's query while its route appears once in the path.
     func notesSearchQuery(for route: AppRoute) -> String? {
         TwoPaneRootVisitLedger.holdsOnce(route, in: path()) ? state.ledger.notesSearchQuery(for: route) : nil
     }

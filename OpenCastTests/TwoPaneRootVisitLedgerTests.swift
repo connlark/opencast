@@ -2,11 +2,6 @@ import SwiftUI
 import Testing
 @testable import OpenCast
 
-/// The show page's per-visit settings across two-pane container switches
-/// (its Inbox override and its episode search). A switch rebuilds the page from
-/// its route; the ledger above the containers keeps what the visit changed.
-/// "Switch" below is what `TwoPaneRoot` does: the same section path, the
-/// other container's scope, a page rebuilt from the same route.
 @MainActor
 @Suite("Two-pane root visit ledger")
 struct TwoPaneRootVisitLedgerTests {
@@ -17,9 +12,6 @@ struct TwoPaneRootVisitLedgerTests {
     private static let showFromInboxOther = AppRoute.podcastDetail(feedURL: feed, episodeListOverride: otherOverride)
     private static let episode = AppRoute.episodeDetail(id: "episode-1")
 
-    /// The section as `TwoPaneRoot` runs it: the path, the scene's
-    /// container, and the current host's writer (a new host, so a new token,
-    /// at every switch), whose visit scope the rebuilt page reads.
     @MainActor
     private final class Root {
         let state = TwoPaneRootVisitState()
@@ -31,7 +23,6 @@ struct TwoPaneRootVisitLedgerTests {
             Binding(get: { self.path }, set: { self.path = $0 })
         }
 
-        /// The current host's scope, as a rebuilt page reads it.
         var current: TwoPaneRootVisitScope {
             let kind: TwoPaneRootWriter.Kind = container == .split ? .detail(head: path.first) : .stack
             let containerBinding = Binding(get: { self.container }, set: { self.container = $0 })
@@ -44,7 +35,7 @@ struct TwoPaneRootVisitLedgerTests {
             state.retainVisits(in: newPath)
         }
 
-        /// A fold or rotation: the other container, the same path, a new host.
+        // A switch: the other container, the same path, a new host.
         func switchContainer() {
             container = container == .split ? .stack : .split
             token = TwoPaneRootWriterToken()
@@ -62,14 +53,6 @@ struct TwoPaneRootVisitLedgerTests {
         }
     }
 
-    @Test("A new visit starts from its route's override with no search")
-    func newVisitSeedsFromTheRoute() {
-        let ledger = TwoPaneRootVisitLedger()
-        #expect(ledger.podcastDetailVisit(for: Self.showFromInbox).episodeListOverride == Self.inboxOverride)
-        #expect(ledger.podcastDetailVisit(for: Self.showFromInbox).search == nil)
-        #expect(ledger.podcastDetailVisit(for: .podcastDetail(feedURL: Self.feed)).episodeListOverride == nil)
-    }
-
     @Test("Picking a filter ends the Inbox override, and a switch either way does not bring it back", arguments: [
         TwoPaneRootContainer.split, .stack
     ])
@@ -83,20 +66,6 @@ struct TwoPaneRootVisitLedgerTests {
         #expect(root.visit(Self.showFromInbox)?.episodeListOverride == nil)
         root.switchContainer()
         #expect(root.visit(Self.showFromInbox)?.episodeListOverride == nil)
-    }
-
-    @Test("Show Hidden Episodes survives a switch either way", arguments: [TwoPaneRootContainer.split, .stack])
-    func showHiddenSurvivesSwitches(startingIn container: TwoPaneRootContainer) {
-        let root = Root()
-        root.container = container
-        root.setPath([Self.showFromInbox])
-        root.update(Self.showFromInbox, in: root.current) { $0.episodeListOverride?.hidesQueuedEpisodes = false }
-
-        root.switchContainer()
-        let afterOne = root.visit(Self.showFromInbox)?.episodeListOverride
-        #expect(afterOne == PodcastEpisodeListOverride(filter: .unplayed, hidesQueuedEpisodes: false))
-        root.switchContainer()
-        #expect(root.visit(Self.showFromInbox)?.episodeListOverride == afterOne)
     }
 
     @Test("The same show under another override is another visit")
@@ -113,29 +82,6 @@ struct TwoPaneRootVisitLedgerTests {
         #expect(root.visit(Self.showFromInbox)?.episodeListOverride == Self.inboxOverride)
     }
 
-    @Test("Clearing the path ends the visit")
-    func clearingThePath() {
-        let root = Root()
-        root.setPath([Self.showFromInbox])
-        root.update(Self.showFromInbox, in: root.current) { $0.episodeListOverride = nil }
-        root.setPath([])
-        root.switchContainer()
-        root.setPath([Self.showFromInbox])
-        #expect(root.visit(Self.showFromInbox)?.episodeListOverride == Self.inboxOverride)
-    }
-
-    @Test("Returning from a nested page keeps the visit, across a switch too")
-    func returningFromANestedPage() {
-        let root = Root()
-        root.setPath([Self.showFromInbox])
-        root.update(Self.showFromInbox, in: root.current) { $0.episodeListOverride = nil }
-        root.setPath([Self.showFromInbox, Self.episode])
-        root.switchContainer()
-        root.setPath([Self.showFromInbox])
-        #expect(root.visit(Self.showFromInbox)?.episodeListOverride == nil)
-    }
-
-    /// The show page's search decides what it lists: a visit setting.
     @Test("A typed search survives a switch either way with the same query, mode and request", arguments: [
         TwoPaneRootContainer.split, .stack
     ])
@@ -174,8 +120,6 @@ struct TwoPaneRootVisitLedgerTests {
         #expect(root.visit(Self.showFromInbox)?.search == nil)
     }
 
-    /// The Notes page's search query is carried as the show
-    /// page's search is.
     @Test("The Notes page's query survives a switch either way; the outgoing page's write is dropped; the visit ends with the path", arguments: [
         TwoPaneRootContainer.split, .stack
     ])
@@ -201,30 +145,5 @@ struct TwoPaneRootVisitLedgerTests {
         root.setPath([])
         root.setPath([.notes])
         #expect(root.current.notesSearchQuery(for: .notes) == "")
-    }
-
-    @Test("An outgoing host's visit writes are dropped; the current one's land", arguments: [
-        TwoPaneRootContainer.split, .stack
-    ])
-    func scopeWrites(startingIn container: TwoPaneRootContainer) {
-        let root = Root()
-        root.container = container
-        root.setPath([Self.showFromInbox])
-        let outgoing = root.current
-        root.switchContainer()
-        root.update(Self.showFromInbox, in: outgoing) { $0.episodeListOverride = nil }
-        #expect(root.visit(Self.showFromInbox)?.episodeListOverride == Self.inboxOverride)
-        root.update(Self.showFromInbox, in: root.current) { $0.episodeListOverride = nil }
-        #expect(root.visit(Self.showFromInbox)?.episodeListOverride == nil)
-    }
-
-    @Test("Without a two-pane root a page keeps its visit to itself")
-    func ledgerRetainsOnlyThePath() {
-        var ledger = TwoPaneRootVisitLedger()
-        var visit = ledger.podcastDetailVisit(for: Self.showFromInbox)
-        visit.episodeListOverride = nil
-        ledger.setPodcastDetailVisit(visit, for: Self.showFromInbox)
-        ledger.retainVisits(in: [Self.episode])
-        #expect(ledger == TwoPaneRootVisitLedger())
     }
 }

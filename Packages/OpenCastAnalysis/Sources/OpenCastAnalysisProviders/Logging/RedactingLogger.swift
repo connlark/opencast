@@ -2,43 +2,21 @@ import Foundation
 import OpenCastAnalysis
 import OSLog
 
-/// Receives the redacted lines a ``RedactingLogger`` writes, for tests and
-/// command-line tools.
 public protocol AnalysisLogSink: Sendable {
     func write(_ line: String)
 }
 
-/// What a recorder may write for one artifact: the redacted JSON when
-/// ``SecretVerifier`` proved it clean, otherwise a fixed placeholder.
+/// `text` is redacted JSON that ``SecretVerifier`` proved clean, or a fixed placeholder.
 public struct AnalysisSafeRecording: Sendable, Hashable {
-    /// The bytes to write.
     public var text: String
-    /// Whether `text` is the artifact (true) or a placeholder (false).
     public var recorded: Bool
-    /// Why the artifact was suppressed: `secret_fragment`,
-    /// `verification_bound` or `not_json`.
+    /// `secret_fragment`, `verification_bound` or `not_json`.
     public var reason: String?
 }
 
-/// The one logger of the provider layer, and the redaction every sink uses.
-///
-/// The redactor here is best effort and deliberately simple, every pass
-/// linear: registered secrets matched exactly; masked key forms (a key
-/// prefix touching a masking run, or four or more masking characters);
-/// key-shaped runs; credential values after a credential name (quoted
-/// values, `Basic` and `Bearer` whole values), standalone `Basic` and
-/// `Bearer` values, and query parameters whose percent-decoded name is a
-/// credential name; JSON by structure, keeping numbers. **It carries no
-/// guarantee.** ``SecretVerifier`` does: every sink verifies what the
-/// redactor produced and fails closed on any hit, so a log line becomes
-/// `[REDACTED LINE]` and a recording becomes
-/// `{"redacted": true, "reason": "secret_fragment"}`.
-///
-/// Log lines are an app sink: callers pass structured facts (closed
-/// vocabularies and numbers), never a provider body or header, and the
-/// verifier checks them for whole secrets and key shapes. Recordings are a
-/// recorder sink, verified for every 4-scalar fragment in every supported
-/// decoding.
+/// The redactor is best effort and carries no guarantee; ``SecretVerifier`` does: every sink
+/// verifies the redactor's output and fails closed on any hit. Log only structured facts
+/// (closed vocabularies and numbers), never a provider body or header.
 public struct RedactingLogger: Sendable {
     public static let redacted = "[REDACTED]"
     public static let redactedLine = "[REDACTED LINE]"
@@ -48,9 +26,6 @@ public struct RedactingLogger: Sendable {
     private let secrets: [String]
     private let verifier: SecretVerifier
 
-    /// - Parameters:
-    ///   - subsystem: The unified logging subsystem; `nil` writes only to `sink`.
-    ///   - secrets: Values never to print, such as the transport's key.
     public init(
         subsystem: String? = "OpenCastAnalysis",
         category: String = "AnalysisProviders",
@@ -60,7 +35,6 @@ public struct RedactingLogger: Sendable {
         self.init(logger: subsystem.map { Logger(subsystem: $0, category: category) }, sink: sink, secrets: secrets)
     }
 
-    /// The same logger, also redacting `secret`.
     public func redacting(_ secret: String) -> RedactingLogger {
         RedactingLogger(logger: logger, sink: sink, secrets: secrets + [secret])
     }
@@ -80,8 +54,6 @@ public struct RedactingLogger: Sendable {
 
     // MARK: Sinks
 
-    /// A line for an app sink: redacted, then verified; `[REDACTED LINE]`
-    /// when the verifier finds anything.
     public static func safeLine(_ text: String, secrets: [String] = []) -> String {
         safeLine(text, secrets: secrets, verifier: SecretVerifier(secrets: secrets))
     }
@@ -91,8 +63,7 @@ public struct RedactingLogger: Sendable {
         return verifier.verifyAppText(line) == .clean ? line : redactedLine
     }
 
-    /// A recorder artifact from text: JSON is redacted by structure and
-    /// verified; anything that is not JSON is never written as text.
+    /// Text that is not JSON is never written.
     public static func safeRecording(_ text: String, secrets: [String]) -> AnalysisSafeRecording {
         let verifier = SecretVerifier(secrets: secrets)
         switch BoundedJSON.parse(text, maximumDepth: SecretVerifier.maximumJSONDepth) {
@@ -105,8 +76,6 @@ public struct RedactingLogger: Sendable {
         }
     }
 
-    /// A recorder artifact from a JSON value: redacted by structure, then the
-    /// serialized bytes verified as a whole, numbers included.
     public static func safeRecording(_ value: JSONValue, secrets: [String]) -> AnalysisSafeRecording {
         safeRecording(value, secrets: secrets, verifier: SecretVerifier(secrets: secrets))
     }
@@ -123,10 +92,8 @@ public struct RedactingLogger: Sendable {
         }
     }
 
-    /// A recorder artifact built from structured fields (closed values,
-    /// numbers and already verified text): verified whole as it stands and
-    /// written unchanged, or replaced by a placeholder. Nothing is redacted,
-    /// so what is written is exactly what was built.
+    /// Only for closed values, numbers and already verified text: nothing is redacted, so the
+    /// artifact is exactly what was built, or a placeholder.
     public static func verifiedRecording(_ value: JSONValue, verifier: SecretVerifier) -> AnalysisSafeRecording {
         let text = JSONWriter.string(value)
         switch verifier.verifyRecordedArtifact(text) {
@@ -139,8 +106,6 @@ public struct RedactingLogger: Sendable {
         }
     }
 
-    /// `{"redacted": true, "reason": …}`, with the byte count only when the
-    /// count itself verifies.
     static func placeholder(reason: String, bytes: Int?, verifier: SecretVerifier) -> AnalysisSafeRecording {
         let members = [JSONMember("redacted", .bool(true)), JSONMember("reason", .string(reason))]
         if let bytes {
@@ -152,9 +117,6 @@ public struct RedactingLogger: Sendable {
         return AnalysisSafeRecording(text: JSONWriter.string(.object(members)), recorded: false, reason: reason)
     }
 
-    /// JSON by structure: each string and member name redacted as text and
-    /// replaced whole when the verifier still flags it; credential-named
-    /// members' values replaced; numbers, booleans and nulls kept.
     static func redactForRecording(_ value: JSONValue, secrets: [String], verifier: SecretVerifier, depth: Int) -> JSONValue {
         guard depth <= SecretVerifier.maximumJSONDepth else { return .string(redacted) }
         switch value {
@@ -183,8 +145,6 @@ public struct RedactingLogger: Sendable {
 
     // MARK: Redaction (best effort)
 
-    /// `text` with every registered secret, masked key form, key-shaped run
-    /// and credential value replaced. Best effort: see the type's notes.
     public static func redact(_ text: String, secrets: [String] = []) -> String {
         // A run of combining marks past the verifier's bound is never kept,
         // and string operations on it would cost more than linear time.
@@ -214,24 +174,15 @@ public struct RedactingLogger: Sendable {
         return result
     }
 
-    /// Whether a key-shaped run (`sk-…`, `AIza…`, `AQ.…`, `pplx-…`) is in `text`.
     static func containsKeyShape(_ text: String) -> Bool {
         containsKeyShapeTrigger(text) && text.contains(keyShapePattern)
     }
 
     nonisolated(unsafe) static let keyShapePattern = /(?:sk-|AIza)[A-Za-z0-9_\-]{16,}|pplx-[A-Za-z0-9]{24,}|AQ\.[A-Za-z0-9_.\-]{16,}/
-    /// A credential name and its separator; the value after it is read by
-    /// ``redactCredentialValues(_:after:unquoted:)``.
     nonisolated(unsafe) static let namedCredential =
         /(?i)(?:x-goog-api-key|x-api-key|api[_-]?key|apikey|authorization|access[_-]?token|auth[_-]?token|token|secret|password)["']?\s*[:=]\s*(?:(?:basic|bearer)\s+)?/
-    /// `Bearer` or `Basic` before a value, any length, quoted or not.
     nonisolated(unsafe) static let schemeCredential = /(?i)\b(?:bearer|basic)\s+/
 
-    /// Every value after a match of `prefix` replaced, in one forward pass.
-    /// A quoted value runs to its closing quote, a backslash escaping the
-    /// next character (so `\"` stays inside it), and keeps its quotes; an
-    /// unclosed one is replaced to the end of its line. An unquoted value is
-    /// the run of characters `unquoted` accepts.
     static func redactCredentialValues(_ text: String, after prefix: Regex<Substring>, unquoted: (Character) -> Bool) -> String {
         var output = ""
         var copied = text.startIndex
@@ -281,9 +232,6 @@ public struct RedactingLogger: Sendable {
         return output
     }
 
-    /// Query parameters read in one forward pass: after each `?` or `&`, a
-    /// name up to `=` (stopping at any delimiter), then its value; a value
-    /// whose percent-decoded name is a credential name is replaced.
     static func redactQueryCredentials(_ text: String) -> String {
         let scalars = Array(text.unicodeScalars)
         func ends(_ scalar: Unicode.Scalar) -> Bool {
@@ -335,9 +283,8 @@ public struct RedactingLogger: Sendable {
         ["sk-", "AIza", "pplx-", "AQ."].contains { text.contains($0) }
     }
 
-    /// Whether `text` may hold a credential name or scheme, read the way the
-    /// patterns read it (case-insensitively, Unicode case folding): plain
-    /// ASCII text takes a cheap path, any other text is folded in full.
+    /// Folds case the way the `(?i)` patterns do (Unicode case folding), so this prefilter never
+    /// skips text they would match.
     static func mayHoldCredential(_ text: String) -> Bool {
         let names = ["key", "token", "authorization", "secret", "password", "bearer", "basic"]
         let folded = text.utf8.allSatisfy({ $0 < 0x80 })
@@ -346,7 +293,6 @@ public struct RedactingLogger: Sendable {
         return names.contains { folded.contains($0) }
     }
 
-    /// Replaces each run of overlapping `ranges` with one `[REDACTED]`.
     static func replace(_ ranges: [Range<Int>], in scalars: inout [Unicode.Scalar]) -> Bool {
         guard !ranges.isEmpty else { return false }
         let sorted = ranges.sorted { $0.lowerBound < $1.lowerBound }
@@ -373,18 +319,12 @@ public struct RedactingLogger: Sendable {
         return true
     }
 
-    /// Masked key forms, in one pass: a masking run (masking characters and
-    /// dots, with at least one masking character or three dots) is
-    /// redacted with the token characters touching it when it holds four or
-    /// more masking characters or the token before it starts with a key
-    /// prefix, as in `sk-proj-***abcd`. Token ends are known before the scan
-    /// and the output's trailing token is tracked as it grows.
+    /// Masked keys such as `sk-proj-***abcd`, redacted with the token characters touching them.
     static func redactMaskedKeys(_ scalars: inout [Unicode.Scalar]) -> Bool {
         guard scalars.contains(where: { isMask($0) || $0 == "." }) else { return false }
         let count = scalars.count
-        // chainEnd[i]: the end of the masked token from i on, every token,
-        // masking and glue scalar in a row, so a redaction takes the whole
-        // of `sk-proj-***middle***abcd` and not just its first run.
+        // chainEnd[i]: the end of the token, mask and glue run from i, so a redaction takes all of
+        // `sk-proj-***middle***abcd`, not just its first run.
         var chainEnd = [Int](repeating: count, count: count + 1)
         for position in stride(from: count - 1, through: 0, by: -1) {
             let chained = isToken(scalars[position]) || isMask(scalars[position]) || scalars[position] == "."
@@ -444,9 +384,8 @@ public struct RedactingLogger: Sendable {
         SecretNormalization.maskScalars.contains(scalar) || scalar == "\u{FF0A}"
     }
 
-    /// Token characters, and the glue a credential may hide behind
-    /// (format, default-ignorable and combining characters, spacing marks
-    /// included).
+    /// Includes the glue a credential may hide behind: format, default-ignorable and combining
+    /// characters, spacing marks too.
     static func isToken(_ scalar: Unicode.Scalar) -> Bool {
         switch scalar {
         case "A"..."Z", "a"..."z", "0"..."9", "_", ".", "-":

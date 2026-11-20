@@ -1,9 +1,6 @@
 import Foundation
 
-/// Maps generate-transcript request phases onto the 0–1000 continued
-/// processing progress band, monotonic-clamped like
-/// `EpisodeAdFreePassProgressMapper` so pulled fractions and creep can never
-/// run the system card backwards.
+/// Monotonic, so pulled fractions and creep never run the system card backwards.
 struct EpisodeTranscriptGenerationProgressMapper: Equatable {
     static let totalUnitCount: Int64 = 1_000
 

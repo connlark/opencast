@@ -1,9 +1,7 @@
 import SwiftUI
 
-/// One container for the card, the split and the tall open display: the
-/// player first, the pane beside it second when there is one, each placed at
-/// its allocation. A change between those arrangements moves the player; it
-/// never rebuilds it, so the player's state survives the pose change.
+/// One Layout for every arrangement, so a pose change moves the player instead of rebuilding
+/// it and its state survives.
 nonisolated struct NowPlayingArrangementContainer: Layout {
     let allocations: NowPlayingAllocations
 

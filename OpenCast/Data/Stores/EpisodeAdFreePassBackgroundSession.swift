@@ -17,13 +17,11 @@ final class EpisodeAdFreePassBackgroundSession {
     private static let title = "Skip Promos & Ads"
     private static let consentSubtitle = "Needs your OK to download the speech model - open OpenCast."
     private static let creepInterval: Duration = .seconds(2)
-    /// The card's `Progress` counts this many units per point of the
-    /// 0...1000 scale, so a slow analyzing step moves on every creep tick
-    /// even when its slice is a few points wide or the queue is long.
+    /// `Progress` units per point of the 0...1000 scale, fine enough that a narrow slice still
+    /// moves on every creep tick.
     static let progressSubunitsPerUnit: Int64 = 1_000_000
 
     @ObservationIgnored private let scheduler: any AdFreePassContinuedTaskScheduling
-    @ObservationIgnored private let forceForegroundOnly: @MainActor () -> Bool
     @ObservationIgnored private let now: () -> Date
     private var state: State = .idle
     private var submittedRequiresGPU = false
@@ -50,11 +48,9 @@ final class EpisodeAdFreePassBackgroundSession {
 
     init(
         scheduler: any AdFreePassContinuedTaskScheduling = BGTaskSchedulerAdFreePassScheduler(),
-        forceForegroundOnly: @escaping @MainActor () -> Bool = EpisodeAdFreePassBackgroundSession.environmentForcesForegroundOnly,
         now: @escaping () -> Date = { .now }
     ) {
         self.scheduler = scheduler
-        self.forceForegroundOnly = forceForegroundOnly
         self.now = now
     }
 
@@ -66,14 +62,11 @@ final class EpisodeAdFreePassBackgroundSession {
         handle != nil && state == .running
     }
 
-    /// True while a run is submitted or live. Manual enqueues consult this so
-    /// appending to an armed queue never resubmits (one task per drain).
     var isArmed: Bool {
         state == .submitted || state == .running
     }
 
-    /// A cloud-first drain or GPU submission fallback can hold a card
-    /// without GPU even on a platform that normally selects GPU compute.
+    /// A cloud-first drain or the GPU retry can hold a card without GPU where GPU is supported.
     var requiresNonGPUCompute: Bool {
         isArmed && scheduler.supportsGPUResources && !submittedRequiresGPU
     }
@@ -98,7 +91,7 @@ final class EpisodeAdFreePassBackgroundSession {
         let subtitle = Self.truncatedTitleText(episodeTitle)
         AdFreePassBackgroundRunLog.record("arm episodeTitle=\(episodeTitle) subtitle=\(subtitle) requiresGPU=\(requiresGPU)")
         AdFreePassBackgroundEnvironmentSnapshot.record(reason: "arm")
-        guard !forceForegroundOnly() else {
+        guard !Self.environmentForcesForegroundOnly() else {
             state = .foregroundOnly
             AdFreePassBackgroundRunLog.record("arm foregroundOnly reason=debugForced")
             return
@@ -121,8 +114,6 @@ final class EpisodeAdFreePassBackgroundSession {
         }
     }
 
-    /// A GPU-required submission retries once
-    /// without GPU before the caller degrades to foreground-only.
     private func submitRequest(subtitle: String, requiresGPU: Bool) throws {
         do {
             try scheduler.submit(
@@ -161,10 +152,8 @@ final class EpisodeAdFreePassBackgroundSession {
 
         recordProgressGapIfNeeded(for: newStage)
         recordEnvironmentIfNeeded(for: newStage)
-        // The cloud preparation stages share one band and one creep clock:
-        // a move between them or a new upload part count never restarts it,
-        // so a long upload can't hold the card flat until the system expires
-        // it as stalled.
+        // Cloud preparation stages share one creep clock, so a long upload can't hold the card
+        // flat until the system expires it as stalled.
         if !(stage.isCloudPreparation && newStage.isCloudPreparation) {
             stageBeganAt = now()
         }
@@ -187,9 +176,7 @@ final class EpisodeAdFreePassBackgroundSession {
         apply(newStage, to: handle)
     }
 
-    /// Queue-terminal events are coordinator-driven: mid-queue
-    /// per-episode completions and failures are progress only; this is the
-    /// single place a run ends.
+    /// The only place a run ends; per-episode completions and failures are progress only.
     func noteQueueTerminal(_ outcome: AdFreePassQueueTerminalOutcome) {
         AdFreePassBackgroundRunLog.record("queue terminal noted outcome=\(outcome)")
 

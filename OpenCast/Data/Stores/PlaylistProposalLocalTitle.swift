@@ -1,20 +1,8 @@
-/// Playlist names chosen on the device, for a simpler answer that carries
-/// episode numbers only.
 nonisolated enum PlaylistProposalLocalTitle {
     static let maximumLength = 60
-    /// The name of a group whose episodes have no titles.
     static let fallbackName = "Playlist"
-    /// Dropped from the end of a shared title prefix ("Harbor Tales —") and of
-    /// a cut name.
     private static let trailingSeparators: Set<Character> = [":", "-", "–", "—", "#", "|", ","]
 
-    /// Names for proposals a simpler answer returned without any. A typed request names them after the request,
-    /// first letter capitalised ("Harbor stories", then "Harbor stories 2", "Harbor stories 3"); suggestions take
-    /// the longest run of leading words (2 or more) that all their episode titles share, trailing ":", "-", "–",
-    /// "—", "#", "|" and "," trimmed, else the first episode's title. Groups whose names would collide (a show whose
-    /// every title starts "Show Name – …") are named from `shortTitles`, the titles with that show-wide prefix
-    /// dropped, when given. A name already used gets " 2", " 3"; a group with no titles is `fallbackName`.
-    /// Whitespace collapsed; cut at a word boundary to `maximumLength`.
     static func titles(
         forEpisodeTitles episodeTitles: [[String]],
         shortTitles: [[String]]? = nil,
@@ -53,9 +41,6 @@ nonisolated enum PlaylistProposalLocalTitle {
         }
     }
 
-    /// The longest shared run of leading words, compared case-sensitively as
-    /// written, when it still holds 2 or more words once trimmed; otherwise
-    /// the first non-empty episode title.
     private static func suggestionName(for titles: [String]) -> String {
         let words = titles.map { $0.split(whereSeparator: \.isWhitespace) }
         guard let first = words.first else {
@@ -72,7 +57,6 @@ nonisolated enum PlaylistProposalLocalTitle {
         return titles.lazy.map(collapsingWhitespace).first { !$0.isEmpty } ?? ""
     }
 
-    /// `base`, cut so the whole name including " `number`" fits `maximumLength`.
     private static func name(_ base: String, number: Int?) -> String {
         let suffix = number.map { " \($0)" } ?? ""
         return cut(base, to: maximumLength - suffix.count) + suffix

@@ -1,16 +1,14 @@
 @preconcurrency import AVFoundation
 
-/// One `AVAudioPlayer` for the skip cue. It never touches `AVAudioSession`;
-/// it plays inside whatever session its owner holds.
+/// Never touches `AVAudioSession`: it plays inside whatever session its owner holds.
 final class PlaybackSkipCuePlayer: NSObject, PlaybackSkipCuePlaying {
     private let player: AVAudioPlayer
-    /// Whether `prepare()` has succeeded. Opening the file never prepares it:
-    /// preparing acquires the audio hardware, and on iOS the session with it.
+    /// Opening the file never prepares it: preparing acquires the audio hardware, and on iOS the
+    /// session with it.
     private(set) var isPrepared = false
     private(set) var isSounding = false
     var onFinish: (@MainActor () -> Void)?
 
-    /// Opens the file without preparing it.
     init(contentsOf url: URL) throws {
         player = try AVAudioPlayer(contentsOf: url)
         super.init()

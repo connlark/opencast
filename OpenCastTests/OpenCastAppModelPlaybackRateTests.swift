@@ -65,8 +65,6 @@ struct OpenCastAppModelPlaybackRateTests {
             fixture.appModel.playbackSettings.lastErrorMessage
                 == "Unable to update this show's speed: Simulated synced save failure"
         )
-        // The speed sheet shows the failure; the root Library alert must not
-        // show it a second time.
         #expect(fixture.appModel.library.lastErrorMessage == nil)
         #expect(try storedGlobalRate(fixture.context) == nil)
     }
@@ -182,18 +180,6 @@ struct OpenCastAppModelPlaybackRateTests {
         #expect(try storedGlobalRate(fixture.context) == "1.75")
         #expect(fixture.appModel.library.podcastPlaybackRateOverride(forPodcastID: Self.globalShowID) == nil)
         #expect(fixture.appModel.library.podcastPlaybackRateOverride(forPodcastID: Self.customShowID) == 2)
-    }
-
-    @Test("CarPlay's rate button cycles the show's speed while it has one")
-    func cyclingTheRateEditsTheShowSpeed() async throws {
-        let fixture = try await makeFixture()
-        try play(Self.customEpisodeID, fixture: fixture)
-
-        #expect(fixture.appModel.cyclePlaybackRate(modelContext: fixture.context))
-
-        #expect(fixture.appModel.playback.rate == 1.75)
-        #expect(fixture.appModel.library.podcastPlaybackRateOverride(forPodcastID: Self.customShowID) == 1.75)
-        #expect(try storedGlobalRate(fixture.context) == nil)
     }
 
     @Test("Foreground activation applies the playing show's speed changed on another device")

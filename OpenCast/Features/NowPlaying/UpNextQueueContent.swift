@@ -1,19 +1,12 @@
 import SwiftData
 import SwiftUI
 
-/// The Up Next queue with no navigation container of its own: the list (or
-/// the empty state), its title and playlist subtitle, Edit, reorder, swipe
-/// to remove, Clear and the queue's error alerts. Its host decides what a
-/// row does and supplies the stack: the sheet and the Now Playing pane wrap
-/// it in their own `NavigationStack` and play the row (`UpNextQueueView`);
-/// the Up Next tab hands it to its two-pane root (`UpNextRootContent`,
-/// whose `rowAction` plays the row or opens the episode).
 struct UpNextQueueContent: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
     @State private var showsClearConfirmation = false
 
-    /// The host's alert: a queue edit that fails reports here.
+    /// Owned by the host; a failed queue edit reports here.
     @Binding var activeAlert: UpNextQueueAlert?
     let onSelectEpisode: (EpisodeListItemSnapshot) -> Void
 
@@ -38,8 +31,7 @@ struct UpNextQueueContent: View {
                             UpNextQueueRowButton(episode: episode) {
                                 onSelectEpisode(episode)
                             }
-                            // The Up Next tab's split shows the open episode;
-                            // nothing anywhere else.
+                            // Only the Up Next tab's split reads this selection.
                             .twoPaneRootSelection(.episodeDetail(id: episode.episodeID))
                         }
                         .onMove { source, destination in

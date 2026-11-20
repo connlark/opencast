@@ -1,10 +1,8 @@
 import Foundation
 import SwiftData
 
-/// Plays an episode from a tapped timestamp: scrubs the current episode, or
-/// starts this one at that time without presenting Now Playing. A note or
-/// show-notes timestamp carries no transcript hash to align against, unlike
-/// a chapter, so a plain seek or a plain start is the best available answer.
+/// A note or show-notes timestamp, unlike a chapter, has no transcript hash to align against,
+/// so a plain seek or start is the best available answer.
 enum EpisodeTimestampPlayback {
     static func seek(
         to seconds: TimeInterval,

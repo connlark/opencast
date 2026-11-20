@@ -4,12 +4,6 @@ import Foundation
 @testable import OpenCastAnalysisReplay
 import Testing
 
-/// Nesting as the services' JSON reader counts it (`serde_json` 1.0.151): a
-/// typed read fails at the 128th nested container, an ignored member is read
-/// at any depth. The services' verdicts on deeply nested bodies and answers
-/// are pinned by the `nesting-*` parity goldens; these pin the parser's own
-/// rules, the sinks' handling of what it does not keep, and that no depth
-/// exhausts a thread's stack.
 @Suite("JSON nesting")
 struct JSONNestingTests {
     enum Shape: String, CaseIterable, Sendable, CustomTestStringConvertible {
@@ -55,7 +49,6 @@ struct JSONNestingTests {
         }
     }
 
-    /// `work` on a new thread whose stack is `stackKiB`.
     static func onThread(stackKiB: Int, _ work: @escaping @Sendable () -> Bool) async -> Bool {
         await withCheckedContinuation { continuation in
             let thread = Thread { continuation.resume(returning: work()) }
@@ -120,9 +113,8 @@ struct JSONNestingTests {
 
     @Test("No depth exhausts a stack: parsing and freeing fit a quarter of a cooperative thread's 512 KiB, writing, re-reading and comparing half", arguments: Shape.allCases)
     func stackBound(shape: Shape) async {
-        // Measured with a probe at 127, 128 and 1,048,576 levels: the parse
-        // alone fits the 16 KiB minimum; parse and free need at most 52 KiB
-        // in debug (36 KiB release), the whole round trip 116 KiB (36 KiB).
+        // Parse and free need at most 52 KiB in debug (36 KiB release), the
+        // whole round trip 116 KiB (36 KiB).
         for levels in [127, 128, 64 * 1024, 1024 * 1024] {
             let text = shape.text(levels)
             let parsed = await Self.onThread(stackKiB: 128) { (try? JSONParser.parse(text)) != nil }

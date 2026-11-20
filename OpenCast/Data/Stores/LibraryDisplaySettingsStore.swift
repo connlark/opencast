@@ -2,11 +2,9 @@ import Foundation
 import Observation
 import SwiftData
 
-/// Device-local Library display preferences. Every load and save runs in its
-/// own short-lived context: a failed save is discarded with that context
-/// instead of lingering as a dirty row that a later unrelated save would
-/// commit, and a preference save never flushes another context's pending
-/// synced edits. Published values change only after a save succeeds.
+/// Each load and save uses its own short-lived context: a failed save is discarded with it instead
+/// of lingering as a dirty row a later save would commit, and never flushes another context's
+/// pending synced edits.
 @Observable
 final class LibraryDisplaySettingsStore {
     static let layoutPreferenceKey = "library.layout"
@@ -20,7 +18,6 @@ final class LibraryDisplaySettingsStore {
 
     @ObservationIgnored private let save: (ModelContext) throws -> Void
 
-    /// `save` is the test seam for preference saves.
     init(save: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
         self.save = save
     }
@@ -103,7 +100,6 @@ final class LibraryDisplaySettingsStore {
         lastErrorMessage = nil
     }
 
-    /// Writes `value` for `key`, or deletes every row for `key` when nil.
     private func persist(
         _ value: String?,
         forKey key: String,

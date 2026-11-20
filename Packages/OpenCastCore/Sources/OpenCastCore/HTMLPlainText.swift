@@ -74,8 +74,7 @@ public enum HTMLPlainText {
             "reg": "\u{00AE}"
         ]
         var decoded = value
-        // Large-show-note profiling covers this Foundation bulk-replacement
-        // path; keep it despite the house preference for String.replacing.
+        // replacingOccurrences, not String.replacing: this path is measured on large show notes.
         for (entity, replacement) in namedEntities {
             decoded = decoded.replacingOccurrences(of: "&\(entity);", with: replacement)
         }
@@ -86,19 +85,23 @@ public enum HTMLPlainText {
 
     private static func decodeNumericEntities(in value: String) -> String {
         guard value.contains("&#") else { return value }
-        let regex = numericEntityPattern
-
-        var decoded = value
         let range = NSRange(value.startIndex..<value.endIndex, in: value)
-        for match in regex.matches(in: value, range: range).reversed() {
+        let matches = numericEntityPattern.matches(in: value, range: range)
+        guard !matches.isEmpty else { return value }
+
+        // One forward pass: replacing each match in place moves the tail every time, which is quadratic.
+        var decoded = ""
+        decoded.reserveCapacity(value.utf8.count)
+        var cursor = value.startIndex
+        for match in matches {
             guard match.numberOfRanges == 2,
-                  let entityRange = Range(match.range(at: 0), in: decoded),
-                  let payloadRange = Range(match.range(at: 1), in: decoded)
+                  let entityRange = Range(match.range(at: 0), in: value),
+                  let payloadRange = Range(match.range(at: 1), in: value)
             else {
                 continue
             }
 
-            let payload = String(decoded[payloadRange])
+            let payload = value[payloadRange]
             let codePoint: UInt32?
             if payload.lowercased().hasPrefix("x") {
                 codePoint = UInt32(payload.dropFirst(), radix: 16)
@@ -106,12 +109,14 @@ public enum HTMLPlainText {
                 codePoint = UInt32(payload, radix: 10)
             }
 
-            if let codePoint,
-               let scalar = UnicodeScalar(codePoint) {
-                decoded.replaceSubrange(entityRange, with: String(scalar))
+            guard let codePoint, let scalar = UnicodeScalar(codePoint) else {
+                continue
             }
+            decoded += value[cursor..<entityRange.lowerBound]
+            decoded.unicodeScalars.append(scalar)
+            cursor = entityRange.upperBound
         }
-
+        decoded += value[cursor...]
         return decoded
     }
 
@@ -124,7 +129,7 @@ public enum HTMLPlainText {
     }
 
     private static func normalizeLayout(in value: String) -> String {
-        // This normalization is part of the same measured large-note path.
+        // Keep replacingOccurrences: this path is measured on large show notes.
         value
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")

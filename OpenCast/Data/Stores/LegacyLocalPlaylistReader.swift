@@ -1,19 +1,13 @@
 import Foundation
 import SQLite3
 
-/// Reads the playlists an earlier build kept in the device-local store,
-/// straight from the SQLite file and before the container opens, because the
-/// local configuration no longer declares those entities and SwiftData would
-/// not surface them.
-///
-/// The open is read-only and the handle never outlives the call. It stays a
-/// plain open (no `immutable`, no `nolock`) so rows still sitting in the
-/// write-ahead log are read too.
+/// Reads the SQLite file directly: the local configuration no longer declares these entities, so
+/// SwiftData would not surface them. A plain open (no `immutable`, no `nolock`) also reads rows
+/// still in the write-ahead log.
 nonisolated enum LegacyLocalPlaylistReader {
     private static let playlistTableName = "ZPLAYLISTRECORD"
     private static let itemTableName = "ZPLAYLISTITEMRECORD"
 
-    /// nil when the file, or either playlist table, is missing.
     static func read(storeURL: URL) throws -> LegacyLocalPlaylistSnapshot? {
         let path = storeURL.path(percentEncoded: false)
         guard FileManager.default.fileExists(atPath: path) else {
@@ -44,7 +38,6 @@ nonisolated enum LegacyLocalPlaylistReader {
         )
     }
 
-    /// A store that predates playlists has neither table.
     private static func hasPlaylistTables(db: OpaquePointer) throws -> Bool {
         var tableNames: Set<String> = []
         try LocalCacheSQLite.query(
@@ -62,8 +55,7 @@ nonisolated enum LegacyLocalPlaylistReader {
         return tableNames.contains(playlistTableName) && tableNames.contains(itemTableName)
     }
 
-    /// Selects by column name and never touches the playlist's sort key or
-    /// symbol columns, so a table created without them still reads.
+    /// Leaves out the sort key and symbol columns, which some older tables lack.
     private static func readPlaylists(db: OpaquePointer) throws -> [LegacyLocalPlaylistSnapshot.Playlist] {
         var playlists: [LegacyLocalPlaylistSnapshot.Playlist] = []
         try LocalCacheSQLite.query(
@@ -132,9 +124,8 @@ nonisolated enum LegacyLocalPlaylistReader {
         optionalDate(statement, index) ?? Date(timeIntervalSinceReferenceDate: 0)
     }
 
-    /// The store keeps seconds since 2001-01-01, not the cache store's 1970
-    /// epoch, and gives a whole-second value INTEGER storage, so the column
-    /// is always read as a double whatever its storage class.
+    /// Seconds since 2001-01-01, not the cache store's 1970 epoch. A whole-second value has
+    /// INTEGER storage, so the column is read as a double whatever its storage class.
     private static func optionalDate(_ statement: OpaquePointer, _ index: Int32) -> Date? {
         LocalCacheSQLite.columnDouble(statement, index).map(Date.init(timeIntervalSinceReferenceDate:))
     }

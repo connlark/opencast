@@ -1,18 +1,8 @@
 import Foundation
 import SwiftData
 
-/// Detect Ads in New Episodes. The automatic download pass leaves a marker
-/// for each download it starts for a show with the setting on; this trigger
-/// takes the marker once that download has completed and queues the episode
-/// for ad detection on this device. A marker goes whether or not its episode
-/// still qualifies and whether or not the queue takes it, so the setting
-/// scans a download once by itself and never retries a failed scan.
-///
-/// While no marker is pending, a completion and a sweep return before any
-/// other read, so a listener who never turns the setting on pays nothing.
+/// While no marker is pending, a completion and a sweep return before any other read.
 final class NewEpisodeAdDetectionCoordinator {
-    /// How a taken episode is queued: on this device whatever the stored
-    /// detection mode, at the back, and never opening the key screen.
     struct EnqueueRequest: Equatable {
         let episode: EpisodeListItemSnapshot
         let origin: AdFreePassQueueOrigin
@@ -30,9 +20,8 @@ final class NewEpisodeAdDetectionCoordinator {
     private let isQueueRestored: () -> Bool
     private let enqueue: (EnqueueRequest, ModelContext) -> Void
 
-    /// `releasedEpisodes` lists a show's released episodes newest first.
-    /// `isQueueRestored` holds every marker until the launch restore of the
-    /// ad detection queue has run, so a restored item is never queued twice.
+    /// `releasedEpisodes` is newest first. Markers wait for `isQueueRestored`, so an item the
+    /// launch restore brings back is never queued twice.
     init(
         settings: DownloadSettingsStore,
         downloadRecord: @escaping (String) -> EpisodeDownloadRecord?,
@@ -55,9 +44,8 @@ final class NewEpisodeAdDetectionCoordinator {
         self.enqueue = enqueue
     }
 
-    /// From the download store's completion hook, ahead of the Keep
-    /// Downloaded trim: the episode is queued in this turn, so the queue
-    /// entry protects its download before the trim runs.
+    /// Queues in this turn, so the queue entry protects the download before the Keep Downloaded
+    /// trim runs.
     func downloadCompleted(episodeID: String, modelContext: ModelContext) {
         guard let podcastID = settings.detectAdsPendingPodcastID(forEpisodeID: episodeID),
               isQueueRestored()
@@ -68,12 +56,6 @@ final class NewEpisodeAdDetectionCoordinator {
         take([(episodeID, podcastID)], removingMarkersFor: [episodeID], modelContext: modelContext)
     }
 
-    /// At launch and on activation, for completions the hook never saw: a
-    /// download finished by launch reconciliation, or one that completed
-    /// before the queue was restored. A marker whose download completed
-    /// with its file in place is taken; one whose download record is gone,
-    /// or whose show no longer has the setting, is dropped; any other waits
-    /// for its download.
     func sweep(modelContext: ModelContext) {
         let markers = settings.detectAdsPendingPodcastIDsByEpisodeID
         guard !markers.isEmpty, isQueueRestored() else {
@@ -99,11 +81,7 @@ final class NewEpisodeAdDetectionCoordinator {
         take(taken, removingMarkersFor: removed, modelContext: modelContext)
     }
 
-    /// From the toggle, once the show's flag is saved: marks the show's
-    /// newest release (every episode sharing its release time, as the
-    /// automatic pass's first batch) that already has a download record,
-    /// then sweeps. A newest release with no record yet gets its marker
-    /// from the automatic pass that downloads it.
+    /// Call after the show's flag is saved: the sweep drops the markers of a show without it.
     func enable(forPodcastID podcastID: String, modelContext: ModelContext) {
         let released = releasedEpisodes(podcastID)
         if let newestReleaseDate = released.first?.publishedAt {

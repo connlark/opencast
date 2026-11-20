@@ -1,23 +1,18 @@
 import OpenCastAnalysis
 
-/// One Chapters & Summary run as the store hands it to the producer: the
-/// package request (its request id is the run id) plus what the run record
-/// and the continued-processing card need. Built off the main actor.
+/// The package request's id is the run id.
 nonisolated struct ChaptersSummaryRunRequest: Sendable {
     let runID: String
-    /// True when the run continues an interrupted one with the same id.
     let isResume: Bool
-    /// A Generate tap, not a launch or activation resume: only a listener
-    /// action may present the key screen.
+    /// Only a listener's Generate tap may present the key screen.
     let startedByListener: Bool
     let episodeID: String
     let podcastID: String
     let episodeTitle: String
     let transcriptFingerprint: String
     let analysisRequest: TranscriptAnalysisRequest
-    /// SHA-256 of the package request with its request id left out: what a
-    /// resumed run's result depends on besides the replies it kept. A resume
-    /// continues only when it matches the digest its run began with.
+    /// Leaves the request id out; a resume continues only when it matches the digest its run began
+    /// with.
     let inputDigest: String
 
     init(

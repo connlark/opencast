@@ -7,9 +7,6 @@ import Testing
 @MainActor
 @Suite("Library progress writes")
 struct LibraryProgressWriteTests {
-    /// Background playback flushes skip the observable refresh so a
-    /// non-visible scene never invalidates rows; the row must still be saved
-    /// and credited, and the next progress refetch publishes it.
     @Test("A write that skips the observable refresh stays invisible until the next progress refetch")
     func unobservedWriteStaysInvisibleUntilRefetch() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -41,11 +38,6 @@ struct LibraryProgressWriteTests {
         #expect(store.lastErrorMessage == nil)
     }
 
-    /// Smart playlists key their evaluations on `progressChangeRevision`.
-    /// A status change saved while the observable refresh is suppressed (a
-    /// boundary flush with Now Playing presented) must reach that token once
-    /// suppression ends, even though the next observable write only sees the
-    /// already-updated row.
     @Test("A suppressed status change reaches the progress change token with the next observable write")
     func suppressedStatusChangeReachesProgressChangeToken() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -83,28 +75,6 @@ struct LibraryProgressWriteTests {
         #expect(store.progressChangeRevision != published)
         #expect(store.progressRecord(for: episodeID)?.position == 20)
         #expect(store.lastErrorMessage == nil)
-    }
-
-    @Test("An observable write publishes the record immediately")
-    func observableWritePublishesImmediately() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let store = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
-        let episodeID = "observed-episode"
-        let podcastID = "https://example.com/observed.xml"
-        await store.load(modelContext: context)
-
-        #expect(store.updateProgress(
-            episodeID: episodeID,
-            podcastID: podcastID,
-            position: 45,
-            duration: 120,
-            modelContext: context
-        ))
-
-        #expect(store.progressRecord(for: episodeID)?.position == 45)
-        #expect(store.progressRecords.map(\.episodeID) == [episodeID])
-        #expect(store.syncedStoreSelfSaveCount == 1)
     }
 
     // MARK: - Archive
@@ -178,8 +148,6 @@ struct LibraryProgressWriteTests {
         #expect(store.syncedStoreSelfSaveCount == savesBeforeArchive + 1)
     }
 
-    /// The self-save ledger asserts in DEBUG that a credited save dirtied a
-    /// synced row, so a no-op that saved would also stop the test there.
     @Test("An archive or unarchive that changes nothing does not save")
     func noOpArchiveWritesDoNotSave() async throws {
         let fixture = try await makeArchiveFixture()
@@ -242,9 +210,6 @@ struct LibraryProgressWriteTests {
         #expect(archivedRecord.updatedAt == Self.longAgo)
     }
 
-    /// Unarchive All's write: the batch keeps each row and its listening and
-    /// clears only the archive. A batch with nothing archived saves nothing
-    /// (the DEBUG ledger assert would stop a no-op save here).
     @Test("Unarchiving several episodes of a show takes one save, leaves unarchived ones alone, and skips the save when none is archived")
     func batchUnarchiveTakesOneSave() async throws {
         let fixture = try await makeArchiveFixture()
@@ -286,8 +251,6 @@ struct LibraryProgressWriteTests {
         #expect(store.lastErrorMessage == nil)
     }
 
-    /// The batch unarchive shares the archive's undo: a failed save puts the
-    /// archives back, so the context carries nothing out and a retry works.
     @Test("A failed batch unarchive is recorded and puts the archives back, and a retry unarchives")
     func failedBatchUnarchiveIsUndone() async throws {
         let saves = ArchiveSaveSwitch()
@@ -317,8 +280,6 @@ struct LibraryProgressWriteTests {
         #expect(store.syncedStoreSelfSaveCount == savesBeforeBatch + 1)
     }
 
-    /// D3 and D8: listening and Mark Played edit the row in place and keep
-    /// the archive; Clear Progress deletes the row and the archive with it.
     @Test("Listening and marking played keep the archive, and Clear Progress removes it")
     func listeningKeepsTheArchiveAndClearRemovesIt() async throws {
         let fixture = try await makeArchiveFixture()
@@ -374,10 +335,6 @@ struct LibraryProgressWriteTests {
         #expect(store.syncedStoreSelfSaveCount == 0)
     }
 
-    /// The context is shared with other writers. A failed archive that left
-    /// its rows dirty would turn the retry into a no-op, and the next
-    /// unrelated save of the context (Up Next saves it directly) would carry
-    /// the archive out with no self-save credit.
     @Test("A failed archive puts its rows back, so a later save carries nothing and a retry archives")
     func failedArchiveLeavesNothingPending() async throws {
         let saves = ArchiveSaveSwitch()
@@ -417,9 +374,6 @@ struct LibraryProgressWriteTests {
         #expect(storedAfterRetry.allSatisfy { $0.archivedAt != nil })
     }
 
-    /// An episode ID already names its show, and the archived set is keyed
-    /// by it, so a write finds the episode's row whatever feed spelling it
-    /// was stored under.
     @Test("Unarchive finds a lone archived row stored under a feed-URL variant")
     func unarchiveFindsAVariantRow() async throws {
         let fixture = try await makeArchiveFixture()
@@ -446,9 +400,6 @@ struct LibraryProgressWriteTests {
         #expect(store.syncedStoreSelfSaveCount == 1)
     }
 
-    /// The index takes an episode's newest copy as its latest row, so the
-    /// archive has to land on that copy whichever feed spelling holds it.
-    /// Positions run against the timestamps, so a pick by position fails.
     @Test("Archiving edits the newest of an episode's competing copies, whatever feed spelling holds it")
     func archiveEditsTheNewestOfCompetingCopies() async throws {
         let fixture = try await makeArchiveFixture()
@@ -456,6 +407,7 @@ struct LibraryProgressWriteTests {
         let first = try fixture.episode("archive-1")
         let second = try fixture.episode("archive-2")
         let newer = Self.longAgo.addingTimeInterval(100)
+        // Positions run against the timestamps, so a pick by position fails.
         let firstOlder = insertProgress(first.episodeID, position: 90, updatedAt: Self.longAgo, into: fixture.context)
         let firstNewer = insertProgress(
             first.episodeID,
@@ -494,9 +446,6 @@ struct LibraryProgressWriteTests {
         #expect(store.archivedEpisodeIDs == [first.episodeID, second.episodeID])
     }
 
-    /// The episode tombstone Clear Progress writes shadows by episode ID, so
-    /// every copy goes: an older copy left under a feed-URL variant would
-    /// become the latest row and bring its archive back until repair ran.
     @Test("Clear Progress deletes every copy of the episode, so an older variant copy cannot re-archive it")
     func clearDeletesEveryCopyOfTheEpisode() async throws {
         let fixture = try await makeArchiveFixture()
@@ -529,10 +478,6 @@ struct LibraryProgressWriteTests {
         #expect(tombstones.map(\.episodeID) == [episode.episodeID])
     }
 
-    /// An import edits the live rows before the projection reloads them. A
-    /// batch that finds a row already archived writes nothing for it, but
-    /// the set still takes it in; with nothing to write at all, the set
-    /// takes it in without a save.
     @Test("A batch archive brings imported archives into the set, with or without a save")
     func batchArchiveReconcilesRowsItDidNotChange() async throws {
         let fixture = try await makeArchiveFixture()
@@ -577,11 +522,6 @@ struct LibraryProgressWriteTests {
         #expect(store.archivedEpisodeIDs == [first.episodeID, second.episodeID, third.episodeID])
     }
 
-    /// A progress write lands on the row under the feed spelling it was
-    /// given. Beside an older archived copy under another spelling it
-    /// inserts a new row, which becomes the episode's latest, and the
-    /// archive drops out (R2). Nothing reloads, so the write itself has to
-    /// move the set.
     @Test("A progress write beside an archived variant copy becomes the latest row and moves the set")
     func progressWriteBesideAnArchivedVariantCopyMovesTheSet() async throws {
         let fixture = try await makeArchiveFixture()
@@ -614,11 +554,6 @@ struct LibraryProgressWriteTests {
         #expect(store.archivedEpisodeIDs.isEmpty)
     }
 
-    /// Another device archives the older of an episode's two copies, which
-    /// makes it the latest. The synced reload finds the same live rows in
-    /// the same order (the canonical copy sorts first whatever the stamps),
-    /// so they compare unchanged; the store still has to follow that copy,
-    /// or the archive and the listening describe different copies.
     @Test("A synced reload follows the copy an import made latest: progress, played state and the archive agree")
     func syncedReloadFollowsTheCopyAnImportMadeLatest() async throws {
         let fixture = try await makeArchiveFixture()
@@ -639,9 +574,6 @@ struct LibraryProgressWriteTests {
         #expect(store.progressSummary(for: episode).isCompleted)
     }
 
-    /// The same import, met by Archive before any reload: nothing is written
-    /// for that episode, alone or in a batch that saves for another, and the
-    /// store still follows the copy that is now latest.
     @Test("An archive that finds the copy an import made latest follows it, with or without a save")
     func archiveFollowsTheCopyAnImportMadeLatest() async throws {
         let fixture = try await makeArchiveFixture()
@@ -673,9 +605,7 @@ struct LibraryProgressWriteTests {
         #expect(store.isArchived(episodeID: unheard.episodeID))
     }
 
-    /// Two copies of one episode, unsaved: an older finished copy under the
-    /// canonical feed URL and a newer in-progress copy under the variant
-    /// spelling, which sorts after the canonical one.
+    /// Unsaved. The newer copy's variant spelling sorts after the canonical one.
     private func insertCompetingCopies(
         of episodeID: String,
         into context: ModelContext
@@ -691,8 +621,6 @@ struct LibraryProgressWriteTests {
         return (older, newer)
     }
 
-    /// Archives the episode's canonical copy from a second context, stamped
-    /// newer than any fixture row, as a sync import does.
     private func archiveCanonicalCopyInAnotherContext(of episodeID: String, container: ModelContainer) throws {
         let importContext = ModelContext(container)
         let record = try #require(

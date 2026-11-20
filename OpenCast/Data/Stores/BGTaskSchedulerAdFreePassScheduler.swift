@@ -62,8 +62,7 @@ struct BGTaskSchedulerAdFreePassScheduler: AdFreePassContinuedTaskScheduling {
             subtitle: subtitle
         )
         request.strategy = strategy
-        // Double guard: an unsupported-resources request is
-        // rejected at submission, so never ask for GPU the platform denies.
+        // A request for unsupported resources is rejected at submission: never ask for denied GPU.
         if requiresGPU && supportsGPUResources {
             request.requiredResources = .gpu
         }

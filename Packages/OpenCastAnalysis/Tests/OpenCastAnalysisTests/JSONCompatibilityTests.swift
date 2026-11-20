@@ -1,9 +1,6 @@
 @testable import OpenCastAnalysis
 import Testing
 
-/// The reader and writer follow the services' JSON library; the full
-/// differential runs (30,013 floats, 20,041 number literals) are in the
-/// parity evidence, these pin the rules.
 @Suite("JSON compatibility")
 struct JSONCompatibilityTests {
     @Test("Numbers keep the unsigned / negative / binary64 classification", arguments: [

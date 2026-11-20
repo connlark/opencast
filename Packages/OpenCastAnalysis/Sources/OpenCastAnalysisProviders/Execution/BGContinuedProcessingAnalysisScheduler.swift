@@ -2,9 +2,6 @@
 @preconcurrency import BackgroundTasks
 import Foundation
 
-/// ``AnalysisContinuedTaskScheduling`` on `BGTaskScheduler`: continued
-/// processing requests with the `.fail` strategy (a second concurrent card is
-/// refused, not queued) and no GPU.
 public struct BGContinuedProcessingAnalysisScheduler: AnalysisContinuedTaskScheduling {
     public init() {}
 
@@ -43,6 +40,7 @@ public struct BGContinuedProcessingAnalysisScheduler: AnalysisContinuedTaskSched
     @concurrent
     private nonisolated static func submitRequest(identifier: String, title: String, subtitle: String) async throws {
         let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: title, subtitle: subtitle)
+        // `.fail` refuses a second concurrent card instead of queueing it.
         request.strategy = .fail
         try await BGTaskScheduler.shared.submitTaskRequest(request)
     }

@@ -1,14 +1,8 @@
 import Foundation
 
-/// One recap request end to end: cache lookup, a token-budgeted window, one
-/// structured PCC turn under the store's deadline, citation validation, and
-/// the cache write. Retries once on malformed or wholly unverifiable output
-/// and shrinks the window once when the model reports the context is full;
-/// every other failure surfaces as the store recorded it.
 final class TranscriptRecapGenerator {
     static let maximumResponseTokens = 700
 
-    /// Everything one attempt produced, for the evaluation runner's report.
     struct Attempt: Sendable {
         var window: TranscriptRecapWindow
         var recap: TranscriptRecap?

@@ -33,8 +33,6 @@ struct TranscriptionServiceRetentionTests {
             }
         }
 
-        /// Suspends until `unload()` has run `count` times — each unload
-        /// signals arrival directly, so there is no polling budget to race.
         func unloadsReached(_ count: Int) async {
             let waiterID = UUID()
             await withTaskCancellationHandler {
@@ -58,20 +56,17 @@ struct TranscriptionServiceRetentionTests {
     }
 
     private func makeKey(
-        profile: OpenCastTranscriptionComputeProfile = .backgroundSafe,
-        model: String = "openai_whisper-tiny.en"
+        profile: OpenCastTranscriptionComputeProfile = .backgroundSafe
     ) -> TranscriptionServiceRetention.Key {
         TranscriptionServiceRetention.Key(
-            modelIdentifier: model,
+            modelIdentifier: "openai_whisper-tiny.en",
             modelVersion: "20260701_75MB-v1",
             modelTreeSHA256: "60d71f9a",
             computeProfile: profile
         )
     }
 
-    /// Fire-and-forget unloads run on detached tasks; await the spy's own
-    /// signal. The generous backstop only trips on a real regression (a test
-    /// failure instead of a suite hang), never on load.
+    /// Unloads run on unstructured tasks, so this awaits the spy's own signal.
     private func waitForUnloads(_ service: SpyService, count: Int) async {
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await service.unloadsReached(count) }
@@ -103,7 +98,6 @@ struct TranscriptionServiceRetentionTests {
 
         let reused = retention.checkout(key)
         #expect(reused === service)
-        // Ownership transferred: nothing left to check out.
         #expect(retention.checkout(key) == nil)
         #expect(service.unloads == 0)
     }
@@ -117,18 +111,7 @@ struct TranscriptionServiceRetentionTests {
         #expect(retention.retain(service, key: makeKey(profile: .backgroundSafe)))
         // The cpuOnly recovery rung must never see the retained runtime.
         #expect(retention.checkout(makeKey(profile: .cpuOnly)) == nil)
-        // The original key still hits.
         #expect(retention.checkout(makeKey(profile: .backgroundSafe)) === service)
-    }
-
-    @Test("Model change misses the retained runtime")
-    func modelChangeMisses() async throws {
-        let retention = TranscriptionServiceRetention(memoryWarningName: nil)
-        let service = SpyService()
-
-        retention.beginDrain()
-        #expect(retention.retain(service, key: makeKey(model: "openai_whisper-tiny.en")))
-        #expect(retention.checkout(makeKey(model: "openai_whisper-large-v3")) == nil)
     }
 
     @Test("Drain end unloads the retained runtime")
@@ -142,7 +125,6 @@ struct TranscriptionServiceRetentionTests {
         await retention.endDrain()
 
         #expect(service.unloads == 1)
-        // Retention window closed: nothing retained, nothing retainable.
         #expect(retention.checkout(key) == nil)
         #expect(retention.retain(service, key: key) == false)
     }

@@ -1,7 +1,6 @@
 import Foundation
 
-/// Fixed identity and ordering for every diagnostics section; the sheet and
-/// the plain-text report both iterate `allCases`.
+/// Case order is the section order of both the sheet and the plain-text report.
 nonisolated enum EpisodeDiagnosticsSectionID: String, CaseIterable, Identifiable, Sendable {
     case report
     case episode

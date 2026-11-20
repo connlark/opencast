@@ -1,10 +1,5 @@
-/// What a completed transcript must have been made from for
-/// `EpisodeTranscriptionStore.jobState` to report it `.completed`. Display
-/// surfaces ask `.any`: a transcript exists, whatever audio it describes. The
-/// ad-free pass asks `.trusted` with the hash of the download it holds, so a
-/// transcript of other bytes reads as not yet transcribed and the pass
-/// transcribes the download again instead of reusing text that can never
-/// align with it.
+/// `.trusted` treats a transcript of other bytes as not yet transcribed: its text can never align
+/// with the download.
 nonisolated enum EpisodeTranscriptionSourceMatch: Equatable, Sendable {
     case any
     /// A nil hash (no trusted download) matches no transcript.

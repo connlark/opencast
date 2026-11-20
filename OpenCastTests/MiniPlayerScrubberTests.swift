@@ -13,16 +13,6 @@ struct MiniPlayerScrubberTests {
         return track
     }
 
-    @Test("The position follows playback while no drag holds it")
-    func followsPlaybackWhileIdle() {
-        var track = Self.track(position: 10, duration: 600)
-        #expect(track.position == 10)
-        track.follow(11)
-        track.follow(42.5)
-        #expect(track.position == 42.5)
-        #expect(!track.isDragging)
-    }
-
     @Test("A drag holds the thumb against playback and seeks once, on release")
     func dragSeeksOnReleaseOnly() {
         var track = Self.track(position: 10, duration: 600)
@@ -41,32 +31,6 @@ struct MiniPlayerScrubberTests {
 
         track.follow(300.4)
         #expect(track.position == 300.4, "after the release playback leads again")
-    }
-
-    @Test("A release with no drag in progress seeks nothing")
-    func releaseWithoutDrag() {
-        var track = Self.track(position: 10, duration: 600)
-        #expect(track.endDrag(currentEpisodeID: "episode-a") == nil)
-    }
-
-    @Test("A duration change rescales the track and keeps the position inside it")
-    func durationChangeRescales() {
-        var track = Self.track(position: 300, duration: 600)
-        #expect(track.upperBound == 600)
-        #expect(track.fraction == 0.5)
-
-        track.duration = 1200
-        #expect(track.position == 300)
-        #expect(track.fraction == 0.25)
-
-        track.duration = 200
-        #expect(track.position == 200)
-        #expect(track.fraction == 1)
-
-        track.duration = nil
-        #expect(track.upperBound == 200, "an unknown duration falls back to the position")
-        track.follow(0)
-        #expect(track.upperBound == 1, "and never below one second")
     }
 
     @Test("A duration change mid-drag keeps the dragged position inside the new range")

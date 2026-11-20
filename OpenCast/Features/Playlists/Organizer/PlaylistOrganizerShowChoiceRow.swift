@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// One show in the Make a Playlist show picker. A show with too few
-/// episodes stays listed, dimmed, so its count explains why it can't be
-/// chosen.
 struct PlaylistOrganizerShowChoiceRow: View {
     let choice: PlaylistOrganizerShowChoice
     let action: () -> Void

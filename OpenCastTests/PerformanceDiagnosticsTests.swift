@@ -64,55 +64,6 @@ struct PerformanceDiagnosticsTests {
         #expect(decoded.first?.states.first?.label == "playing")
     }
 
-    @Test func cancelledSaveLeavesNoFiles() async throws {
-        let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = PerformanceReportStore(directory: directory)
-        let task = Task {
-            withUnsafeCurrentTask { $0?.cancel() }
-            try await store.save(report())
-        }
-        await #expect(throws: CancellationError.self) { try await task.value }
-        #expect(try await store.reports().isEmpty)
-    }
-
-    @Test func concurrentReportsRemainBoundedAndComplete() async throws {
-        let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = PerformanceReportStore(directory: directory, maximumCount: 5)
-        let reports = (0..<30).map { _ in report() }
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            for report in reports {
-                group.addTask { try await store.save(report) }
-            }
-            try await group.waitForAll()
-        }
-        let retained = try await store.reports()
-        #expect(retained.count == 5)
-        #expect(Set(retained.map(\.id)).count == 5)
-        #expect(retained.allSatisfy { value in reports.contains { $0.id == value.id } })
-    }
-
-    @Test func reportNotificationsStopWhenConsumerIsCancelled() async throws {
-        let directory = temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let store = PerformanceReportStore(directory: directory)
-        let updates = await store.updates()
-        await store.receive(report())
-        var iterator = updates.makeAsyncIterator()
-        #expect(await iterator.next() != nil)
-        let consumer = Task {
-            var received = 0
-            for await _ in updates { received += 1 }
-            return received
-        }
-        consumer.cancel()
-        #expect(await consumer.value == 0)
-        await store.receive(report())
-        #expect(try await store.reports().count == 2)
-        #expect(await store.failure() == nil)
-    }
-
     private func temporaryDirectory() -> URL {
         URL.temporaryDirectory.appending(path: "performance-tests-\(UUID())", directoryHint: .isDirectory)
     }

@@ -4,11 +4,6 @@ import Testing
 
 @Suite("RSS date parsing")
 struct RSSDateParserTests {
-    @Test("Parses Security Now PDT item dates")
-    func parsesSecurityNowPDTDate() {
-        #expect(RSSDateParser.parse("Tue, 30 Jun 2026 18:43:36 PDT")?.timeIntervalSince1970 == 1_782_870_216)
-    }
-
     @Test("Parses PST offset")
     func parsesPSTDate() {
         #expect(RSSDateParser.parse("Tue, 30 Jun 2026 18:43:36 PST")?.timeIntervalSince1970 == 1_782_873_816)

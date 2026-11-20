@@ -1,9 +1,5 @@
 import SwiftUI
 
-/// A smart playlist's cover when no matched show has artwork: its tint as a
-/// soft top-to-bottom gradient with its symbol large and white. Like
-/// `PlaylistArtworkMosaic`, it fills the square it is offered; callers set
-/// the size and corner radius.
 struct PlaylistSymbolCover: View {
     static let defaultSymbolName = "sparkles"
     private static let symbolInsetFraction = 0.28

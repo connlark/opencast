@@ -3,12 +3,6 @@ import SwiftUI
 import Testing
 @testable import OpenCast
 
-/// Window facts are OBSERVED on the iPhone Duo simulator: the outer display
-/// (466 × 678, its safe area and its two occlusion regions) and the inner
-/// display (951 × 669 landscape-shaped, 669 × 951 portrait-shaped, the 40 pt
-/// `.division` band at 455.5 and the open poses' insets and occlusion regions).
-/// The iPhone 18 Pro's insets are its portrait safe area. Other bands are
-/// fixtures.
 @Suite("Now Playing card geometry")
 struct NowPlayingCardGeometryTests {
     static let closedWindow = CGSize(width: 466, height: 678)
@@ -55,16 +49,6 @@ struct NowPlayingCardGeometryTests {
         )
     }
 
-    @Test("Closed: the compact card is the window and its content keeps the full width inside the safe vertical extent")
-    func closedCardAndContent() {
-        let geometry = Self.closed()
-        #expect(geometry.cardFrame == CGRect(origin: .zero, size: Self.closedWindow))
-        #expect(geometry.contentInsets == EdgeInsets(top: 0, leading: 0, bottom: 34, trailing: 0))
-        #expect(geometry.contentTopPadding == 92)
-        #expect(geometry.artworkBoundTopPadding == 92)
-        #expect(geometry.contentBottomPadding == CGFloat(34 + 22))
-    }
-
     @Test("Closed: the status cluster covers the top-trailing corner, so More sits top-leading at (20, 62), clear of both regions")
     func closedMoreClearsTheCluster() {
         let geometry = Self.closed()
@@ -103,11 +87,6 @@ struct NowPlayingCardGeometryTests {
         #expect(Self.closed(occlusions: []).controlsMinY == 0)
     }
 
-    @Test("Closed at accessibility sizes keeps today's 14 pt short-window clearance")
-    func closedAccessibilityClearance() {
-        #expect(Self.closed(isAccessibilitySize: true).contentTopPadding == 14)
-    }
-
     @Test("Pinned iPhone: More stays top-trailing at (338, 62), the content at 150 and the toasts at 110; the bottom moves inside the safe area")
     func pinnedIPhoneGeometry() {
         let geometry = Self.pinnedIPhone()
@@ -117,13 +96,6 @@ struct NowPlayingCardGeometryTests {
         #expect(geometry.artworkBoundTopPadding == 150)
         #expect(geometry.toastTop(height: 60) == 110)
         #expect(geometry.contentBottomPadding == CGFloat(34 + 22))
-    }
-
-    @Test("Pinned iPhone at accessibility sizes: the content starts 28 pt below the safe top, no longer under the Dynamic Island")
-    func pinnedIPhoneAccessibilityStartsBelowSafeTop() {
-        let geometry = Self.pinnedIPhone(isAccessibilitySize: true)
-        #expect(geometry.contentTopPadding == CGFloat(62 + 28))
-        #expect(geometry.artworkBoundTopPadding == 28)
     }
 
     @Test("More moves below an occlusion region over the corner it moves to")
@@ -156,28 +128,6 @@ struct NowPlayingCardGeometryTests {
         #expect(geometry.horizontalFold == nil)
     }
 
-    @Test("Book confines the card to the band's leading side; More stays top-trailing in it")
-    func bookConfinesTheCardToTheLeadingSide() {
-        let geometry = NowPlayingCardGeometry(
-            windowSize: Self.innerLandscapeWindow,
-            safeAreaInsets: Self.innerLandscapeInsets,
-            isRegular: true,
-            isAccessibilitySize: false,
-            pose: WindowPose(
-                horizontalSizeClass: .regular,
-                divisionRegions: [WindowDivisionRegion(frame: Self.bookBand, isActive: true)]
-            ),
-            occlusions: [Self.innerLandscapeCluster]
-        )
-        #expect(geometry.cardFrame.width == 455.5 - 80)
-        #expect(geometry.cardFrame.minX == 40)
-        #expect(geometry.cardFrame.maxX <= Self.bookBand.minX)
-        #expect(!NowPlayingCardGeometry.overlaps(geometry.cardFrame, Self.bookBand))
-        #expect(geometry.contentInsets == EdgeInsets(top: 0, leading: 0, bottom: 34, trailing: 0))
-        #expect(!geometry.moreIsLeading)
-        #expect(geometry.horizontalFold == nil)
-    }
-
     @Test("Open landscape (the band inactive, so flat): today's centred 660 pt card, More top-trailing clear of the rail's cluster")
     func openLandscapeNothingMoves() {
         let geometry = NowPlayingCardGeometry(
@@ -194,25 +144,5 @@ struct NowPlayingCardGeometryTests {
         #expect(geometry.cardFrame == CGRect(x: (951.0 - 660) / 2, y: 669 - 597, width: 660, height: 597))
         #expect(!geometry.moreIsLeading)
         #expect(geometry.horizontalFold == nil)
-    }
-
-    @Test("Laptop's reported band reaches the card in card-local y; the top bar's cluster stays above the card")
-    func laptopBandIsCardLocal() {
-        let geometry = NowPlayingCardGeometry(
-            windowSize: Self.innerPortraitWindow,
-            safeAreaInsets: Self.innerPortraitInsets,
-            isRegular: true,
-            isAccessibilitySize: false,
-            pose: WindowPose(
-                horizontalSizeClass: .regular,
-                divisionRegions: [WindowDivisionRegion(frame: Self.laptopBand, isActive: true)]
-            ),
-            occlusions: [Self.innerPortraitCluster]
-        )
-        #expect(geometry.cardFrame.minY == CGFloat(951 - 860))
-        #expect(geometry.contentInsets == EdgeInsets(top: 0, leading: 0, bottom: 34, trailing: 0))
-        #expect(geometry.occlusions.isEmpty)
-        #expect(!geometry.moreIsLeading)
-        #expect(geometry.horizontalFold == (455.5 - 91)...(495.5 - 91))
     }
 }

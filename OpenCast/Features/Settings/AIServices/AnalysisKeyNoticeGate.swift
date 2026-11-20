@@ -1,11 +1,8 @@
 import SwiftData
 import SwiftUI
 
-/// Holds a Detect Ads or Generate tap while the one-time key notice is up, or
-/// while it is not yet known whether the notice is due. Each presenting
-/// context owns one and uses it from its own actions; a descendant outside
-/// that view's body (a toolbar menu) reads it from the environment. The
-/// notice itself is shown by `.analysisKeyNotice(gate:)`.
+/// Each presenting context owns one gate; a descendant outside that view's body, such as a
+/// toolbar menu, reads it from the environment.
 @Observable final class AnalysisKeyNoticeGate {
     enum Decision {
         case ok
@@ -20,14 +17,10 @@ import SwiftUI
     /// The held tap; non-nil from the gated tap until the notice is gone.
     private(set) var pending: Pending?
     var isNoticePresented = false
-    /// The help topic Learn More opens, presented from this gate's context
-    /// so it also works over Now Playing.
+    /// Presented from this gate's context, so it also works over Now Playing.
     var helpDestination: SheetDestination?
     @ObservationIgnored private var decision: Decision?
 
-    /// Runs `action` now unless the notice is due, in which case the tap is
-    /// held and the notice shown. While reachability is unknown the tap is
-    /// held until it resolves. A tap while one is held is ignored.
     func run(appModel: OpenCastAppModel, _ action: @escaping () -> Void) {
         guard pending == nil else {
             return
@@ -60,7 +53,6 @@ import SwiftUI
         }
     }
 
-    /// Records the listener's choice, marks the notice seen and dismisses it.
     /// The choice takes effect in `didDismiss`, once the sheet is gone.
     func choose(_ decision: Decision, appModel: OpenCastAppModel, modelContext: ModelContext) {
         guard pending != nil, self.decision == nil else {
@@ -71,9 +63,7 @@ import SwiftUI
         isNoticePresented = false
     }
 
-    /// The sheet's `onDismiss`. Clears the held tap and the choice before
-    /// acting, so the tap runs at most once: OK runs it, Learn More opens the
-    /// help instead, and a dismissal without a choice runs nothing.
+    /// Clears the held tap and the choice before acting, so the tap runs at most once.
     func didDismiss() {
         let action = pending?.action
         let decision = decision

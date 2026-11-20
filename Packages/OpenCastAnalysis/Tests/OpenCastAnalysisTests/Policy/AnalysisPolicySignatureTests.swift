@@ -11,9 +11,6 @@ struct AnalysisPolicySignatureTests {
             bundleData: PolicyTestSupport.gatewayFile("manifests/analysis-policy/v\(version).json"),
             signatureData: PolicyTestSupport.gatewayFile("manifests/analysis-policy/v\(version).json.sig")
         )
-        // The transcription package's pinned verifier accepts these same
-        // bytes (its own checked-in-manifest test), so the two verifiers
-        // agree on production-signed input.
         try AnalysisPolicySignatureVerifier.pinned.verify(
             bundleData: PolicyTestSupport.gatewayFile("manifests/current.json"),
             signatureData: PolicyTestSupport.gatewayFile("manifests/current.json.sig")

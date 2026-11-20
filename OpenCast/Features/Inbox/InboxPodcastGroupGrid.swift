@@ -1,7 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// The Group by Podcast Inbox as a grid, on the Library grid's metrics.
 struct InboxPodcastGroupGrid<Header: View>: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass

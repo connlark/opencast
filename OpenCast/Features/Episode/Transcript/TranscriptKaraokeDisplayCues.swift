@@ -1,11 +1,9 @@
 import Foundation
 import OpenCastTranscription
 
-/// Presentation-only onset repair for karaoke display. The persisted document
-/// keeps the engine's word timings; this derives, per active segment, onsets
-/// that every word group can visibly reach before the next line takes over.
-/// Unlike the persist normalizer it never floors an onset at the previous
-/// word's end — noisy word ends are ignored, only onset order matters.
+/// Presentation only: the persisted document keeps the engine's word timings. Unlike the persist
+/// normalizer this never floors an onset at the previous word's end; noisy word ends are ignored
+/// and only onset order matters.
 nonisolated enum TranscriptKaraokeDisplayCues {
     enum Repair: Equatable, Sendable {
         case droppedNonFinite
@@ -18,14 +16,12 @@ nonisolated enum TranscriptKaraokeDisplayCues {
 
     /// Minimum media-time exposure of the final onset group before handoff.
     static let minimumTerminalExposure: TimeInterval = 0.1
-    /// Per-word correction beyond this means the timings are too wrong to
-    /// present as word precision; callers fall back to line-level highlight.
+    /// A per-word correction beyond this falls back to line-level highlight.
     static let maximumOnsetCorrection: TimeInterval = 2.0
     static let maximumDroppedFraction: Double = 0.25
 
-    /// nil when the segment has no words or repair would exceed the fallback
-    /// thresholds. `handoff` is the next segment's display start, `.infinity`
-    /// for the last segment (no successor, so late onsets can still render).
+    /// Nil when the segment has no words or repair would exceed the fallback thresholds.
+    /// `handoff` is the next segment's display start, `.infinity` for the last segment.
     static func repairedWords(
         for segment: OpenCastTranscriptSegment,
         handoff: TimeInterval

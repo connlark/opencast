@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// One proposed playlist: its editable name and options in the header, its
-/// episodes as removable, reorderable rows, and the model's reason in the
-/// footer. Every edit writes through to the sheet's draft.
 struct PlaylistProposalSection: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -65,10 +62,8 @@ struct PlaylistProposalSection: View {
             .accessibilityIdentifier("playlist-proposal-\(number)-options")
         }
         .font(.title3)
-        // Section headers style their text as secondary captions; the name
-        // has to read as an editable title. The label style sits outside the
-        // Menu because setting it inside a Menu's label closure crashes on
-        // iOS 27.
+        // Section headers style text as a secondary caption; the name must read as a title.
+        // The label style sits outside the Menu: inside its label closure it crashes on iOS 27.
         .textCase(nil)
         .labelStyle(.iconOnly)
     }

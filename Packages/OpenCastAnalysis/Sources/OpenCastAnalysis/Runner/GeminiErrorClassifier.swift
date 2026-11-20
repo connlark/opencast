@@ -1,9 +1,3 @@
-/// Maps a non-2xx Gemini `generateContent` exchange to the pipeline's
-/// provider-neutral transport error, with the analysis services' rules:
-/// 500/502/503/504 retry; 429 retries unless the error envelope reports
-/// `RESOURCE_EXHAUSTED` with a quota, billing, prepay or credit message
-/// (a hard quota); every other status is final. `Retry-After` is honoured
-/// only as whole seconds, capped at 30.
 public enum GeminiErrorClassifier {
     public static let maxRetryAfterSeconds = 30
 
@@ -19,8 +13,6 @@ public enum GeminiErrorClassifier {
         }
     }
 
-    /// An unsigned decimal (an optional `+` allowed), capped; anything else,
-    /// including a value too large to read, is ignored.
     public static func retryAfterSeconds(_ value: String) -> Int? {
         var digits = Substring(RustText.trim(value))
         if digits.first == "+" { digits = digits.dropFirst() }
@@ -30,8 +22,6 @@ public enum GeminiErrorClassifier {
         return Int(min(seconds, UInt64(maxRetryAfterSeconds)))
     }
 
-    /// The error envelope `{"error": {"code"?, "message"?, "status"?}}` read
-    /// strictly; a body that does not have that shape is not a hard quota.
     static func isHardQuota(_ body: String) -> Bool {
         let message: String
         let status: String?
@@ -41,7 +31,7 @@ public enum GeminiErrorClassifier {
                 root["error"]!,
                 .init(fields: ["code", "message", "status"], defaulted: ["code", "message", "status"])
             )
-            // Absent or null codes are fine; a present code must be a u16.
+            // Read only to reject an envelope whose code is present but not a u16.
             _ = try StrictDecoding.optional(error["code"]) { value throws(StrictDecodingError) in
                 try StrictDecoding.unsigned(value, as: UInt16.self)
             }

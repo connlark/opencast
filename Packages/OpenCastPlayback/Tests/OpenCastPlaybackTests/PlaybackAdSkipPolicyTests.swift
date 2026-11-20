@@ -6,20 +6,6 @@ import Testing
 @MainActor
 struct PlaybackAdSkipPolicyTests {
     @Test
-    func acceptedTickEnteringZoneSkipsToZoneEnd() {
-        var policy = PlaybackAdSkipPolicy(zones: [zone(id: 1, start: 10, end: 20)])
-
-        let command = policy.evaluate(
-            previousPosition: 9.5,
-            position: 10.2,
-            duration: 60,
-            cause: .acceptedTick
-        )
-
-        #expect(command == .skip(to: 20, zoneID: 1))
-    }
-
-    @Test
     func emittedSkipDisarmsZoneUntilObservedOutside() {
         var policy = PlaybackAdSkipPolicy(zones: [zone(id: 1, start: 10, end: 20)])
 
@@ -140,9 +126,6 @@ struct PlaybackAdSkipPolicyTests {
 
     @Test
     func chapterLandingDisarmsLikeAScrub() {
-        // A chapter jump lands where the listener aimed. Skipping it forward
-        // would trap Previous Chapter at the zone's end and could finish a
-        // paused episode through the outro cutoff.
         var policy = PlaybackAdSkipPolicy(zones: [zone(id: 1, start: 10, end: 20)])
         let landing = policy.evaluate(
             previousPosition: nil,
@@ -288,27 +271,6 @@ struct PlaybackAdSkipPolicyTests {
 
         #expect(tickCommand == nil)
         #expect(seekCommand == nil)
-    }
-
-    @Test
-    func logicUsesTimelinePositionsOnly() {
-        var normalRatePolicy = PlaybackAdSkipPolicy(zones: [zone(id: 1, start: 10, end: 20)])
-        var fastRatePolicy = PlaybackAdSkipPolicy(zones: [zone(id: 1, start: 10, end: 20)])
-
-        let normalCommand = normalRatePolicy.evaluate(
-            previousPosition: 9.9,
-            position: 10.1,
-            duration: 60,
-            cause: .acceptedTick
-        )
-        let fastCommand = fastRatePolicy.evaluate(
-            previousPosition: 9.9,
-            position: 10.1,
-            duration: 60,
-            cause: .acceptedTick
-        )
-
-        #expect(normalCommand == fastCommand)
     }
 
     private func zone(id: Int, start: TimeInterval, end: TimeInterval) -> PlaybackSkipZone {

@@ -1,11 +1,9 @@
 import Foundation
 import SwiftData
 
-/// A named playlist, synced through the private CloudKit database. CloudKit
-/// allows no unique constraints or required fields, so identity is a logical
-/// UUID key that duplicate repair enforces, items refer to it by
-/// `playlistID` rather than a relationship, and every field is defaulted or
-/// optional.
+/// CloudKit allows no unique constraints or required fields, so identity is a logical UUID
+/// that duplicate repair enforces, items refer to it by `playlistID` rather than a
+/// relationship, and every field is defaulted or optional.
 @Model
 final class PlaylistRecord {
     var playlistID: String = ""
@@ -14,14 +12,12 @@ final class PlaylistRecord {
     /// The smart playlist's saved rule; nil for manual playlists.
     var ruleJSON: String?
     var hidesPlayed: Bool = false
-    /// A `PlaylistTint` key assigned when a smart playlist is created; nil
-    /// for manual playlists.
+    /// A `PlaylistTint` key; nil for manual playlists.
     var tintKey: String?
     var originRawValue: String = "user"
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
-    /// Stable per-record identity so duplicate repair picks the same winner on
-    /// every device (smallest UUID wins).
+    /// Never reassigned: duplicate repair keeps the smallest non-empty UUID on every device.
     var dedupeUUID: String = ""
 
     init(

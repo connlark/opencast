@@ -7,11 +7,8 @@ public enum PublisherChaptersDocumentDecoder {
     /// and `CMTime` conversions of a timestamp stop being exact (or trap).
     public static let maximumTimestamp: TimeInterval = 1_000_000_000
 
-    /// Podcasting 2.0 JSON chapters (jsonChapters 1.2) → display chapters, sorted by start, ids positional.
-    ///
-    /// Strict on the root, lenient inside it: entries without a usable start or title, entries
-    /// starting past `maximumTimestamp`, and entries marked `toc: false` are dropped rather than
-    /// failing the document. An end past `maximumTimestamp` reads as absent.
+    /// Sorted by start, with positional ids. Strict on the root, lenient inside it: an unusable
+    /// entry is dropped rather than failing the document.
     public static func decode(_ data: Data) throws -> [EpisodeChapter] {
         let document: Document
         do {

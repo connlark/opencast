@@ -1,10 +1,6 @@
 import Foundation
 import OpenCastAnalysisProviders
 
-/// UI tests: the Chapters & Summary session's card without the system.
-/// `armed` launches a card as soon as it is submitted, so a run reports
-/// that it finished under the card; `foreground-only` refuses the card, as
-/// a simulator does. Chosen with `--opencast-ui-test-chapters-session=`.
 final class UITestAnalysisContinuedTaskScheduler: AnalysisContinuedTaskScheduling {
     enum Mode: String {
         case armed

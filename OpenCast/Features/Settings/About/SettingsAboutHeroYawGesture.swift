@@ -1,8 +1,5 @@
 import Foundation
 
-/// Drag-to-turn math for the About hero, kept free of RealityKit and UIKit so
-/// it can be unit-tested. Only horizontal drags turn the icon, so vertical
-/// drags scroll the Form.
 nonisolated enum SettingsAboutHeroYawGesture {
     enum Axis: Equatable {
         case horizontal
@@ -30,7 +27,6 @@ nonisolated enum SettingsAboutHeroYawGesture {
         translation + velocity * releaseProjectionSeconds
     }
 
-    /// The face a release settles on: past a quarter turn, the other face.
     static func showsBack(afterReleasingAt offset: Double, showingBack: Bool) -> Bool {
         abs(offset) > .pi / 2 ? !showingBack : showingBack
     }

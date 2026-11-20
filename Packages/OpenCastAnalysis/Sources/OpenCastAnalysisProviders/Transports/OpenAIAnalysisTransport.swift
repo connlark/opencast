@@ -1,9 +1,6 @@
 import Foundation
 import OpenCastAnalysis
 
-/// Sends canonical payloads to the OpenAI Responses API with the listener's
-/// key, mapped by ``OpenAIResponsesMapping``, and returns the answer already
-/// reduced to the provider-neutral form.
 public struct OpenAIAnalysisTransport: AnalysisKeyedTransport {
     public var provider: AnalysisProvider { .openai }
 
@@ -11,13 +8,6 @@ public struct OpenAIAnalysisTransport: AnalysisKeyedTransport {
     private let key: AnalysisProviderKey
     private let exchange: AnalysisProviderExchange
 
-    /// - Parameters:
-    ///   - endpoint: The bundle's `providers.openai`; refused unless it is
-    ///     `https` on the pinned host with bearer authentication.
-    ///   - pacer: The key's session pacer; `nil` sends unpaced.
-    ///   - observer: Receives a record of every send.
-    ///   - preDispatch: Runs after the pacer admits each send, right before
-    ///     it leaves; a refusal fails the send unsent.
     public init(
         endpoint: AnalysisProviderEndpoint,
         key: AnalysisProviderKey,
@@ -51,8 +41,6 @@ public struct OpenAIAnalysisTransport: AnalysisKeyedTransport {
         )
     }
 
-    /// `POST {base}{generatePath}` with bearer authentication and the mapped
-    /// Responses body; `nil` when the payload cannot be mapped.
     public func generateRequest(_ request: AnalysisProviderRequest) -> AnalysisHTTPRequest? {
         guard AnalysisProviderURLs.isValidModelID(request.model.modelID),
               let url = urls.url(path: urls.endpoint.generatePath, modelID: request.model.modelID),
@@ -88,7 +76,7 @@ public struct OpenAIAnalysisTransport: AnalysisKeyedTransport {
         return AnalysisTokenCount(tokens: count, isEstimated: false)
     }
 
-    /// `GET {base}/models`: free, and it proves the key.
+    /// `GET /models` is free and proves the key.
     public func testKey(model: AnalysisModelEntry) async -> AnalysisKeyTestResult {
         guard let url = urls.url(path: "/models", modelID: nil) else { return .failed(.requestRejected) }
         let http = AnalysisHTTPRequest(method: "GET", url: url, headers: authorizationHeaders, body: nil)

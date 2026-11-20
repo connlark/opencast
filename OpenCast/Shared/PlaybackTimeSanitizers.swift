@@ -1,8 +1,7 @@
 import Foundation
 
-/// Shared progress sanitizers: every surface that persists or summarizes
-/// playback progress must agree on what counts as a usable duration and an
-/// in-range position.
+/// Every surface that persists or summarizes progress uses these, so all agree on a usable
+/// duration and an in-range position.
 nonisolated func sanitizedDuration(_ duration: TimeInterval?) -> TimeInterval? {
     guard let duration, duration.isFinite, duration > 0 else {
         return nil

@@ -1,22 +1,8 @@
 import SwiftUI
 
-/// A section's root content in the container `TwoPaneRootRule` picks, over
-/// the section's `AppNavigationPaths` slot, which is its only navigation
-/// state (`TwoPaneRootPath`):
-///
-/// - `.split`: a `NavigationSplitView` with both columns always shown, the
-///   system's column widths and `.balanced`. The root content is the
-///   sidebar; its own links and callbacks open their route as the detail's
-///   root (`TwoPaneRootSidebar`, `openFromRoot`). The detail is a stack whose
-///   root is the page for the path's head, identified by that complete
-///   route, with the rest of the path pushed on it and the shared
-///   destinations inside it, so pages navigate as they do today.
-/// - `.stack`: today's `NavigationStack(path:)` over the root content.
-///
-/// Each hosting stack writes through its own `TwoPaneRootWriter`, so an
-/// outgoing container or an obsolete detail stack never overwrites a newer
-/// path. The section's visit ledger lives here, above both containers, so a
-/// switch rebuilds the pages without undoing what a visit changed.
+/// Each hosting stack writes through its own `TwoPaneRootWriter`, so an outgoing
+/// container or obsolete detail stack never overwrites a newer path. The visit
+/// ledger lives above both containers, so a switch keeps what a visit changed.
 struct TwoPaneRoot<Root: View>: View {
     @State private var visitState = TwoPaneRootVisitState()
 
@@ -25,11 +11,7 @@ struct TwoPaneRoot<Root: View>: View {
     @Binding var container: TwoPaneRootContainer
     @Binding var path: [AppRoute]
     let placeholder: TwoPaneRootPlaceholder
-    /// Opens a route from the root content: the tab root's
-    /// `openFromRoot`, which replaces the path in the split and pushes in the
-    /// stack. The sidebar's links use it.
     let openFromRoot: (AppRoute) -> Void
-    /// The destinations' own callbacks: pages push, in both containers.
     let onOpenEpisode: (String) -> Void
     let onOpenPlaylist: (String) -> Void
     @ViewBuilder let root: () -> Root
@@ -86,8 +68,6 @@ struct TwoPaneRoot<Root: View>: View {
     }
 }
 
-/// The stack container: today's `NavigationStack` over the root content,
-/// writing through its own writer.
 private struct TwoPaneRootStackHost<Root: View>: View {
     @State private var token = TwoPaneRootWriterToken()
 
@@ -115,8 +95,6 @@ private struct TwoPaneRootStackHost<Root: View>: View {
     }
 }
 
-/// One split detail stack, built for one head: its root page (or the
-/// placeholder) with the rest of the path pushed on it.
 private struct TwoPaneRootDetailHost: View {
     @State private var token = TwoPaneRootWriterToken()
 
@@ -148,9 +126,6 @@ private struct TwoPaneRootDetailHost: View {
             .withOpenCastDestinations(onOpenEpisode: onOpenEpisode, onOpenPlaylist: onOpenPlaylist)
         }
         .environment(\.twoPaneRootVisit, writer.visitScope(visitState))
-        // The detail column is a viewport the shell did not have: its pages
-        // take the accessory clearance from their own scroll views; this
-        // records the column against the accessory.
         .twoPaneRootClearanceProbe("detail-\(section.rawValue)")
     }
 }

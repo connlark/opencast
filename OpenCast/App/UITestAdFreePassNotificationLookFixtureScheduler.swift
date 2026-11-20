@@ -1,8 +1,5 @@
 import UserNotifications
 
-/// UI-test-only: delivers the ad-free-pass completion notification a few
-/// seconds after launch so a springboard screenshot can capture the real
-/// copy, category, and payload built by the production scheduler.
 enum UITestAdFreePassNotificationLookFixtureScheduler {
     static func schedule() {
         Task {

@@ -5,9 +5,6 @@ import SwiftData
 import Testing
 @testable import OpenCast
 
-/// The 2026-08-02 Downloads incident matrix: identity migrations that land on
-/// an already-populated successor episode ID, and the startup repair for
-/// containers the target-blind migrations already corrupted.
 @MainActor
 @Suite("Episode sidecar collisions")
 struct EpisodeSidecarCollisionTests {
@@ -431,7 +428,6 @@ struct EpisodeSidecarCollisionTests {
         #expect(model.failed.isEmpty)
         #expect(model.downloaded.contains { $0.record === completedRecord })
         #expect(model.downloaded.contains { $0.record === failedTwinDuplicate })
-        // Determinism: the same rows in any order render the same list.
         let reversed = DownloadsListModel.make(
             records: [failedTwinDuplicate, failedTwin, duplicateRecord, completedRecord],
             library: library

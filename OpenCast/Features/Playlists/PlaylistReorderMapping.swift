@@ -1,7 +1,5 @@
 import Foundation
 
-/// Translates a move made in a filtered list (Hide Played) into offsets over
-/// the playlist's full item order, which is what the store reorders.
 nonisolated enum PlaylistReorderMapping {
     /// A destination at the end of the visible rows maps to the end of the
     /// full list; any other destination lands just before the visible row it

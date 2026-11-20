@@ -106,9 +106,6 @@ struct OpenCastRootView: View {
             await consumeRemoteEpisodeNotificationRoutes()
         }
         .task {
-            // Launch-scoped gate resolution: episode-menu
-            // remote surfaces appear on fresh launch without visiting
-            // Settings; later Settings mounts re-use the cached resolution.
             await appModel.remoteTranscriptionPurchases.prepare()
         }
         .task {
@@ -203,10 +200,8 @@ struct OpenCastRootView: View {
     private func performInitialSetup() async {
         let activePodcastIDsBeforeInitialLoad = appModel.library.activePodcastIDs
         appModel.syncStatus.beginLibraryActivity(.checkingAccount)
-        // The iCloud account check is a system round trip that can take many
-        // seconds. It starts now and is collected after the local setup:
-        // onboarding, the restored playback surface and the setup gate need
-        // nothing from it and must not wait for it.
+        // The iCloud account check can take many seconds: it starts now and is
+        // collected after the local setup, which must not wait for it.
         Task {
             await appModel.syncStatus.refreshAccountStatus(force: true)
         }
@@ -231,8 +226,7 @@ struct OpenCastRootView: View {
         appModel.sweepPlayedDownloadsIfEnabled(modelContext: modelContext)
         appModel.trimDownloadsToKeepLimits(modelContext: modelContext)
         // The activation pass can run before hydration and find no enabled
-        // show, and a fresh cache's launch refresh publishes nothing. The
-        // coordinators ignore the request unless the scene is active now.
+        // show, and a fresh cache's launch refresh publishes nothing.
         appModel.scheduleAutoDownloadPass(modelContext: modelContext)
         appModel.runUpNextAutoAddPass(modelContext: modelContext)
         isInitialSetupComplete = true
@@ -324,13 +318,9 @@ struct OpenCastRootView: View {
     }
 
     private func observeRemoteStoreChanges() async {
-        // Both stores post remote-change notifications for every transaction,
-        // including this process's own saves. Only genuinely remote
-        // synced-store changes warrant the synced-data refetch: local-store
-        // churn (download/transcription commits) is excluded by store URL,
-        // and the app's own progress saves — periodic and boundary playback
-        // flushes — are consumed as self-save credits by the arbiter, since
-        // they already updated in-memory state on the way to the store.
+        // Both stores post a remote change for every transaction, this
+        // process's own saves included: only synced-store changes count, and
+        // the app's own progress saves are spent as self-save credits.
         let syncedStoreURL = modelContext.container.configurations
             .first { $0.name == OpenCastModelContainerFactory.syncedConfigurationName }?
             .url.standardizedFileURL
@@ -512,9 +502,8 @@ struct OpenCastRootView: View {
         }
 
         guard result.shouldProcessImportedSubscriptions else {
-            // Only when the rows hold a twin or a tombstoned row, and without
-            // the library activity: a playlist batch must not end the import
-            // wait or replace another flow's status.
+            // Without the library activity: a playlist batch must not end the
+            // import wait or replace another flow's status.
             if playlistChange.needsRepair {
                 await appModel.repairSyncDuplicates(modelContext: modelContext)
                 if let errorMessage = appModel.syncStatus.lastRepairErrorMessage {
@@ -611,9 +600,8 @@ struct OpenCastRootView: View {
         return didRefresh
     }
 
-    /// The account check can outlast the step before it by many seconds.
-    /// A progress label left up for that wait has to name the wait, not the
-    /// step that already finished; a recorded failure stays as it is.
+    /// A progress label left up through the account check must name that
+    /// wait, not the step already finished; a recorded failure stays.
     private func showAccountCheckWhileWaiting() {
         guard appModel.syncStatus.libraryActivity.showsProgress else {
             return
@@ -657,8 +645,6 @@ struct OpenCastRootView: View {
             for _ in 0..<Self.emptyImportPollAttempts {
                 do {
                     try await Task.sleep(for: Self.emptyImportPollInterval)
-                } catch is CancellationError {
-                    return
                 } catch {
                     return
                 }
@@ -780,7 +766,6 @@ struct OpenCastRootView: View {
         await appModel.runVoiceBoostDeviceProbeIfNeeded(modelContext: modelContext)
         #endif
     }
-
 
     private func pruneNavigationPaths() {
         navigationPaths.removeAll(where: isRouteInvalid)

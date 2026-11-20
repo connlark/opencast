@@ -6,24 +6,13 @@ import OpenCastAnalysisProviders
 import OpenCastTranscription
 import SwiftData
 
-/// Promo and ad analysis of each episode's transcript. A new analysis runs
-/// on the device, on the route its run environment resolves (the
-/// listener's key or the trial), under a run record written before its
-/// first send. A job an earlier build started on opencast's analysis
-/// service is still polled to completion at launch, and never resubmitted.
 @Observable
 final class EpisodeAdAnalysisStore {
     @ObservationIgnored private let recordSet = AnalysisRecordSet<EpisodeAdAnalysisRecord>(descriptors: EpisodeAdAnalysisStore.fetchDescriptors)
-    /// Episode-ID groups that held more than one record and were collapsed to
-    /// a proven survivor, cumulative for this process (startup repair plus
-    /// migration collisions). Diagnostics-only; never names episodes.
+    /// Duplicate groups collapsed to one record, cumulative for this process.
     private(set) var duplicateRepairCount = 0
 
-    /// Routes, transports, run records, usage and the key screen for device
-    /// runs. The app model sets it once its analysis members exist; without
-    /// one nothing starts.
     @ObservationIgnored var runEnvironment: (any EpisodeAdAnalysisRunEnvironment)?
-    /// Polls jobs an earlier build started; never submits.
     @ObservationIgnored private let client: any EpisodeAdAnalysisClient
     @ObservationIgnored private let fileStore: EpisodeAdAnalysisFileStore
     @ObservationIgnored private let poller: AnalysisJobPoller<EpisodeAdAnalysisAPIResponse>
@@ -34,15 +23,11 @@ final class EpisodeAdAnalysisStore {
     private var activeEpisodeID: String?
     @ObservationIgnored private var activeRunID: UUID?
     @ObservationIgnored private var activeCancelReason: EpisodeAdAnalysisCancelReason?
-    /// The provider of the active run when it sends with the listener's key.
     @ObservationIgnored private(set) var activeDirectProvider: AnalysisProvider?
-    /// Episodes whose last run ended because the listener removed its key
-    /// in AI Services; cleared when the episode's next run starts.
+    /// Cleared when the episode's next run starts.
     @ObservationIgnored private var keyRemovedEpisodeIDs: Set<String> = []
-    /// The active device run's steps; observed so progress surfaces follow.
     private var activeProgress: AdAnalysisRunProgress?
-    /// The run record `activeProgress` counts for. A late callback from a
-    /// direct attempt must not count toward its handover.
+    /// A late callback from a direct attempt must not count toward its handover.
     @ObservationIgnored private var activeAttemptID: String?
     @ObservationIgnored private let failures = AnalysisFailureSurface()
     @ObservationIgnored var onEpisodeStateChanged: ((String) -> Void)?
@@ -98,7 +83,6 @@ final class EpisodeAdAnalysisStore {
         activeTask?.cancel()
     }
 
-    /// Whether a run can start at all; its route is decided when it runs.
     var canStartAnalysis: Bool {
         runEnvironment != nil
     }
@@ -115,14 +99,10 @@ final class EpisodeAdAnalysisStore {
         activeEpisodeID == episodeID && activeTask != nil
     }
 
-    /// Whether the episode's last run ended because the listener removed
-    /// its key in AI Services, so nothing needs to show the key screen.
     func endedForKeyRemoval(episodeID: String) -> Bool {
         keyRemovedEpisodeIDs.contains(episodeID)
     }
 
-    /// The active device run's steps for `episodeID`; `nil` while no device
-    /// run of the episode is active (or before its route is resolved).
     func analysisProgress(for episodeID: String) -> AdAnalysisRunProgress? {
         activeEpisodeID == episodeID ? activeProgress : nil
     }
@@ -139,12 +119,8 @@ final class EpisodeAdAnalysisStore {
         try await failures.waitForChange(after: sequence)
     }
 
-    /// Stops the active run without waiting for it. A device run the
-    /// listener stopped ends its run record cancelled; one whose card
-    /// expired stays resumable by the episode's next start or the next
-    /// launch. Either way the episode's record stays running until a start
-    /// or a launch moves it on. A run whose key the listener removed ends
-    /// as needing a key at once, its episode's record and run record failed.
+    /// Returns without waiting. After a listener stop or an expiry the episode's record stays
+    /// running until a start or a launch moves it on.
     func cancelActiveRun(reason: EpisodeAdAnalysisCancelReason) {
         guard let activeTask else {
             return
@@ -153,11 +129,7 @@ final class EpisodeAdAnalysisStore {
         activeTask.cancel()
     }
 
-    /// Reconciles the records the last process left. One run resumes: a job
-    /// an earlier build started resumes polling, or a device run killed
-    /// after dispatch resumes under its run id, answering the windows it
-    /// already had answered from its kept replies. No launch starts a new
-    /// run. A run killed after its document was installed is finished.
+    /// Resumes at most one run and never starts a new one.
     func load(modelContext: ModelContext) {
         do {
             if let runEnvironment {
@@ -197,9 +169,7 @@ final class EpisodeAdAnalysisStore {
               let failure = state.failure, failure.suppressesAutomaticReplay,
               state.replayIdentity == (try await EpisodeAdAnalysisRunState.inputIdentity(transcript))
         else { return nil }
-        // A failure retained under another revision (or a legacy one with
-        // none) gets one opportunity under the active bundle's revision; the
-        // next failure records it.
+        // A failure retained under another revision, or none, gets one retry under the active one.
         if let revision = runEnvironment?.adDetectionPolicyRevision, revision != failure.policyRevision { return nil }
         return EpisodeAdAnalysisHTTPError(statusCode: 422, code: state.failureCode ?? "ad_analysis_incomplete", detail: nil, failure: failure)
     }
@@ -243,8 +213,6 @@ final class EpisodeAdAnalysisStore {
         return await EpisodeAdBoundaryRefiner.refined(document, transcript: transcript)
     }
 
-    /// Resolved by the store so the diagnostics sheet never duplicates the
-    /// Application Support layout rules.
     func diagnosticsDocumentFileURL(for episodeID: String) -> URL? {
         record(for: episodeID)?.analysisRelativePath.map(fileStore.fileURL(relativePath:))
     }
@@ -266,8 +234,6 @@ final class EpisodeAdAnalysisStore {
         )
     }
 
-    /// Normalizing and fingerprinting a full transcript scales with episode
-    /// length; this variant keeps that work off the caller's actor.
     @concurrent
     func isCurrentAnalysisDocumentOffCaller(
         _ analysisDocument: EpisodeAdAnalysisDocument,
@@ -345,9 +311,6 @@ final class EpisodeAdAnalysisStore {
             )
         }
 
-        // Normalize + fingerprint scale with episode length and the detail
-        // surface calls this per content load; run them off the main actor,
-        // hopping back only for the record lookups.
         let (segments, fingerprint) = await normalizedFingerprintOffCaller(for: document)
         guard !segments.isEmpty else {
             return (.unavailable("Transcript has no segments."), false)
@@ -382,17 +345,12 @@ final class EpisodeAdAnalysisStore {
         segments: [OpenCastTranscriptSegment],
         transcriptFingerprint: String? = nil
     ) -> EpisodeAdAnalysisJobState {
-        // Running is reported only for the episode the active task belongs
-        // to. A store-global "any job active" signal here would mark every
-        // other episode's detail and transcript surfaces as detecting ads,
-        // and would mask a real failed record for as long as the unrelated
-        // job runs.
+        // Per episode, not `hasActiveJob`: a store-wide signal would show every episode as
+        // detecting ads and mask its failed record.
         if activeEpisodeID == document.episodeID && activeTask != nil {
             return .running
         }
 
-        // The route is decided when a run starts, so an episode without a
-        // record can always start one.
         guard let record = record(for: document.episodeID) else {
             return .ready
         }
@@ -423,10 +381,6 @@ final class EpisodeAdAnalysisStore {
         }
     }
 
-    /// Starts a device run for `document`. `retryFailed` false (an automatic
-    /// start) honors a retained failure that pauses automatic retries;
-    /// `presentsKeyScreen` shows the key screen when the run ends needing
-    /// the listener's own key.
     func startAnalysis(
         transcript document: EpisodeTranscriptDocument,
         transcriptState: EpisodeTranscriptState? = .completed,
@@ -468,10 +422,6 @@ final class EpisodeAdAnalysisStore {
         )
     }
 
-    /// Durable import of a server-produced completed analysis (cloud detect
-    /// pass): writes the document and upserts a completed record through the
-    /// same path a device analysis uses, then deletes the analysis it
-    /// replaced. Mirror of `EpisodeTranscriptionStore.importRemoteTranscript`.
     func importCompletedAnalysis(
         _ document: EpisodeAdAnalysisDocument,
         modelContext: ModelContext
@@ -485,8 +435,7 @@ final class EpisodeAdAnalysisStore {
         )
     }
 
-    /// Writes a completed analysis and its record without touching any other
-    /// document, so a failed run's restore can reinstall the one it kept.
+    /// Touches no other document, so a failed run's restore can reinstall the one it kept.
     @discardableResult
     private func installCompletedAnalysis(
         _ document: EpisodeAdAnalysisDocument,
@@ -519,19 +468,13 @@ final class EpisodeAdAnalysisStore {
         return relativePath
     }
 
-    /// The document a new analysis of the episode replaces: the completed
-    /// record's, or, while a run holds the record, the one its run state
-    /// keeps to restore.
     private func lastCompletedAnalysisPath(episodeID: String) -> String? {
         record(for: episodeID).flatMap { $0.state == .completed ? $0.analysisRelativePath : nil }
             ?? (try? fileStore.readRunState(episodeID: episodeID))?.previousAnalysisPath
     }
 
-    /// Called once the new analysis's record and its cleared run state are
-    /// both written, so nothing refers to the superseded document. A rerun
-    /// of the same transcript writes over the same path, which stays. A
-    /// failed delete only leaves a stray file behind; it never undoes the
-    /// committed analysis.
+    /// Call only after the new record and its cleared run state are written. A failed delete
+    /// leaves a stray file; it never undoes the committed analysis.
     private func deleteSupersededAnalysisDocument(
         at supersededPath: String?,
         keeping currentPath: String,
@@ -622,9 +565,7 @@ final class EpisodeAdAnalysisStore {
             )
         }
 
-        // Records were re-keyed in place, but the keyed index only rebuilds
-        // on a `records` reassignment. Reload — like the transcription twin —
-        // so lookups observe the successor identity.
+        // The keyed index rebuilds only on a reload, not on an in-place re-key.
         try recordSet.reload(modelContext: modelContext)
         notifyEpisodeStateChanged(newEpisodeID)
     }
@@ -649,11 +590,8 @@ final class EpisodeAdAnalysisStore {
         await activeTask.value
     }
 
-    /// One device run: the replay gate, preparation, the route, the
-    /// episode's running record, the run record before the first send, the
-    /// pipeline, then the document, and only then the run record's end.
-    /// `launchRunRecordID` names the run a launch resumes; such a run never
-    /// becomes a new one.
+    /// The run record is written before the first send and ended only once the document is in
+    /// place. A run a launch resumes (`launchRunRecordID`) never becomes a new one.
     private func runAnalysis(
         runID: UUID,
         transcript document: EpisodeTranscriptDocument,
@@ -722,9 +660,7 @@ final class EpisodeAdAnalysisStore {
                 // The launch's own record stands; it fails as it is.
                 throw EpisodeAdAnalysisError.runInterrupted
             } catch {
-                // Nothing was dispatched and a plain stop leaves the episode
-                // as it was, but a run that ends here still ends through the
-                // episode's record, as a run with no route does.
+                // A plain stop leaves the episode as it was; any other end goes through its record.
                 if !(error is CancellationError) || activeCancelReason == .keyRemoved {
                     try beginEpisodeRecord(document, preparation: preparation, modelContext: modelContext)
                 }
@@ -782,7 +718,6 @@ final class EpisodeAdAnalysisStore {
                 run?.listenerFailure = AnalysisProviderFailure.resolve(outcome, sends: attempt.sendLog.sends)
             }
             try ensureOwnsActiveRun(episodeID: document.episodeID, runID: runID)
-            // The listener's key went away mid-run: the run needs a key again.
             if case .failed(let failure) = outcome, failure.code != .cancelled,
                let removal = environment.keyRemoval(runID: runRecordID) {
                 throw EpisodeAdAnalysisError.keyRequired(removal)
@@ -899,9 +834,8 @@ final class EpisodeAdAnalysisStore {
                 error: error,
                 modelContext: modelContext
             )
-            // A run whose pipeline succeeded but whose document did not
-            // install stays open with its replies, so the next start resumes
-            // it under the same id and pays nothing again.
+            // A succeeded run whose document did not install stays open, so the next start resumes
+            // it and pays nothing again.
             if let run, !run.succeeded {
                 endRun(run, environment: environment, modelContext: modelContext)
             }
@@ -909,8 +843,6 @@ final class EpisodeAdAnalysisStore {
         }
     }
 
-    /// One device run in flight: its record id and, once the pipeline
-    /// returns, its outcome.
     private struct DeviceRun {
         let id: String
         var outcome: AnalysisOutcome?
@@ -921,48 +853,32 @@ final class EpisodeAdAnalysisStore {
         }
     }
 
-    /// What preparation decided for a run: its route, and what Google said
-    /// about the key before anything was sent.
     private struct RunPlan {
         var resolution: AnalysisRouteResolution
-        /// A trial run for a key Google named free tier.
         var isFreeTierTrial = false
-        /// When Google answered free tier and the trial could not take the
-        /// run: it goes direct and is not asked again if that fails.
+        /// Set when Google answered free tier but the trial could not take the run.
         var freeTierAnsweredAt: Date?
     }
 
-    /// One attempt's transport and what it reports to.
     private struct RunAttempt {
         var transport: any AnalysisProviderTransport
         var policy: AdDetectionAnalysisPolicy
         var sendLog: AnalysisProviderSendLog
     }
 
-    /// How a failed direct Google run ends once Google named the free tier.
     private enum FreeTierEnding {
         case failed(EpisodeAnalysisFailureKind)
         case handOver(AnalysisRouteResolution)
     }
 
-    /// The failures a tier check can explain: every way Google turned the
-    /// run away. Anything else says nothing about the key's tier.
+    /// Only these failures can come from the key's tier.
     private static let googleSideFailures: Set<AnalysisProviderFailure> = [
         .rateLimited, .dailyLimit, .billingOrQuota, .overloaded, .timeout,
     ]
 
-    /// The preparation between the route and the episode's record, so an
-    /// interruption here leaves no run to resume and the last document in
-    /// place. A resumed run keeps its route and is not checked. The stored
-    /// tier only decides whether to ask; the answer decides the route.
-    ///
-    /// A trial run for a free-tier key is decided first, on a launch as on a
-    /// retry: the date, then whether the service can be reached, then the
-    /// resume. Only the date closes the run; a service out of reach can come
-    /// back, so the run stays open for the next start. A record that no
-    /// longer applies is not being resumed, so it
-    /// falls to the rule for any other: a launch never starts a replacement
-    /// run, and a new start closes it.
+    /// Runs before the episode's record changes, so an interruption leaves nothing to resume.
+    /// The stored tier decides only whether to check; the answer decides the route. Only the
+    /// trial date closes a free-tier trial run; an unreachable service leaves it open.
     private func planRun(
         _ resolved: AnalysisRouteResolution,
         resumableRunID: String?,
@@ -1016,10 +932,8 @@ final class EpisodeAdAnalysisStore {
         return RunPlan(resolution: resolved, freeTierAnsweredAt: answeredAt)
     }
 
-    /// Decides a failed direct Google run: `nil` leaves the failure as it
-    /// is. Google named the free tier in a send, before the run, or to a
-    /// check made now because the run failed on Google's side, which is what
-    /// catches a key that changed through iCloud Keychain.
+    /// `nil` leaves the failure as it is. The check after a Google-side failure is what catches
+    /// a key that changed through iCloud Keychain.
     private func freeTierEnding(
         of outcome: AnalysisOutcome,
         listenerFailure: AnalysisProviderFailure?,
@@ -1062,9 +976,8 @@ final class EpisodeAdAnalysisStore {
         }
         let handover = await environment.resolveHandover()
         try ensureOwnsActiveRun(episodeID: episodeID, runID: runID)
-        // No send happens during that wait to find a key removed or replaced
-        // through iCloud Keychain, so it is read here, before the answer is
-        // written.
+        // No send during that wait could find the key removed or replaced, so check it here,
+        // before the answer is written.
         try ensureKeyStands(key, environment: environment)
         environment.noteGoogleKeyTier(answer, answeredAt: answeredAt, modelContext: modelContext)
         switch handover {
@@ -1074,16 +987,14 @@ final class EpisodeAdAnalysisStore {
         }
     }
 
-    /// Ends the run as a send that found `key` gone ends it.
     private func ensureKeyStands(_ key: AnalysisProviderKey, environment: any EpisodeAdAnalysisRunEnvironment) throws {
         if let removal = environment.keyChange(provider: .google, keyDigest: key.digest) {
             throw EpisodeAdAnalysisError.keyRequired(removal)
         }
     }
 
-    /// Fresh steps and a new transport under one run record. A handover gets
-    /// its own: the steps count by request purpose, so two attempts' window
-    /// indices cannot share them.
+    /// A handover gets fresh steps: they count by request purpose, so two attempts cannot share
+    /// them.
     private func makeAttempt(
         resolution: AnalysisRouteResolution,
         policy: AdDetectionAnalysisPolicy,
@@ -1123,11 +1034,8 @@ final class EpisodeAdAnalysisStore {
         }
     }
 
-    /// How a trial run for a free-tier key ended, or `nil` when it ends as
-    /// any trial run does: a refused request, a timeout or a bad answer.
-    /// Google's errors here are about opencast's key, so none of them may
-    /// read as the listener's key being refused, and nothing here opens the
-    /// key screen.
+    /// Google's errors here are about opencast's key, so none may read as the listener's key
+    /// being refused. `nil` ends the run as any trial run ends.
     private static func freeTierTrialFailureKind(
         of outcome: AnalysisOutcome,
         listenerFailure: AnalysisProviderFailure?
@@ -1150,9 +1058,8 @@ final class EpisodeAdAnalysisStore {
         }
     }
 
-    /// Before any open run is chosen: a kill after a handover record was
-    /// written can leave it and the run it took over from both open, and
-    /// only the handover may go on. The direct run's tokens still count.
+    /// Call before choosing an open run: a kill after a handover record was written leaves it
+    /// and the run it took over from both open, and only the handover may go on.
     private func normalizeHandovers(environment: any EpisodeAdAnalysisRunEnvironment, modelContext: ModelContext) {
         for runID in environment.runs.runsTakenOverByOpenHandovers(feature: .adDetection) {
             recordUsage(ofRunID: runID, environment: environment, modelContext: modelContext)
@@ -1160,7 +1067,6 @@ final class EpisodeAdAnalysisStore {
         }
     }
 
-    /// The device run a launch resumes.
     private struct DeviceResume {
         let episodeID: String
         let runRecordID: String
@@ -1176,10 +1082,8 @@ final class EpisodeAdAnalysisStore {
         await AnalysisRunner(transport: transport, clock: clock).detectAds(request, policy: policy)
     }
 
-    /// The run's response as the service would have returned it, or the
-    /// error the service would have answered its failure with: the same
-    /// body, read the same way, so retained failures and replay suppression
-    /// behave as they did for the service.
+    /// Goes through the service's reply JSON, so retained failures and replay suppression read a
+    /// device run exactly as a service reply.
     private static func response(
         from outcome: AnalysisOutcome,
         listenerFailure: AnalysisProviderFailure?,
@@ -1212,8 +1116,7 @@ final class EpisodeAdAnalysisStore {
         }
     }
 
-    /// The open run of the episode on the same inputs that a new start
-    /// resumes instead of dispatching again, so the trial counts it once.
+    /// A new start resumes this run instead of dispatching again, so the trial counts it once.
     private func resumableRun(
         episodeID: String,
         preparation: EpisodeAdAnalysisPreparation,
@@ -1229,8 +1132,6 @@ final class EpisodeAdAnalysisStore {
         return run.id
     }
 
-    /// Closes the episode's open runs a new run replaces, so none of them
-    /// resumes later.
     private func closeOpenRuns(
         episodeID: String,
         environment: any EpisodeAdAnalysisRunEnvironment,
@@ -1244,15 +1145,13 @@ final class EpisodeAdAnalysisStore {
         }
     }
 
-    /// Ends an open run nothing will resume; the tokens it spent still count.
     private func closeRun(_ runID: String, environment: any EpisodeAdAnalysisRunEnvironment, modelContext: ModelContext) {
         recordUsage(ofRunID: runID, environment: environment, modelContext: modelContext)
         environment.runs.markCancelled(runID: runID)
     }
 
-    /// A run killed after its document was installed but before its record
-    /// ended: the completed record on the run's transcript proves the
-    /// install, so the run finishes and its usage counts (once, by run id).
+    /// Finishes runs killed after their document was installed: a completed record on the run's
+    /// transcript proves the install.
     private func finishInstalledRuns(modelContext: ModelContext) {
         guard let environment = runEnvironment else {
             return
@@ -1268,9 +1167,8 @@ final class EpisodeAdAnalysisStore {
         }
     }
 
-    /// Ends the run record after the episode's document (or failure) is in
-    /// place. Usage is counted first: a kill between the two counts the run
-    /// again at worst (once, by run id), never not at all.
+    /// Call once the episode's document or failure is in place. Usage is counted first: a kill
+    /// between the two counts it again (once per run id), never not at all.
     private func endRun(_ run: DeviceRun, environment: any EpisodeAdAnalysisRunEnvironment, modelContext: ModelContext) {
         guard let outcome = run.outcome else {
             closeRun(run.id, environment: environment, modelContext: modelContext)
@@ -1285,12 +1183,8 @@ final class EpisodeAdAnalysisStore {
         )
     }
 
-    /// A run stopped before its end. One whose key the listener removed in
-    /// AI Services ends as a send that found the key gone ends it: the
-    /// episode's record fails as needing a key, so its card and queue row
-    /// say so at once, and no key screen opens (the listener is where keys
-    /// are added). Any other stop leaves the episode's record for the next
-    /// start or launch.
+    /// A key removal fails the episode's record at once without opening the key screen; any
+    /// other stop leaves the record for the next start or launch.
     private func endStoppedRun(
         _ run: DeviceRun?,
         transcript document: EpisodeTranscriptDocument,
@@ -1311,10 +1205,6 @@ final class EpisodeAdAnalysisStore {
         if let run { endCancelledRun(run, environment: environment, modelContext: modelContext) }
     }
 
-    /// A run the listener stopped ends cancelled (its tokens still count);
-    /// one whose card expired keeps its replies, so the next start of the
-    /// episode or the next launch resumes it; one whose key the listener
-    /// removed fails as needing a key, its usage counted first.
     private func endCancelledRun(_ run: DeviceRun, environment: any EpisodeAdAnalysisRunEnvironment, modelContext: ModelContext) {
         switch activeCancelReason {
         case .expiration:
@@ -1332,18 +1222,15 @@ final class EpisodeAdAnalysisStore {
         }
     }
 
-    /// The pipeline's failure when a send finds the run's key gone, so a
-    /// run stopped for an in-app removal keeps the same record.
+    /// The pipeline's failure when a send finds the key gone, so both removals record alike.
     private static let keyRemovedFailure = AnalysisFailure(feature: .adDetection, code: .providerRejected, status: 503)
 
     private func recordUsage(of run: DeviceRun, environment: any EpisodeAdAnalysisRunEnvironment, modelContext: ModelContext) {
         recordUsage(ofRunID: run.id, environment: environment, modelContext: modelContext)
     }
 
-    /// Counts a run on the listener's key from its record's totals, before
-    /// the record's terminal state is written; the usage store adds only
-    /// the totals' growth under the run id. The record says whether its
-    /// usage is saved, so a failed save is counted at the next launch.
+    /// Call before the record's terminal state is written. A failed save stays marked unsaved
+    /// and is counted at the next launch.
     private func recordUsage(ofRunID runID: String, environment: any EpisodeAdAnalysisRunEnvironment, modelContext: ModelContext) {
         guard let record = environment.runs.record(id: runID),
               record.route == .direct,
@@ -1366,8 +1253,6 @@ final class EpisodeAdAnalysisStore {
         }
     }
 
-    /// Ended direct runs whose usage never saved (the save failed, or the
-    /// process stopped first) are counted at launch, once by run id.
     private func recordUnaccountedUsage(modelContext: ModelContext) {
         guard let environment = runEnvironment else {
             return
@@ -1377,9 +1262,6 @@ final class EpisodeAdAnalysisStore {
         }
     }
 
-    /// After a failed run: the trial status is read again when the trial
-    /// refused the run for its allowance, and the key screen opens for a
-    /// run that needs the listener's key when the start asked for it.
     private func followUpFailure(
         _ error: any Error,
         presentsKeyScreen: Bool,
@@ -1394,8 +1276,6 @@ final class EpisodeAdAnalysisStore {
         }
     }
 
-    /// Steps reported from the transport's threads hop to the main actor
-    /// and count only for the attempt that is still active.
     private func progressHandler(runID: UUID, attemptID: String) -> @Sendable (AnalysisProviderRequest.Purpose, Bool) -> Void {
         { [weak self] purpose, answered in
             Task { @MainActor [weak self] in
@@ -1411,8 +1291,6 @@ final class EpisodeAdAnalysisStore {
         activeProgress?.note(purpose, answered: answered)
     }
 
-    /// The episode's record turns running for this run, and the run state
-    /// keeps the last completed document to restore if the run fails.
     private func beginEpisodeRecord(
         _ document: EpisodeTranscriptDocument,
         preparation: EpisodeAdAnalysisPreparation,
@@ -1470,10 +1348,6 @@ final class EpisodeAdAnalysisStore {
         }
     }
 
-    /// The feed's declared runtime for the episode, when the cache has one.
-    /// Dynamic ad insertion serves files longer than this; the pipeline
-    /// counts the excess toward the episode ad budget instead of failing the
-    /// analysis closed on ad-heavy inventory.
     private static func declaredDuration(for episodeID: String, modelContext: ModelContext) -> TimeInterval? {
         let descriptor = FetchDescriptor<EpisodeCacheRecord>(predicate: #Predicate { $0.episodeID == episodeID })
         guard let duration = try? modelContext.fetch(descriptor).first?.duration,
@@ -1528,13 +1402,6 @@ final class EpisodeAdAnalysisStore {
         )
     }
 
-    /// The service's request JSON, written with the app's coding and read
-    /// by the device pipeline exactly as the service read it, and the
-    /// digest of everything in it the run depends on: the lowercase hex
-    /// SHA-256 of its sorted-key JSON without `request_id` and
-    /// `retry_failed`. The validator reads fields (the declared runtime, the
-    /// audio duration) that no provider payload carries, so a resume reuses
-    /// kept replies only under the same digest.
     private nonisolated static func pipelineInput(
         _ request: EpisodeAdAnalysisAPIRequest
     ) throws -> (request: AdAnalysisRequest, digest: String) {
@@ -1611,8 +1478,6 @@ final class EpisodeAdAnalysisStore {
         }
     }
 
-    /// Polls a job an earlier build started until it completes. A lost job
-    /// fails as interrupted; nothing is resubmitted.
     private func runResumedAnalysis(
         runID: UUID,
         context: AnalysisResumeContext,
@@ -1682,8 +1547,7 @@ final class EpisodeAdAnalysisStore {
             initialPollAfter: initialPollAfter,
             poll: { [client] jobID in
                 try await client.pollJob(id: jobID)
-            },
-            resubmit: nil
+            }
         )
     }
 
@@ -1694,11 +1558,8 @@ final class EpisodeAdAnalysisStore {
         AnalysisJobPoller(
             timeout: timeout,
             sleep: sleep,
-            isTransientJobFailure: { ($0 as? EpisodeAdAnalysisHTTPError)?.isTransientJobFailure == true },
             isTransientPollFailure: { ($0 as? EpisodeAdAnalysisHTTPError)?.isTransientPollFailure == true },
-            timedOutError: EpisodeAdAnalysisError.analysisTimedOut,
-            jobIDMismatchError: jobIDMismatchError(),
-            jobIDsMatch: EpisodeAdAnalysisJobHandle.sameInput
+            timedOutError: EpisodeAdAnalysisError.analysisTimedOut
         )
     }
 
@@ -1719,15 +1580,12 @@ final class EpisodeAdAnalysisStore {
             throw CancellationError()
         }
 
-        // Same philosophy as EpisodeRemoteAdAnalysisMapper: a span kind this
-        // build doesn't recognize means the response cannot be trusted to
-        // skip audio. Fail cleanly so callers fall back to a fresh analysis.
+        // A response with an unknown span kind cannot be trusted to skip audio.
         guard !response.spans.contains(where: { $0.kind == .unknown }) else {
             throw EpisodeAdAnalysisError.unrecognizedSpanKind
         }
 
-        // Only the run state knows the superseded document; the line below
-        // that clears it is the last place to learn it.
+        // Read before the run state is cleared below; only it knows the superseded document.
         let supersededPath = try? fileStore.readRunState(episodeID: episodeID)?.previousAnalysisPath
         try fileStore.write(document, relativePath: relativePath)
         record.state = .completed
@@ -1743,10 +1601,6 @@ final class EpisodeAdAnalysisStore {
         try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
         try fileStore.writeRunState(.init(transcriptFingerprint: fingerprint), episodeID: episodeID)
         deleteSupersededAnalysisDocument(at: supersededPath, keeping: relativePath, episodeID: episodeID)
-    }
-
-    private static func jobIDMismatchError() -> EpisodeAdAnalysisHTTPError {
-        EpisodeAdAnalysisHTTPError(statusCode: -1, code: "job_id_mismatch", detail: nil)
     }
 
     private nonisolated static func makeRequest(
@@ -1856,12 +1710,8 @@ final class EpisodeAdAnalysisStore {
         transcriptFingerprint: String,
         transcriptSegmentCount: Int
     ) -> Bool {
-        // Only explicitly supported whole-break policies may render or skip,
-        // even when an older cue-fragment policy's transcript still matches.
-        // Whole-second comparison: the transcript's `updatedAt` loses its
-        // fractional seconds on the `.iso8601` disk round trip, while the
-        // SwiftData record keeps full precision, so exact equality would
-        // brand a record seeded from an in-memory document permanently stale.
+        // Whole seconds: the transcript's `updatedAt` loses its fraction in the `.iso8601` disk
+        // round trip, while the record keeps full precision.
         return (record.state != .completed || EpisodeAdAnalysisContract.supports(policy: record.policy))
             && record.transcriptFingerprint == transcriptFingerprint
             && record.transcriptUpdatedAt.truncatedToWholeSeconds == document.updatedAt.truncatedToWholeSeconds
@@ -1979,17 +1829,12 @@ final class EpisodeAdAnalysisStore {
         }
     }
 
-    /// Server codes whose typed transient failure means time ran out rather
-    /// than the service being unreachable.
     private static let timedOutCodes: Set<String> = [
         "gemini_timeout",
         "analysis_deadline_exhausted",
         "execution_expired"
     ]
 
-    /// A device run's listener failure first, then the service's typed
-    /// category, then code, then error type; the card's copy follows the
-    /// kind, while `errorMessage` keeps the code for Diagnostics.
     private static func failureKind(for error: Error) -> EpisodeAnalysisFailureKind {
         if let analysisError = error as? EpisodeAdAnalysisError {
             switch analysisError {
@@ -2037,7 +1882,6 @@ final class EpisodeAdAnalysisStore {
         return .generic
     }
 
-    /// What a device run's failure tells the listener, as the card's kind.
     private static func failureKind(
         for listener: AnalysisProviderFailure,
         replayFailure: OpenCastAdAnalysisFailure?
@@ -2085,11 +1929,8 @@ final class EpisodeAdAnalysisStore {
         )
     }
 
-    /// Reconciles the stored records. The reconciler gives one resume slot
-    /// to the first running record that can use it: a job an earlier build
-    /// started, or a device run whose run record is still open on the same
-    /// transcript and younger than `resumeTTL`. Every other running record
-    /// fails as interrupted.
+    /// One resume slot goes to the first running record that can use it; every other running
+    /// record fails as interrupted.
     private func reconcile(modelContext: ModelContext) throws -> (job: AnalysisResumeContext?, device: DeviceResume?) {
         var device: DeviceResume?
         var reconciler = reconciler

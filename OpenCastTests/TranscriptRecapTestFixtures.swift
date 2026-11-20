@@ -3,11 +3,10 @@ import OpenCastTranscription
 @testable import OpenCast
 
 nonisolated enum TranscriptRecapTestFixtures {
-    /// Consecutive segments of `duration` seconds each, ids from 0, with
-    /// deterministic filler text of roughly `textLength` characters.
+    /// Consecutive 10-second segments, ids from 0, with deterministic filler
+    /// text of roughly `textLength` characters.
     static func segments(
         count: Int,
-        duration: TimeInterval = 10,
         textLength: Int = 40
     ) -> [OpenCastTranscriptSegment] {
         (0..<count).map { index in
@@ -15,8 +14,8 @@ nonisolated enum TranscriptRecapTestFixtures {
             let text = String(repeating: base, count: max(1, textLength / base.count))
             return OpenCastTranscriptSegment(
                 id: index,
-                start: Double(index) * duration,
-                end: Double(index + 1) * duration,
+                start: Double(index) * 10,
+                end: Double(index + 1) * 10,
                 text: text,
                 avgLogProbability: -0.1,
                 noSpeechProbability: 0.01

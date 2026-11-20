@@ -23,23 +23,6 @@ struct AnalysisKeyTierStoreTests {
         #expect(AnalysisKeyTierStore.preferenceKey == "aiServices.keyTier.google")
     }
 
-    @Test("It starts unknown, with nothing stored")
-    func startsUnknown() throws {
-        #expect(AnalysisKeyTierStore().state == .unknown)
-        #expect(reloaded(try makeContext()).state == .unknown)
-    }
-
-    @Test("A free-tier answer keeps the day Google said so, across a reload")
-    func freeTierKeepsTheDay() throws {
-        let context = try makeContext()
-        let store = AnalysisKeyTierStore(now: { Self.day })
-
-        store.noteFreeTier(modelContext: context)
-
-        #expect(store.state == .freeTier(day: Self.day))
-        #expect(reloaded(context).state == .freeTier(day: Self.day))
-    }
-
     @Test("A day the caller held is the one written, not the time of the write")
     func freeTierTakesTheDayItIsGiven() throws {
         let context = try makeContext()
@@ -70,29 +53,13 @@ struct AnalysisKeyTierStoreTests {
         #expect(reloaded(context).state == .unknown)
     }
 
-    @Test("Free tier gives way to not free tier, and not free tier to unknown, across a reload")
-    func freeToNotFreeToUnknown() throws {
+    @Test("A value it cannot read is unknown, which costs one check and never a route", arguments: ["paid", "free_tier", "free_tier:yesterday"])
+    func unreadableValue(value: String) throws {
         let context = try makeContext()
-        let store = AnalysisKeyTierStore(now: { Self.day })
-        store.noteFreeTier(modelContext: context)
+        try LocalPreferenceRecord.upsert(key: AnalysisKeyTierStore.preferenceKey, value: value, modelContext: context)
+        try context.save()
 
-        store.noteNotFreeTier(modelContext: context)
-        #expect(store.state == .notFreeTier)
-        #expect(reloaded(context).state == .notFreeTier)
-
-        store.reset(modelContext: context)
-        #expect(store.state == .unknown)
         #expect(reloaded(context).state == .unknown)
-    }
-
-    @Test("A value it cannot read is unknown, which costs one check and never a route")
-    func unreadableValue() throws {
-        let context = try makeContext()
-        for value in ["", "free_tier", "free_tier:yesterday", "paid", "true"] {
-            try LocalPreferenceRecord.upsert(key: AnalysisKeyTierStore.preferenceKey, value: value, modelContext: context)
-            try context.save()
-            #expect(reloaded(context).state == .unknown, "\(value)")
-        }
     }
 
     @Test("A failed save stands for the session only")

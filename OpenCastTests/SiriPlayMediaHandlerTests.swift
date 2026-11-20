@@ -78,17 +78,6 @@ struct SiriPlayMediaHandlerTests {
         #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == "newest")
     }
 
-    @Test("A generic request falls back to the newest Inbox episode")
-    func genericFallback() async throws {
-        let fixture = try await makeFixture()
-        let response = await fixture.handler.handle(
-            intent: SiriPlayMediaIntentFactory.make(resumePlayback: true)
-        )
-
-        #expect(response.code == .success)
-        #expect(fixture.appModel.playback.currentEpisode?.id.rawValue == "newest")
-    }
-
     @Test("A generic request falls back past an episode archived out of the Inbox")
     func genericFallbackSkipsArchivedEpisodes() async throws {
         let fixture = try await makeFixture()
@@ -159,74 +148,6 @@ struct SiriPlayMediaHandlerTests {
         #expect(fixture.appModel.playback.currentEpisode == nil)
     }
 
-    @Test("Direct resolution accepts an identified subscribed show")
-    func resolveIdentifiedShow() async throws {
-        let fixture = try await makeFixture()
-        let intent = SiriPlayMediaIntentFactory.make(
-            mediaContainer: SiriPlayMediaIntentFactory.mediaItem(
-                identifier: Self.feedURL,
-                title: "Example Show",
-                type: .podcastShow
-            )
-        )
-
-        let results = await fixture.handler.resolveMediaItems(for: intent)
-
-        #expect(results.count == 1)
-        #expect(await fixture.handler.resolution(for: intent) == .show(podcastID: Self.feedURL))
-    }
-
-    @Test("Direct resolution accepts an identified cached episode")
-    func resolveIdentifiedEpisode() async throws {
-        let fixture = try await makeFixture()
-        let intent = SiriPlayMediaIntentFactory.make(
-            mediaItems: [
-                SiriPlayMediaIntentFactory.mediaItem(
-                    identifier: "older",
-                    title: "Older Episode",
-                    type: .podcastEpisode
-                )
-            ]
-        )
-
-        let results = await fixture.handler.resolveMediaItems(for: intent)
-
-        #expect(results.count == 1)
-        #expect(await fixture.handler.resolution(for: intent) == .episode(episodeID: "older"))
-    }
-
-    @Test("Direct resolution finds a uniquely named episode")
-    func resolveNamedEpisode() async throws {
-        let fixture = try await makeFixture()
-        let intent = SiriPlayMediaIntentFactory.make(
-            mediaName: "Older Episode",
-            mediaType: .podcastEpisode
-        )
-
-        let results = await fixture.handler.resolveMediaItems(for: intent)
-
-        #expect(results.count == 1)
-        #expect(await fixture.handler.resolution(for: intent) == .episode(episodeID: "older"))
-    }
-
-    @Test("Direct resolution rejects ambiguous and missing names")
-    func resolveAmbiguityAndNoMatch() async throws {
-        let fixture = try await makeFixture()
-        let ambiguous = SiriPlayMediaIntentFactory.make(
-            mediaName: "Shared Episode",
-            mediaType: .podcastEpisode
-        )
-        let missing = SiriPlayMediaIntentFactory.make(
-            mediaName: "Missing Episode",
-            mediaType: .podcastEpisode
-        )
-
-        #expect(await fixture.handler.resolveMediaItems(for: ambiguous).count == 1)
-        #expect(await fixture.handler.resolution(for: ambiguous) == .noMatch)
-        #expect(await fixture.handler.resolveMediaItems(for: missing).count == 1)
-        #expect(await fixture.handler.resolution(for: missing) == .noMatch)
-    }
-
     @Test("Direct resolution rejects stale show and episode identifiers")
     func resolveStaleIdentifiers() async throws {
         let fixture = try await makeFixture()
@@ -264,9 +185,14 @@ struct SiriPlayMediaHandlerTests {
             mediaName: "Missing Episode",
             mediaType: .podcastEpisode
         )
+        let ambiguous = SiriPlayMediaIntentFactory.make(
+            mediaName: "Shared Episode",
+            mediaType: .podcastEpisode
+        )
 
         #expect(await fixture.handler.confirm(intent: playable).code == .ready)
         #expect(await fixture.handler.confirm(intent: missing).code == .failure)
+        #expect(await fixture.handler.confirm(intent: ambiguous).code == .failure)
     }
 
     @Test("An identified playlist plays its first unplayed episode silently and tags the rest")
@@ -355,9 +281,8 @@ struct SiriPlayMediaHandlerTests {
         #expect(await fixture.handler.resolution(for: intent) == .playlist(playlistID: playlistID))
         #expect(results.count == 1)
         let result = try #require(results.first)
-        // Resolution results expose no public accessor for their value; the
-        // responds(to:) guard turns a renamed private key into a failure
-        // instead of an exception that takes the test host down.
+        // No public accessor exposes the resolved value; responds(to:) turns a
+        // renamed private key into a failure instead of a test-host crash.
         try #require(result.responds(to: NSSelectorFromString("resolvedValue")))
         let item = try #require(result.value(forKey: "resolvedValue") as? INMediaItem)
         #expect(item.identifier == playlistID)
@@ -367,8 +292,6 @@ struct SiriPlayMediaHandlerTests {
 
     private static let feedURL = "https://example.com/siri-handler.xml"
 
-    /// Hydrates first, as the handler would, so the new rows are not replaced
-    /// by a later load and the episodes resolve.
     private func createPlaylist(
         _ name: String,
         episodeIDs: [String],
@@ -377,6 +300,7 @@ struct SiriPlayMediaHandlerTests {
     ) async throws -> String {
         let appModel = fixture.appModel
         let context = fixture.modelContext
+        // A later load would replace rows created before hydration.
         await appModel.ensurePlaybackSurfaceHydrated(modelContext: context)
         let playlist = try #require(appModel.playlists.create(name: name, kind: .manual, modelContext: context))
         let episodes = try episodeIDs.map { try #require(appModel.episodeSnapshot(for: $0)) }

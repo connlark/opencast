@@ -1,55 +1,34 @@
 import OpenCastAnalysis
 
-/// What the listener is told when a provider call fails: one case per row
-/// of the provider error table, plus an unreachable provider, any other
-/// refusal, the trial service's own refusals, and a key gone mid-run. The
-/// run record stores the raw value. Carries no provider text.
+/// Run records store the raw value. Carries no provider text.
 public enum AnalysisProviderFailure: String, Sendable, Hashable, CaseIterable, Codable {
-    /// The provider refused the key ("Key not accepted", with Test again).
     case invalidKey = "invalid_key"
-    /// The account needs billing, quota or prepaid credit.
     case billingOrQuota = "billing_or_quota"
-    /// The key's project used its provider's daily limit (Gemini's free
-    /// tier counts per project and resets at midnight Pacific). Final for
-    /// the run, never paced.
+    /// Gemini's free tier counts per project and resets at midnight Pacific. Final for the run,
+    /// never paced.
     case dailyLimit = "daily_limit"
-    /// The key is rate limited. Paced silently; shown only when the run
-    /// could not finish inside its budget.
+    /// Paced silently; shown only when the run cannot finish inside its budget.
     case rateLimited = "rate_limited"
-    /// The model is unknown to the provider or not available to the key.
     case modelUnavailable = "model_unavailable"
-    /// The provider answered with a server error ("Provider busy").
     case overloaded
-    /// The call did not complete before its deadline.
     case timeout
-    /// The answer could not be used: truncated, oversized, not UTF-8, not
-    /// the provider's shape, or rejected by the validator.
     case malformedAnswer = "malformed_answer"
-    /// The provider could not be reached.
     case unreachable
-    /// Any other refusal of the request.
     case requestRejected = "request_rejected"
-    /// The install's free trial analyses are used up.
     case trialExhausted = "trial_exhausted"
     /// The episode needs more than one trial analysis covers.
     case trialRunBound = "trial_run_bound"
-    /// The trial is paused for now (its allowance for the period is spent).
+    /// The trial's allowance for the period is spent.
     case trialPaused = "trial_paused"
-    /// The trial service is unavailable.
     case trialUnavailable = "trial_unavailable"
-    /// The listener's key for the run's provider was removed, replaced or
-    /// could not be read before a send; nothing reached the provider and
-    /// the run needs a key again.
+    /// The key was removed, replaced or unreadable before a send; nothing reached the provider.
     case keyRequired = "key_required"
 }
 
-/// One failed exchange, classified once for both audiences: the pipeline's
-/// retry ladder and the listener-facing surface.
 public struct AnalysisProviderErrorClassification: Error, Sendable, Hashable {
     public var transport: AnalysisTransportError
     public var listener: AnalysisProviderFailure
-    /// Google named the key free tier in this answer. Set whatever the
-    /// classification says: it is what the app reads, never the failure.
+    /// Google named the key free tier in this answer, whatever the classification says.
     public var freeTier: Bool
 
     public init(transport: AnalysisTransportError, listener: AnalysisProviderFailure, freeTier: Bool = false) {
@@ -58,7 +37,6 @@ public struct AnalysisProviderErrorClassification: Error, Sendable, Hashable {
         self.freeTier = freeTier
     }
 
-    /// An exchange that produced no response at all.
     public init(_ failure: AnalysisHTTPFailure) {
         switch failure {
         case .timeout: self.init(transport: .timeout, listener: .timeout)
@@ -67,7 +45,6 @@ public struct AnalysisProviderErrorClassification: Error, Sendable, Hashable {
         }
     }
 
-    /// A body that was not UTF-8.
     public static let invalidEncoding = AnalysisProviderErrorClassification(
         transport: .invalidEncoding,
         listener: .malformedAnswer
@@ -75,12 +52,6 @@ public struct AnalysisProviderErrorClassification: Error, Sendable, Hashable {
 }
 
 extension AnalysisProviderFailure {
-    /// The listener-facing failure of a finished run, or `nil` when the run
-    /// succeeded or failed for a reason that is not the provider's (a request
-    /// the pipeline refused, a cancellation). Prefers what the provider said
-    /// on the last failed send of the window that failed the run (any window
-    /// for a whole-run failure), never a send the run cancelled; otherwise
-    /// reads the run's failure code.
     public static func resolve(_ outcome: AnalysisOutcome, sends: [AnalysisProviderSendRecord]) -> AnalysisProviderFailure? {
         guard case .failed(let failure) = outcome else { return nil }
         let answered = sends.filter { !$0.cancelled }
@@ -115,7 +86,6 @@ extension AnalysisProviderFailure {
 }
 
 extension AnalysisProviderRequest.Purpose {
-    /// The ad-detection window a request belongs to; `nil` for Chapters.
     public var windowIndex: Int? {
         switch self {
         case .adWindow(let index), .adRepair(let index): index

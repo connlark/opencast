@@ -1,31 +1,20 @@
 import Foundation
 import SwiftData
 
-/// Launch-time record repair shared by the analysis stores: collapses
-/// duplicate episode groups to one proven survivor, fails records whose run
-/// or document did not survive the last process, and hands back the one
-/// accepted job worth resuming.
 struct AnalysisRecordReconciler<Record: TranscriptDerivedAnalysisRecord> {
     struct Outcome {
         var resumeContext: AnalysisResumeContext?
         var repairedGroupCount = 0
-        /// The episode whose `.running` record a device run will resume (at
-        /// most one, and none when a server job resumes).
+        /// At most one, and empty when a server job resumes.
         var deviceResumeEpisodeIDs: [String] = []
     }
 
     let fileStore: any AnalysisDocumentFileStore
     let messages: AnalysisRecordReconcileMessages
     let resumeTTL: TimeInterval
-    /// Kind written with `messages.interrupted`; document and transcript
-    /// repairs always fail as generic.
     var interruptedFailureKind: EpisodeAnalysisFailureKind = .generic
-    /// Store-specific repair of `.failed` rows, run after the shared
-    /// `jobAcceptedAt` cleanup; returns whether it changed the record.
+    /// Runs after the `jobAcceptedAt` cleanup; returns whether it changed the record.
     var repairFailedRecord: (Record, Date) -> Bool = { _, _ in false }
-    /// Whether a `.running` record with no accepted server job belongs to a
-    /// device run that resumes from its run record; such a record stays
-    /// running and is reported in `Outcome.deviceResumeEpisodeIDs`.
     var resumesDeviceRun: (Record, Date) -> Bool = { _, _ in false }
 
     func reconcile(_ records: [Record], modelContext: ModelContext) throws -> Outcome {
@@ -89,13 +78,9 @@ struct AnalysisRecordReconciler<Record: TranscriptDerivedAnalysisRecord> {
         return outcome
     }
 
-    /// Collapses one episode's analysis records to a single survivor. The
-    /// ladder prefers a completed record whose document decodes and whose
-    /// fingerprint matches the episode's surviving transcript; a survivor
-    /// that contradicts that transcript is kept but failed so stale results
-    /// are never presented. Loser documents are removed immediately —
-    /// losing is deterministic, so an interrupted save re-runs the same
-    /// collapse.
+    /// A survivor that contradicts the episode's transcript is kept but failed, so stale results
+    /// never show. Loser documents go before the save: losing is deterministic, so an interrupted
+    /// save re-runs the same collapse.
     func collapseDuplicateRecords(
         _ group: [Record],
         subscribedFeedURLs: Set<String>,
@@ -189,11 +174,8 @@ struct AnalysisRecordReconciler<Record: TranscriptDerivedAnalysisRecord> {
         return duplicateGroups.count
     }
 
-    /// 4: completed, document decodes, fingerprint matches the surviving
-    /// transcript. 3: completed with a valid document and no transcript to
-    /// contradict it. 2: completed but contradicting the surviving
-    /// transcript — survives only when nothing better exists, and is failed.
-    /// 0: everything else.
+    /// 2 is a completed record that contradicts the surviving transcript: it wins only when nothing
+    /// better exists, and is then failed.
     private func repairScore(_ record: Record, transcriptFingerprint: String?) -> Int {
         guard record.state == .completed,
               let relativePath = record.analysisRelativePath,
@@ -207,10 +189,6 @@ struct AnalysisRecordReconciler<Record: TranscriptDerivedAnalysisRecord> {
         return 3
     }
 
-    /// Fingerprint of the episode's one completed transcript document, or nil
-    /// when there is no unambiguous surviving transcript to compare against.
-    /// Transcript documents are read from the analysis store's own base
-    /// directory so tests exercise both against one root.
     private func survivingTranscriptFingerprint(
         episodeID: String,
         modelContext: ModelContext

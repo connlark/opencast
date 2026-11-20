@@ -1,18 +1,11 @@
 import Foundation
 
-/// Client-side mirror of the worker's flat blended analysis rate
-/// (`billing.rs::ANALYSIS_CREDIT_SECONDS_PER_AUDIO_HOUR`) for display
-/// estimates only — the server recomputes the charge from its own
-/// authoritative duration at reserve, so a drifted mirror can mis-display
-/// but never mis-charge. Both sides pin the committed fixture
-/// `Server/TranscriptAnalysisWorker/tests/fixtures/analysis_credit_rate.json`,
-/// so the constants cannot drift apart silently.
+/// A display-only mirror of `billing.rs::ANALYSIS_CREDIT_SECONDS_PER_AUDIO_HOUR`; both sides pin
+/// `Server/TranscriptAnalysisWorker/tests/fixtures/analysis_credit_rate.json`.
 nonisolated enum TranscriptAnalysisBillingRate {
     static let creditSecondsPerAudioHour = 7_850
 
-    /// Mirror of `billing.rs::charge_seconds_for_duration`: `ceil(duration ×
-    /// RATE / 3600)` in integer credit-seconds, nil when the duration cannot
-    /// price a run.
+    /// Mirrors `billing.rs::charge_seconds_for_duration`.
     static func estimatedChargeSeconds(durationSeconds: Double) -> Int64? {
         guard durationSeconds.isFinite, durationSeconds > 0 else {
             return nil

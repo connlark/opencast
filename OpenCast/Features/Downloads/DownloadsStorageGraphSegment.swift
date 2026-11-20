@@ -1,11 +1,8 @@
-/// One stretch of the storage bar: a show, or the shows past the fifth
-/// folded into Other.
 struct DownloadsStorageGraphSegment: Identifiable {
     static let otherID = "downloads-storage-other"
 
     let id: String
-    /// The 1-based position in the bar. Differentiate Without Color draws
-    /// it in the segment and on its legend marker.
+    /// 1-based.
     let number: Int
     let title: String
     let byteCount: Int64
@@ -19,8 +16,6 @@ struct DownloadsStorageGraphSegment: Identifiable {
         id == Self.otherID
     }
 
-    /// Where the segment's color comes from in
-    /// `DownloadsStorageSegmentPalette.ordered`; nil for Other's gray.
     var paletteIndex: Int? {
         isOther ? nil : number - 1
     }

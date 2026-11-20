@@ -1,22 +1,13 @@
-/// Pure mapping from a remote transcription phase to the episode-detail
-/// status card. `nil` hides the card: no request, or it completed and the
-/// transcript entry card takes over. Every terminal non-completed phase
-/// renders — a remote job never ends silently — and a parked job renders as
-/// still running on the server with Resume, never as a failure.
 nonisolated struct RemoteTranscriptionStatusPresentation: Equatable {
     let title: String
     let detail: String?
     let secondaryDetail: String?
     let progressFraction: Double?
     let isTerminalFailure: Bool
-    /// Local polling stopped while the server keeps working; the job is
-    /// re-attachable and a user cancel is still available.
+    /// Local polling stopped while the server keeps working.
     let isParked: Bool
     let offersLocalFallback: Bool
-    /// Re-attaches the same persisted reference.
     let offersResume: Bool
-    /// Re-runs against the same job, or a fresh one once the server result
-    /// is gone.
     let offersRetry: Bool
 
     static let localFallbackActionTitle = "Transcribe on Device"
@@ -88,8 +79,6 @@ nonisolated struct RemoteTranscriptionStatusPresentation: Equatable {
         }
     }
 
-    /// Shared with the cloud ad-detection surfaces, so a parked job reads
-    /// the same in either flow.
     static func parkedDetail(for exit: RemoteTranscriptionJobExit) -> String {
         switch exit {
         case .parked:

@@ -1,9 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// Settings › Playback › Auto Add to Up Next: this device's limit and the
-/// rule at the limit, then each show's position. Every control applies on
-/// change.
 struct SettingsAutoAddToUpNextView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext

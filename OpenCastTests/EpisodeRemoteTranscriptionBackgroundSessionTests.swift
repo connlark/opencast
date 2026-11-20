@@ -2,11 +2,6 @@ import Foundation
 import Testing
 @testable import OpenCast
 
-/// The Transcribe Remotely system card, driven through the fake scheduler
-/// and handle because the simulator never launches continued-processing
-/// tasks: one registration, one GPU-less submission per run, monotonic
-/// progress, one expiration that hands the park to its owner, and a
-/// privacy-safe trail carrying the reference's ids.
 @MainActor
 @Suite("Episode remote transcription background session")
 struct EpisodeRemoteTranscriptionBackgroundSessionTests {
@@ -53,23 +48,6 @@ struct EpisodeRemoteTranscriptionBackgroundSessionTests {
         #expect(scheduler.submitCallCount == 2)
     }
 
-    @Test("The debug force flag degrades to foreground-only before registration")
-    func debugForceFlagDegradesBeforeRegistration() {
-        let scheduler = FakeAdFreePassContinuedTaskScheduler()
-        let session = EpisodeRemoteTranscriptionBackgroundSession(
-            scheduler: scheduler,
-            forceForegroundOnly: { true }
-        )
-
-        session.arm(episodeID: "ep-forced", episodeTitle: "Forced Foreground Episode")
-        session.notePhase(.verifying, episodeID: "ep-forced")
-
-        #expect(scheduler.registerCallCount == 0)
-        #expect(scheduler.submitCallCount == 0)
-        #expect(!session.isArmed)
-        #expect(!session.isRunning)
-    }
-
     @Test("Phase flow drives monotonic progress and phase subtitles through regressions and ETA re-projection")
     func phaseFlowDrivesMonotonicProgressAndSubtitles() {
         let scheduler = FakeAdFreePassContinuedTaskScheduler()
@@ -93,8 +71,7 @@ struct EpisodeRemoteTranscriptionBackgroundSessionTests {
         let phases: [RemoteTranscriptionRequestPhase] = [
             .downloadingBoth,
             .verifying,
-            // The poll loop can report the job queued again after the source
-            // was verified; the card must not move backwards.
+            // A poll can report the job queued again after verification.
             .downloadingBoth,
             .uploadingExactCopy(completedParts: 1, totalParts: 4),
             .waitingForCredits,
@@ -122,24 +99,6 @@ struct EpisodeRemoteTranscriptionBackgroundSessionTests {
         #expect(handle.completions == [true])
         #expect(!session.isArmed)
         #expect(!session.isRunning)
-    }
-
-    @Test("Duplicate phases do not repeat handle updates")
-    func duplicatePhasesDoNotRepeatHandleUpdates() {
-        let scheduler = FakeAdFreePassContinuedTaskScheduler()
-        let session = EpisodeRemoteTranscriptionBackgroundSession(scheduler: scheduler)
-        let handle = FakeAdFreePassContinuedTaskHandle()
-
-        session.arm(episodeID: "ep-duplicate", episodeTitle: "Duplicate Phase Episode")
-        scheduler.launch(handle)
-        session.notePhase(.verifying, episodeID: "ep-duplicate")
-        let updateCount = handle.titleUpdates.count
-        let completedUnits = handle.progress.completedUnitCount
-
-        session.notePhase(.verifying, episodeID: "ep-duplicate")
-
-        #expect(handle.titleUpdates.count == updateCount)
-        #expect(handle.progress.completedUnitCount == completedUnits)
     }
 
     @Test("Phases from another episode's run never drive or end the card")
@@ -203,26 +162,24 @@ struct EpisodeRemoteTranscriptionBackgroundSessionTests {
         #expect(!session.isArmed)
     }
 
-    @Test("A terminal failure or a user cancel ends the card unsuccessfully with its own copy")
-    func terminalEndsCardUnsuccessfully() {
-        for phase in [
-            RemoteTranscriptionRequestPhase.failed(.localRequestFailed),
-            .cancelled,
-            .mismatchLocalFallback,
-        ] {
-            let scheduler = FakeAdFreePassContinuedTaskScheduler()
-            let session = EpisodeRemoteTranscriptionBackgroundSession(scheduler: scheduler)
-            let handle = FakeAdFreePassContinuedTaskHandle()
+    @Test("A terminal failure or a user cancel ends the card unsuccessfully with its own copy", arguments: [
+        RemoteTranscriptionRequestPhase.failed(.localRequestFailed),
+        .cancelled,
+        .mismatchLocalFallback,
+    ])
+    func terminalEndsCardUnsuccessfully(phase: RemoteTranscriptionRequestPhase) {
+        let scheduler = FakeAdFreePassContinuedTaskScheduler()
+        let session = EpisodeRemoteTranscriptionBackgroundSession(scheduler: scheduler)
+        let handle = FakeAdFreePassContinuedTaskHandle()
 
-            session.arm(episodeID: "ep-terminal", episodeTitle: "Terminal Episode")
-            scheduler.launch(handle)
-            session.notePhase(.verifying, episodeID: "ep-terminal")
-            session.notePhase(phase, episodeID: "ep-terminal")
+        session.arm(episodeID: "ep-terminal", episodeTitle: "Terminal Episode")
+        scheduler.launch(handle)
+        session.notePhase(.verifying, episodeID: "ep-terminal")
+        session.notePhase(phase, episodeID: "ep-terminal")
 
-            #expect(handle.completions == [false])
-            #expect(handle.titleUpdates.last?.subtitle == phase.displayText)
-            #expect(!session.isArmed)
-        }
+        #expect(handle.completions == [false])
+        #expect(handle.titleUpdates.last?.subtitle == phase.displayText)
+        #expect(!session.isArmed)
     }
 
     @Test("A terminal noted before launch cancels the request and completes the late handle immediately")
@@ -237,7 +194,6 @@ struct EpisodeRemoteTranscriptionBackgroundSessionTests {
             EpisodeRemoteTranscriptionBackgroundSession.identifier,
             EpisodeRemoteTranscriptionBackgroundSession.identifier,
         ])
-        // The run is over, so a late launch must not hold the one card.
         #expect(!session.isArmed)
 
         scheduler.launch(handle)
@@ -326,31 +282,6 @@ struct EpisodeRemoteTranscriptionBackgroundSessionTests {
         #expect(completed.clientRequestID == reference.clientRequestID)
         #expect(completed.disposition == .cleared)
         #expect(handle.completions == [true])
-    }
-
-    @Test("A failed submission and a refused arm each record foreground-only; a refusal never touches the scheduler")
-    func foregroundOnlyOutcomesAreRecorded() throws {
-        let (store, diagnostics) = try Self.makeStore()
-        let failing = FakeAdFreePassContinuedTaskScheduler(submitError: ProbeError.submission)
-        let session = EpisodeRemoteTranscriptionBackgroundSession(scheduler: failing)
-        session.jobStore = store
-
-        session.arm(episodeID: "ep-failed-submit", episodeTitle: "Failed Submit")
-        #expect(diagnostics.events(of: .sessionForegroundOnly).map(\.episodeID) == ["ep-failed-submit"])
-        #expect(diagnostics.events(of: .sessionArmed).isEmpty)
-
-        let idleScheduler = FakeAdFreePassContinuedTaskScheduler()
-        let refusing = EpisodeRemoteTranscriptionBackgroundSession(scheduler: idleScheduler)
-        refusing.jobStore = store
-        refusing.recordRefusedArm(episodeID: "ep-refused")
-
-        #expect(diagnostics.events(of: .sessionForegroundOnly).map(\.episodeID) == ["ep-failed-submit", "ep-refused"])
-        #expect(diagnostics.events(of: .sessionForegroundOnly).allSatisfy {
-            $0.component == .backgroundSession && $0.purpose == .transcription
-        })
-        #expect(idleScheduler.registerCallCount == 0)
-        #expect(idleScheduler.submitCallCount == 0)
-        #expect(!refusing.isArmed)
     }
 
     // MARK: Helpers

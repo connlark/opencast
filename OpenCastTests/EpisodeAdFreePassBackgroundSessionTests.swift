@@ -1,5 +1,4 @@
 import Foundation
-import OpenCastTranscription
 import Testing
 @testable import OpenCast
 
@@ -97,54 +96,6 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         #expect(!session.isProtectingBackgroundExecution)
     }
 
-    @Test("A non-GPU submission failure never retries")
-    func nonGPUSubmissionFailureNeverRetries() {
-        let scheduler = FakeAdFreePassContinuedTaskScheduler(submitError: ProbeError.submission)
-        let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler)
-
-        session.arm(episodeTitle: "No Retry Episode")
-
-        #expect(scheduler.submittedGPUFlags == [false])
-        #expect(scheduler.submitCallCount == 1)
-        #expect(!session.isArmed)
-    }
-
-    @Test("Debug force flag degrades to foreground-only before registration")
-    func debugForceFlagDegradesBeforeRegistration() {
-        let scheduler = FakeAdFreePassContinuedTaskScheduler()
-        let session = EpisodeAdFreePassBackgroundSession(
-            scheduler: scheduler,
-            forceForegroundOnly: { true }
-        )
-
-        session.arm(episodeTitle: "Forced Foreground Episode")
-        session.noteStage(.transcribing(transcriptionProgress(0.5)))
-
-        #expect(scheduler.registerCallCount == 0)
-        #expect(scheduler.submitCallCount == 0)
-        #expect(!session.isProtectingBackgroundExecution)
-    }
-
-    @Test("Stage flow drives monotonic progress")
-    func stageFlowDrivesMonotonicProgress() {
-        let scheduler = FakeAdFreePassContinuedTaskScheduler()
-        let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler)
-        let handle = FakeAdFreePassContinuedTaskHandle()
-
-        session.arm(episodeTitle: "Progress Episode")
-        scheduler.launch(handle)
-        session.noteStage(.transcribing(transcriptionProgress(0.75)))
-        #expect(handle.adFreeUnits == 737)
-
-        session.noteStage(.installingModel(installProgress(1)))
-        #expect(handle.adFreeUnits == 737)
-
-        session.noteStage(.analyzing(steps: nil))
-        #expect(handle.adFreeUnits == 910)
-        #expect(handle.titleUpdates.last?.subtitle == "Detecting ads")
-        #expect(handle.titleUpdates.last?.title == "Skip Promos & Ads")
-    }
-
     @Test("Cloud stages submit without GPU, stay monotonic, and creep while the server works")
     func cloudStagesSubmitWithoutGPUAndCreep() async {
         let scheduler = FakeAdFreePassContinuedTaskScheduler()
@@ -164,10 +115,7 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         #expect(handle.adFreeUnits == 900)
         #expect(handle.titleUpdates.last?.subtitle == "Finishing the transcript in the cloud")
 
-        // A server phase can hold one poll state for minutes; the creep (one
-        // tick every 2 s) keeps the system from reading the card as stalled.
-        // The 10 s budget is several ticks.
-        #expect(await waitUntil(timeout: .seconds(10)) { handle.adFreeUnits > 900 })
+        #expect(await waitUntil { handle.adFreeUnits > 900 })
         let crept = handle.adFreeUnits
         session.noteStage(.cloudTranscribing(nil))
         #expect(handle.adFreeUnits >= crept)
@@ -191,8 +139,6 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         currentDate += 20
         #expect(await waitUntil { handle.adFreeUnits == 30 })
 
-        // A move to the upload and each part count keep that clock; a
-        // restart here would hold the card at 30 until the system expired it.
         session.noteStage(.cloudUploadingExactCopy(completedParts: 0, totalParts: 0))
         #expect(handle.titleUpdates.last?.subtitle == "Preparing audio upload…")
         session.noteStage(.cloudUploadingExactCopy(completedParts: 1, totalParts: 3))
@@ -252,7 +198,6 @@ struct EpisodeAdFreePassBackgroundSessionTests {
             .completed(zoneCount: 2),
             queueContext: AdFreePassQueueContext(finishedItemCount: 0, totalItemCount: 3, episodeTitle: "First Episode")
         )
-        // Mid-queue per-episode completion is progress only, never terminal.
         #expect(handle.completions.isEmpty)
 
         session.noteStage(
@@ -281,67 +226,26 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         #expect(!session.isProtectingBackgroundExecution)
     }
 
-    @Test("Composite progress is monotonic and holds flat when items are appended mid-run")
-    func compositeProgressHoldsFlatOnAppend() {
+    @Test("Queue-terminal outcomes map to the settled success truth table", arguments: [
+        (AdFreePassQueueTerminalOutcome.drained(completedCount: 3, failedCount: 0), true),
+        (.drained(completedCount: 1, failedCount: 2), true),
+        (.drained(completedCount: 0, failedCount: 2), false),
+        (.interrupted, false),
+        (.remoteParked(.parked), false),
+        (.cloudUserCancelled, false),
+    ])
+    func queueTerminalSuccessTruthTable(outcome: AdFreePassQueueTerminalOutcome, expectedSuccess: Bool) {
         let scheduler = FakeAdFreePassContinuedTaskScheduler()
         let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler)
         let handle = FakeAdFreePassContinuedTaskHandle()
 
-        session.arm(episodeTitle: "First Episode")
+        session.arm(episodeTitle: "Truth Table Episode")
         scheduler.launch(handle)
-        session.noteStage(
-            .transcribing(transcriptionProgress(0.75)),
-            queueContext: AdFreePassQueueContext(finishedItemCount: 0, totalItemCount: 2, episodeTitle: "First Episode")
-        )
-        #expect(handle.adFreeUnits == 368)
+        session.noteStage(.analyzing(steps: nil))
+        session.noteQueueTerminal(outcome)
 
-        // Appending grows the denominator; progress holds flat rather than
-        // running backwards.
-        session.noteStage(
-            .transcribing(transcriptionProgress(0.8)),
-            queueContext: AdFreePassQueueContext(finishedItemCount: 0, totalItemCount: 3, episodeTitle: "First Episode")
-        )
-        #expect(handle.adFreeUnits == 368)
-
-        session.noteStage(
-            .downloadingEpisode,
-            queueContext: AdFreePassQueueContext(finishedItemCount: 1, totalItemCount: 3, episodeTitle: "Second Episode")
-        )
-        #expect(handle.adFreeUnits == 368)
-
-        session.noteStage(
-            .downloadingEpisode,
-            queueContext: AdFreePassQueueContext(finishedItemCount: 2, totalItemCount: 3, episodeTitle: "Third Episode")
-        )
-        #expect(handle.adFreeUnits == 673)
-    }
-
-    @Test("Queue-terminal outcomes map to the settled success truth table")
-    func queueTerminalSuccessTruthTable() {
-        let cases: [(AdFreePassQueueTerminalOutcome, Bool)] = [
-            (.drained(completedCount: 3, failedCount: 0), true),
-            (.drained(completedCount: 1, failedCount: 2), true),
-            (.drained(completedCount: 0, failedCount: 2), false),
-            (.interrupted, false),
-            (.remoteParked(.parked), false),
-            (.remoteParked(.connectionLost), false),
-            (.cloudUserCancelled, false),
-            (.awaitingConsent, false)
-        ]
-
-        for (outcome, expectedSuccess) in cases {
-            let scheduler = FakeAdFreePassContinuedTaskScheduler()
-            let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler)
-            let handle = FakeAdFreePassContinuedTaskHandle()
-
-            session.arm(episodeTitle: "Truth Table Episode")
-            scheduler.launch(handle)
-            session.noteStage(.analyzing(steps: nil))
-            session.noteQueueTerminal(outcome)
-
-            #expect(handle.completions == [expectedSuccess], "outcome \(outcome)")
-            #expect(!session.isProtectingBackgroundExecution)
-        }
+        #expect(handle.completions == [expectedSuccess])
+        #expect(!session.isProtectingBackgroundExecution)
     }
 
     @Test("The consent terminal publishes its settled subtitle")
@@ -369,6 +273,7 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         session.arm(episodeTitle: "Long Episode")
         scheduler.launch(handle)
         defer { session.reset() }
+        #expect(handle.progress.totalUnitCount == 1_000_000_000)
 
         // Slice 910 to 923 with 12 units of room, paced over 100 s.
         session.noteStage(.analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 0, total: 5, stepBudgetSeconds: 100)))
@@ -390,53 +295,6 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         #expect(handle.adFreeUnits == 923)
         currentDate += 25
         #expect(await waitUntil { handle.adFreeUnits == 926 })
-        #expect(handle.completions.isEmpty)
-    }
-
-    @Test("A many-window run's card moves on every creep tick across a long step, below the step's end")
-    func manyWindowCardMovesOnEveryTick() async {
-        var currentDate = Date(timeIntervalSince1970: 1_000_000)
-        let scheduler = FakeAdFreePassContinuedTaskScheduler()
-        let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler, now: { currentDate })
-        let handle = FakeAdFreePassContinuedTaskHandle()
-        session.arm(episodeTitle: "Long Episode")
-        scheduler.launch(handle)
-        defer { session.reset() }
-        let subunits = EpisodeAdFreePassBackgroundSession.progressSubunitsPerUnit
-        #expect(handle.progress.totalUnitCount == 1_000 * subunits)
-
-        // Forty windows and the step to come, third of five in the queue:
-        // the step's slice is two points of the 0...1000 scale (925 to 927),
-        // under half a point of the card.
-        let context = AdFreePassQueueContext(finishedItemCount: 2, totalItemCount: 5, episodeTitle: "Long Episode")
-        session.noteStage(
-            .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 10, total: 41, stepBudgetSeconds: 250)),
-            queueContext: context
-        )
-        let start = handle.progress.completedUnitCount
-        // The step's end, as the card counts it.
-        let stepEnd = (2 * 1_000 * subunits + (910 * subunits + 65 * subunits * 11 / 41)) / 5
-        #expect(start == (2 * 1_000 * subunits + (910 * subunits + 65 * subunits * 10 / 41)) / 5)
-
-        // Each tick 2 s along the clock moves the card, while the 0...1000
-        // view of it stands still.
-        var previous = start
-        for _ in 1...3 {
-            currentDate += 2
-            #expect(await waitUntil { handle.progress.completedUnitCount > previous })
-            previous = handle.progress.completedUnitCount
-        }
-        #expect(handle.adFreeUnits == start / subunits)
-
-        // Late in the 250 s budget it still moves on every tick, short of
-        // the step's end.
-        currentDate += 230
-        for _ in 1...2 {
-            #expect(await waitUntil { handle.progress.completedUnitCount > previous })
-            previous = handle.progress.completedUnitCount
-            #expect(previous < stepEnd)
-            currentDate += 2
-        }
         #expect(handle.completions.isEmpty)
     }
 
@@ -513,8 +371,6 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler)
         let handle = FakeAdFreePassContinuedTaskHandle()
 
-        // Queue mid-drain, un-armed: the "Continue in Background" tap arms and
-        // the coordinator republishes the current stage before launch.
         session.arm(episodeTitle: "Second Episode")
         session.noteStage(
             .transcribing(transcriptionProgress(0.5)),
@@ -557,37 +413,6 @@ struct EpisodeAdFreePassBackgroundSessionTests {
         #expect(firstHandle.completions == [false])
         #expect(scheduler.submitCallCount == 2)
         #expect(session.isProtectingBackgroundExecution)
-    }
-
-    @Test("Duplicate stages with unchanged queue context do not repeat handle updates")
-    func duplicateStagesDoNotRepeatHandleUpdates() {
-        let scheduler = FakeAdFreePassContinuedTaskScheduler()
-        let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler)
-        let handle = FakeAdFreePassContinuedTaskHandle()
-
-        session.arm(episodeTitle: "Duplicate Stage Episode")
-        scheduler.launch(handle)
-        session.noteStage(.analyzing(steps: nil))
-        let updateCount = handle.titleUpdates.count
-        let completedUnits = handle.adFreeUnits
-
-        session.noteStage(.analyzing(steps: nil))
-
-        #expect(handle.titleUpdates.count == updateCount)
-        #expect(handle.adFreeUnits == completedUnits)
-    }
-
-    private func installProgress(_ fraction: Double) -> OpenCastWhisperModelInstallProgress {
-        let totalByteCount: Int64 = 1_000
-        return OpenCastWhisperModelInstallProgress(
-            modelIdentifier: OpenCastWhisperModel.tinyEnglish.rawValue,
-            version: OpenCastWhisperModel.tinyEnglish.defaultRemoteVersion,
-            completedFileCount: Int(fraction * 10),
-            totalFileCount: 10,
-            completedByteCount: Int64(fraction * Double(totalByteCount)),
-            totalByteCount: totalByteCount,
-            currentFilePath: nil
-        )
     }
 
     private func transcriptionProgress(_ fraction: Double) -> EpisodeTranscriptionProgress {

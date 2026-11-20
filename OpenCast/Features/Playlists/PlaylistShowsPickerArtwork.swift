@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// A show's 40-point rounded artwork in the Shows and Priority pickers.
 struct PlaylistShowsPickerArtwork: View {
     @Environment(OpenCastAppModel.self) private var appModel
 

@@ -2,8 +2,6 @@ import Foundation
 import OpenCastCore
 import Testing
 
-/// Real descriptions through the production pipeline: the feed parser's `showNotesHTML`, `structuredText`, then the
-/// chapters parser with the episode's own duration. Expected values are read off the raw description lines.
 @Suite("Show-notes chapters in the feed corpus")
 struct ShowNotesChaptersCorpusTests {
     @Test("Invest Like the Best EP.500: all 13 entries under its Timestamps heading, from 95 s across the hour")
@@ -284,7 +282,6 @@ struct ShowNotesChaptersCorpusTests {
         #expect(chapters.map(\.startTime) == entries.map(\.start))
         // Titles are capped as a chapters document's are, which cuts the fourth line inside its second post.
         #expect(chapters.map(\.title) == entries.map { String($0.title.prefix(PublisherChaptersDocumentDecoder.maximumTitleLength)) })
-        // The app shows the chapters document the episode declares instead.
         #expect(episode.chaptersURL != nil)
     }
 
@@ -310,7 +307,6 @@ struct ShowNotesChaptersCorpusTests {
         #expect(Self.chapters(in: episode.showNotesHTML, duration: episode.duration).isEmpty)
     }
 
-    /// Per feed: episodes whose show notes yield chapters, and the chapters across them.
     private static let census: [String: (episodes: Int, chapters: Int)] = [
         "audacitytopodcast": (0, 0),
         "backupwrapup": (33, 466),

@@ -13,8 +13,7 @@ public actor AppleSpeechTranscriptionService {
     private let allowsAssetInstallation: Bool
     private let analyzerPriority: TaskPriority?
 
-    /// `analyzerPriority` is the analyzer's own work priority; nil keeps
-    /// `.userInitiated`.
+    /// A nil `analyzerPriority` keeps `.userInitiated`.
     public init(
         requiresInstalledAssets: Bool = true,
         allowsAssetInstallation: Bool = false,
@@ -129,11 +128,9 @@ public actor AppleSpeechTranscriptionService {
         }
 
         do {
-            // `analyzeSequence` does not reliably observe cooperative task
-            // cancellation; without this handler a cancelled pass keeps the
-            // Speech pipeline (and the app's CPU ledger) running to end of
-            // file — in the background that trips the 80%/60s EXC_RESOURCE
-            // kill once the continued-processing task is gone.
+            // `analyzeSequence` does not reliably observe task cancellation. Without this
+            // handler a cancelled pass runs Speech to the end of the file, which in the
+            // background trips the 80%/60s EXC_RESOURCE CPU kill.
             try await withTaskCancellationHandler {
                 _ = try await analyzer.analyzeSequence(from: audioFile)
                 try await analyzer.finalizeAndFinishThroughEndOfInput()
@@ -222,14 +219,9 @@ public actor AppleSpeechTranscriptionService {
         continuation: AsyncThrowingStream<OpenCastLongFormTranscriptionEvent, Error>.Continuation
     ) async throws -> AppleSpeechResultAccumulator {
         var accumulator = AppleSpeechResultAccumulator()
-        // Throttled background transcription streams a final result roughly
-        // every spoken sentence, several per wall-second. Un-throttled, each
-        // one fanned out into a full-document persist downstream (segment
-        // normalize + JSON encode + file write, all O(transcript)), which
-        // saturates the main thread as the transcript grows and trips the
-        // background 80%/60s CPU kill. Checkpoints are UI/bookkeeping only
-        // for Apple Speech (resume restarts from zero), so a
-        // coarse audio-time stride loses nothing.
+        // Speech streams a final result about every sentence, and each one costs an
+        // O(transcript) persist downstream, enough to trip the background 80%/60s CPU kill.
+        // Apple Speech resumes from zero, so a coarse checkpoint stride loses nothing.
         var throttle = AppleSpeechEventThrottle()
         for try await result in transcriber.results {
             try Task.checkCancellation()
@@ -413,10 +405,8 @@ public actor AppleSpeechTranscriptionService {
     }
 }
 
-/// Gates streamed-result fan-out by transcribed audio time. Strides are in
-/// audio seconds, not wall seconds: background transcription chews through
-/// several audio-seconds per wall-second, so these bound the event rate at
-/// roughly progressStride/rtf and checkpointStride/rtf wall-seconds apart.
+/// Strides are in audio seconds, not wall seconds; transcription runs through several
+/// audio seconds per wall second.
 struct AppleSpeechEventThrottle {
     static let progressStride: TimeInterval = 5
     static let checkpointStride: TimeInterval = 60

@@ -2,9 +2,8 @@ import Darwin
 import Foundation
 import Synchronization
 
-/// Immutable ownership token for one feed artifact directory. Releasing or
-/// explicitly discarding it queues deletion on one utility worker, keeping
-/// recursive file removal off the actor that releases a prepared feed.
+/// Owns one feed artifact directory. Its release deletes the directory on a utility worker,
+/// so recursive removal stays off the releasing actor.
 final class FeedWorkspace: Sendable {
     let directory: URL
     private let cleanupScheduled = Mutex(false)
@@ -44,7 +43,6 @@ final class FeedWorkspace: Sendable {
         }
     }
 
-    /// Starts a liveness-checked sweep without waiting on the caller's actor.
     static func cleanAbandonedJobs() {
         cleanup.enqueueAbandonedSweep {
             // First ownership creation can wait for another process's sweep.
@@ -53,8 +51,6 @@ final class FeedWorkspace: Sendable {
         }
     }
 
-    /// Test synchronization point: all cleanup queued before this call has
-    /// completed when it returns.
     static func waitForCleanup() async {
         await cleanup.waitUntilIdle()
     }
@@ -72,9 +68,8 @@ final class FeedWorkspace: Sendable {
     }
 }
 
-/// One UUID directory per process plus an advisory owner lock distinguishes a
-/// live producer from abandoned files. Unlike a PID name, the UUID cannot be
-/// mistaken for a later process after PID reuse.
+/// An owner lock on a per-process UUID directory tells a live producer from abandoned files.
+/// A PID name would fail: after PID reuse a later process looks like the owner.
 private final class FeedWorkspaceProcessOwner: @unchecked Sendable {
     static let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("OpenCastFeedJobs", isDirectory: true)
@@ -125,8 +120,6 @@ private final class FeedWorkspaceProcessOwner: @unchecked Sendable {
     }
 }
 
-/// Coalesces every deletion onto one serial worker. The pending set bounds
-/// duplicate requests and a single drain closure handles bursts of artifacts.
 private final class FeedWorkspaceCleanup: @unchecked Sendable {
     private struct State {
         var pending: Set<URL> = []
@@ -245,8 +238,6 @@ private final class FeedWorkspaceCleanup: @unchecked Sendable {
     }
 }
 
-/// Narrow synchronization seam proving cleanup never executes on the actor
-/// that releases a workspace. Only package tests install one.
 final class FeedWorkspaceCleanupBarrier: @unchecked Sendable {
     private struct State {
         var reached = false

@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// A playlist's cover: its shows' artwork in a 2x2 mosaic with 1 pt seams,
-/// a single cover for one show, and the name's initials for none. It fills
-/// the square it is offered; callers set the size and corner radius.
 struct PlaylistArtworkMosaic: View {
     private static let seamWidth = 1.0
     // ArtworkPlaceholder clips every image to 8 pt corners. Drawing each
@@ -59,9 +56,6 @@ struct PlaylistArtworkMosaic: View {
         .clipped()
     }
 
-    /// Four slots for two or more shows: three repeat the first in the last
-    /// slot, two alternate as a checkerboard. Fewer than two shows draw a
-    /// single cover instead.
     private var mosaicSlots: [URL] {
         let urls = Array(sources.artworkURLs.prefix(PlaylistCoverSources.maximumArtworkCount))
         switch urls.count {

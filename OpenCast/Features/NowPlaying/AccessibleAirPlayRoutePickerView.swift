@@ -35,7 +35,6 @@ final class AccessibleAirPlayRoutePickerView: AVRoutePickerView {
     }
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        // Treat the full SwiftUI utility tile as the AVRoutePickerView hit target.
         bounds.contains(point)
     }
 
@@ -60,7 +59,7 @@ final class AccessibleAirPlayRoutePickerView: AVRoutePickerView {
     }
 
     private func configureAccessibility() {
-        // AVKit exposes its inner UIControl separately, so make that real control the accessible button.
+        // AVKit exposes its inner UIControl separately, so that control is the accessible button.
         isAccessibilityElement = false
         accessibilityElements = nil
         configureInternalAccessibility()

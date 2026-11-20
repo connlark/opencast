@@ -1,9 +1,6 @@
 import CoreGraphics
 import SwiftUI
 
-/// The car display's list-image geometry. List rows get their own pixel size —
-/// and therefore their own artwork cache entries — rather than reusing the
-/// 1024² Now Playing image.
 nonisolated struct CarPlayArtworkSizing: Equatable, Sendable {
     static let fallback = CarPlayArtworkSizing(
         pointSize: CGSize(width: 44, height: 44),

@@ -1,13 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// The long-press menu on a show in the Group by Podcast Inbox, for rows and
-/// tiles alike. Play Latest starts the newest Inbox episode, Play Next and
-/// Play Last queue the show's Inbox episodes (what the badge counts), Mark
-/// All Played is the show page's, and Archive All archives the episodes the
-/// group lists. In the archive view the group lists archived episodes, so
-/// Unarchive All takes Archive All's place. Show management (removal,
-/// sharing) stays on the Library and the show page.
 struct InboxPodcastGroupActionsModifier: ViewModifier {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
@@ -112,9 +105,7 @@ struct InboxPodcastGroupActionsModifier: ViewModifier {
         }
     }
 
-    /// Oldest first, so the batch plays in release order wherever it lands:
-    /// at the top of the queue or below it. The playing episode never joins
-    /// the queue behind itself.
+    /// Oldest first, so the batch plays in release order at the top of the queue or below it.
     private var queueableEpisodes: [EpisodeListItemSnapshot] {
         let currentEpisodeID = appModel.playback.currentEpisode?.id.rawValue
         return group.episodes

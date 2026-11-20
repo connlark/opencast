@@ -2,10 +2,7 @@ import DeviceCheck
 import Foundation
 import OpenCastTranscription
 
-/// URLSession-backed client for the remote transcription worker. Reuses the
-/// existing App Attest client/envelope and key lifecycle; every dynamic job
-/// path is bound exactly into the assertion. Cancellation is normal; sizes
-/// and timeouts are bounded.
+/// Every dynamic job path is bound exactly into the App Attest assertion.
 nonisolated struct RemoteTranscriptionAPIClient: RemoteTranscriptionAPI {
     private static let bootstrapPath = "/v1/remote-transcription/account/bootstrap"
     private static let jobsPath = "/v1/remote-transcription/jobs"
@@ -21,8 +18,6 @@ nonisolated struct RemoteTranscriptionAPIClient: RemoteTranscriptionAPI {
     private let appAttestService: any AppAttestServiceProtocol
     private let appAttestCredentialService: AppAttestCredentialService?
     private let appAttestSecureClient: AppAttestSecureAPIClient?
-    /// Purchase-backend lanes attach the verified AppTransaction JWS to every
-    /// bootstrap; injected so tests stay StoreKit-free.
     private let appTransactionJWSProvider: @Sendable () async throws -> String?
 
     init(

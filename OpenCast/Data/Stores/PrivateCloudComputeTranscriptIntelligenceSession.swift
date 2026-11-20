@@ -1,7 +1,5 @@
 import FoundationModels
 
-/// One `LanguageModelSession` on the PCC model. Every turn runs with light
-/// reasoning and maps its error before it reaches the store.
 nonisolated final class PrivateCloudComputeTranscriptIntelligenceSession: TranscriptIntelligenceSession {
     private let session: LanguageModelSession
 
@@ -110,8 +108,6 @@ nonisolated final class PrivateCloudComputeTranscriptIntelligenceSession: Transc
         )
     }
 
-    /// Pairs each tool call in the turn with its output by call id, falling
-    /// back to the first unanswered call of the same tool.
     private static func toolExchanges(in entries: ArraySlice<Transcript.Entry>) -> [TranscriptIntelligenceToolExchange] {
         var exchanges: [TranscriptIntelligenceToolExchange] = []
         var callIDs: [String] = []

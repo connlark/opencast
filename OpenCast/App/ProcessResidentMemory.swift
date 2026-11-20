@@ -1,8 +1,5 @@
 import Foundation
 
-/// Peak-over-baseline resident-memory sampler for the search benchmark. The
-/// physical-footprint probe itself is `MemoryFootprintSampler`'s; this actor
-/// adds the start baseline and the tight 1 ms cadence the memory gate uses.
 actor ProcessResidentMemorySampler {
     struct Measurement: Sendable {
         let bytesAtStart: Int64?

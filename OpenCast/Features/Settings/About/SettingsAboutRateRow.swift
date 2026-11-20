@@ -1,8 +1,7 @@
 import StoreKit
 import SwiftUI
 
-/// The system's in-app review sheet, so rating never leaves the app. The
-/// system decides whether to show it (at most three times a year in
+/// The system decides whether to show the review sheet (at most three times a year in
 /// production, never in TestFlight), so a tap can legitimately do nothing.
 struct SettingsAboutRateRow: View {
     var body: some View {

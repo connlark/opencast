@@ -1,9 +1,6 @@
 import OpenCastAnalysis
 import SwiftUI
 
-/// Which provider one analysis runs on: a glass chip showing the effective
-/// provider's model label, opening a menu of the providers with a saved key
-/// and a qualified model. With none, a still chip reads "No key".
 struct AnalysisProviderPickerChip: View {
     let feature: AnalysisFeature
     /// Eligible providers in display order, each with its model label.

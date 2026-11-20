@@ -53,9 +53,6 @@ struct RSSFeedParserTests {
 
     @Test("Recovers every entity across an entity-heavy feed")
     func recoversEntitiesAcrossEntityHeavyFeed() throws {
-        // Exercises the forward-pass rewrite: thousands of growing
-        // (&future; -> &amp;future;), same-length (&nbsp;), preserved
-        // (&amp;), and bare-& rewrites interleaved with CDATA passthrough.
         let repeatedRun = String(
             repeating: "A&nbsp;B &future; C &amp; D & E&hellip; ",
             count: 2_000
@@ -659,10 +656,7 @@ struct RSSFeedParserTests {
     @Test("A prepended collider does not steal the existing episode's natural-tier ID")
     func prependedColliderKeepsNaturalTierWithOldestEpisode() throws {
         let feedURL = try #require(URL(string: "https://example.com/prepended-guid.xml"))
-        // Newest-first document order: the publisher prepended a new item
-        // that reuses the existing episode's GUID. The natural-tier winner is
-        // content-determined (oldest publishedAt), so the existing episode
-        // keeps its ID and its synced progress.
+        // The natural-tier ID goes to the oldest publishedAt, not to the first item in document order.
         let xml = """
         <?xml version="1.0" encoding="utf-8"?>
         <rss version="2.0">

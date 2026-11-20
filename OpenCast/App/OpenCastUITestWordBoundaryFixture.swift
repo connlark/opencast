@@ -1,7 +1,6 @@
 import Foundation
 import OpenCastTranscription
 
-/// Synthetic text/times for the offline UI regression; no model or media fetch.
 enum OpenCastUITestWordBoundaryFixture {
     static let environmentKey = "OPENCAST_SEED_WORD_BOUNDARY_AD_ANALYSIS"
 

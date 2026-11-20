@@ -1,11 +1,7 @@
 import Foundation
 
-/// Evaluates a smart playlist's rule over the subscribed library. MainActor:
-/// progress lookups and the status clause read MainActor stores. Inputs a
-/// rule does not need stay unread — the download records without Downloaded
-/// Only, the reference date without an age clause, progress for All
-/// Episodes — so an evaluation inside a view body observes only what the
-/// rule depends on.
+/// Inputs a rule does not need stay unread, so an evaluation inside a view body observes only
+/// what the rule depends on.
 enum SmartPlaylistEvaluator {
     static func make(
         rule: PlaylistRule,
@@ -52,10 +48,8 @@ enum SmartPlaylistEvaluator {
             return rule.status.includes(progress: library.progressSummary(for: episode), isDownloaded: false)
         }
 
-        // Prioritized shows lead in rank order, then the sort order applies
-        // within each show and across the rest; the episode ID settles ties,
-        // since Newest First has none of its own. Normalization already
-        // deduplicated the rank list, which `uniqueKeysWithValues` requires.
+        // Normalization already deduplicated the rank list, which `uniqueKeysWithValues`
+        // requires. The episode ID settles ties, since Newest First has none of its own.
         let sortOrder = rule.sortOrder
         let rankByPodcastID = Dictionary(
             uniqueKeysWithValues: (rule.priorityPodcastIDs ?? []).enumerated().map { ($1, $0) }
@@ -74,10 +68,8 @@ enum SmartPlaylistEvaluator {
                 || (!sortOrder.areInIncreasingOrder(rhs, lhs) && lhs.episodeID < rhs.episodeID)
         }
 
-        // Downloaded Only reads its handful of downloads instead of the whole
-        // library. The library itself is already in Newest First order with
-        // the same episode ID tie-break, so that order with no priority needs
-        // no sort and stops at the limit.
+        // `library.episodes` is already Newest First with the same episode ID tie-break, so that
+        // order with no priority needs no sort and stops at the limit.
         let showIDs = rule.podcastIDs.map { Set($0) }
         let source = downloadedEpisodeIDs.map { episodeIDs in
             episodeIDs.compactMap { library.episode(with: $0) }
@@ -124,8 +116,6 @@ enum SmartPlaylistEvaluator {
         return episodes
     }
 
-    /// The first index whose episode `episode` precedes, found by binary
-    /// search over the already-ordered buffer.
     private static func insertionIndex(
         of episode: EpisodeListItemSnapshot,
         in episodes: [EpisodeListItemSnapshot],

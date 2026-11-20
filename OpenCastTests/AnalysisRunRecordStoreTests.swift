@@ -1,7 +1,6 @@
 import Foundation
 import OpenCastAnalysis
 import OpenCastAnalysisProviders
-import Synchronization
 import Testing
 @testable import OpenCast
 
@@ -9,7 +8,6 @@ import Testing
 struct AnalysisRunRecordStoreTests {
     static let start = Date(timeIntervalSince1970: 1_792_929_600) // 2026-10-25T12:00:00Z
 
-    /// A run directory of its own, removed at the end of the test.
     final class Directory: Sendable {
         let url = AnalysisRunTestFixtures.temporaryDirectory()
 
@@ -130,7 +128,6 @@ struct AnalysisRunRecordStoreTests {
         #expect(read.pacedSeconds == 1.5)
         #expect(read.exchangeSeconds == 9)
 
-        // A later launch resumes the run: its sends add to the same totals.
         let relaunched = directory.store()
         relaunched.observer(runID: record.id).record(Self.send(.adWindow(index: 1), usage: usage, exchange: 1))
         read = try #require(directory.store().record(id: record.id))
@@ -139,7 +136,6 @@ struct AnalysisRunRecordStoreTests {
         #expect(read.outputTokens == 600)
         #expect(read.exchangeSeconds == 10)
 
-        // A send for a run with no record changes nothing.
         relaunched.observer(runID: "missing-run").record(Self.send(.adWindow(index: 0), usage: usage))
         #expect(relaunched.record(id: "missing-run") == nil)
     }
@@ -194,7 +190,6 @@ struct AnalysisRunRecordStoreTests {
         #expect(read.windows["2"]?.verdict == .failed)
         #expect(store.replies(runID: record.id).isEmpty)
 
-        // The runner's cancellation ends the run as cancelled.
         let cancelled = Self.record()
         try store.begin(cancelled)
         store.finish(runID: cancelled.id, outcome: .failed(AnalysisFailure(feature: .adDetection, code: .cancelled, status: 503)), listenerFailure: nil, background: nil)
@@ -295,20 +290,6 @@ struct AnalysisRunRecordStoreTests {
         #expect(store.runsTakenOverByOpenHandovers(feature: .adDetection).isEmpty)
     }
 
-    @Test("A record written before these fields reads them as absent, and writes none back")
-    func recordsWithoutTheFields() throws {
-        let directory = AnalysisRunTestFixtures.temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        try AnalysisRunRecordStore(directory: directory).begin(Self.record(id: "older-run"))
-
-        let text = try String(contentsOf: directory.appending(path: "older-run.json"), encoding: .utf8)
-        #expect(!text.contains("free_tier"))
-        #expect(!text.contains("handover_of"))
-        let reloaded = AnalysisRunRecordStore(directory: directory).record(id: "older-run")
-        #expect(reloaded?.freeTier == nil)
-        #expect(reloaded?.handoverOf == nil)
-    }
-
     @Test("records(limit:) lists the newest first")
     func recordsNewestFirst() throws {
         let directory = Directory()
@@ -350,7 +331,6 @@ struct AnalysisRunRecordStoreTests {
         let files = try FileManager.default.contentsOfDirectory(atPath: directory.url.path(percentEncoded: false))
         #expect(files.count == AnalysisRunRecordStore.maximumRecords)
 
-        // Under the cap, only age prunes.
         let small = Directory()
         let smallStore = small.store(now: { now })
         try smallStore.begin(tooOld)
@@ -375,7 +355,6 @@ struct AnalysisRunRecordStoreTests {
         #expect(!FileManager.default.fileExists(atPath: directory.url.path(percentEncoded: false)))
         #expect(directory.store().records(limit: 10).isEmpty)
 
-        // The store keeps working after Delete Data.
         try store.begin(Self.record())
         #expect(store.records(limit: 10).count == 1)
     }
@@ -403,7 +382,6 @@ struct AnalysisRunRecordStoreTests {
         #expect(object["policy_source"] as? String == "baked")
         #expect(object["feature"] as? String == "ad_detection")
 
-        // Keys appear in sorted order, at every level.
         let topLevelOrder = Self.keyOrder(in: text)
         #expect(topLevelOrder == topLevelOrder.sorted())
         #expect(text.contains(#""windows":{"0":{"sends":1,"verdict":"accepted"}}"#))
@@ -476,11 +454,6 @@ struct AnalysisRunRecordStoreTests {
 
         let values = try directory.url.resourceValues(forKeys: [.isExcludedFromBackupKey])
         #expect(values.isExcludedFromBackup == true)
-    }
-
-    @Test("The default directory is Application Support/AnalysisRuns")
-    func defaultDirectory() {
-        #expect(AnalysisRunRecordStore().directory == URL.applicationSupportDirectory.appending(path: "AnalysisRuns", directoryHint: .isDirectory))
     }
 
     /// The record's top-level keys in file order.

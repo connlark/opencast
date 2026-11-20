@@ -1,5 +1,3 @@
-/// Server job states on the wire. Stable strings are the contract; values
-/// this client does not know yet are preserved, not dropped.
 public enum OpenCastRemoteTranscriptionJobState: Sendable, Equatable, Hashable {
     case created
     case stagingOrigin

@@ -1,9 +1,6 @@
 import OpenCastCore
 import SwiftUI
 
-/// Presented when a directory result's candidate feeds materially
-/// differ: both parsed catalogs are shown with provenance, and the
-/// primary action follows the resolver's recommendation.
 struct DirectoryFeedChoiceView: View {
     let pending: DirectorySubscriptionFlowStore.PendingChoice
     let onSelect: (ResolvedFeedCandidate) -> Void

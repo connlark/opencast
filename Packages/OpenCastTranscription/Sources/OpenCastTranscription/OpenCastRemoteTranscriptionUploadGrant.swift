@@ -1,6 +1,5 @@
-/// One presigned `UploadPart` PUT URL. Treat as a bearer credential: never
-/// log it; `expiresAt` is epoch seconds, after which the URL 403s and must be
-/// refreshed through `upload/parts`.
+/// A bearer credential: never log the URL. `expiresAt` is epoch seconds; after it the URL
+/// returns 403 and is refreshed through `upload/parts`.
 public struct OpenCastRemoteTranscriptionUploadPartGrant: Codable, Sendable, Equatable {
     public var partNumber: Int
     public var url: String
@@ -19,9 +18,7 @@ public struct OpenCastRemoteTranscriptionUploadPartGrant: Codable, Sendable, Equ
     }
 }
 
-/// Response of `upload/start` and `upload/parts`: the upload's identity and
-/// uniform-part geometry (every non-final part is exactly `partSizeBytes`;
-/// the final part is the remainder) plus a bounded batch of part URLs.
+/// Every non-final part is exactly `partSizeBytes`; the final part is the remainder.
 public struct OpenCastRemoteTranscriptionUploadGrantResponse: Codable, Sendable, Equatable {
     public var schemaVersion: Int
     public var uploadKeyID: String

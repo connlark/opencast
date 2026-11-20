@@ -3,11 +3,6 @@ import Foundation
 import Testing
 @preconcurrency import WhisperKit
 
-/// C1/D1 harness (whisper-perf): gates the production KV scatter
-/// (serial typed 16-bit loop since D1) bit-identically against the upstream
-/// concurrentPerform reference on real Tiny cache shapes. Correctness always
-/// runs; the timing pass is opt-in via OPENCAST_KV_MICROBENCH=1 so routine
-/// test runs stay fast.
 @Suite("KV scatter microbenchmark", .serialized)
 struct KVScatterMicrobenchmarkTests {
     private static let embedDim = 1536
@@ -38,8 +33,6 @@ struct KVScatterMicrobenchmarkTests {
         }
     }
 
-    /// Upstream WhisperKit scatter (concurrentPerform + per-element memcpy),
-    /// preserved as the bit-identity reference for the production swap.
     private func upstreamConcurrentUpdate(
         keyTensor: MLMultiArray,
         keySlice: MLMultiArray,
@@ -89,7 +82,6 @@ struct KVScatterMicrobenchmarkTests {
         }
     }
 
-    /// Same math as upstream updateKVCache, without DispatchQueue dispatch.
     private func serialMemcpyUpdate(
         keyTensor: MLMultiArray,
         keySlice: MLMultiArray,
@@ -131,57 +123,46 @@ struct KVScatterMicrobenchmarkTests {
         }
     }
 
-    @Test("Production scatter is bit-identical to the upstream concurrent scatter")
-    func productionMatchesUpstreamReference() async throws {
-        // Insert width 1 at first/middle/last valid index, and width 3 (prefill)
-        // at the start, mirroring prefill + decode-loop shapes.
-        let cases: [(width: Int, indexes: [Int])] = [
-            (1, [0, Self.maxSequenceLength / 2, Self.maxSequenceLength - 1]),
-            (3, [0, 200, Self.maxSequenceLength - 3]),
-        ]
+    @Test(
+        "Production scatter is bit-identical to the upstream concurrent scatter",
+        arguments: zip([1, 1, 1, 3, 3, 3], [0, 224, 447, 0, 200, 445])
+    )
+    func productionMatchesUpstreamReference(width: Int, insertIndex: Int) async throws {
+        let keySlice = try makeSlice(width: width, seed: 0.25)
+        let valueSlice = try makeSlice(width: width, seed: 0.5)
 
-        for testCase in cases {
-            for insertIndex in testCase.indexes {
-                let keySlice = try makeSlice(width: testCase.width, seed: 0.25)
-                let valueSlice = try makeSlice(width: testCase.width, seed: 0.5)
+        let upstreamKey = try makeCache()
+        let upstreamValue = try makeCache()
+        upstreamConcurrentUpdate(
+            keyTensor: upstreamKey, keySlice: keySlice,
+            valueTensor: upstreamValue, valueSlice: valueSlice,
+            insertAtIndex: insertIndex
+        )
 
-                let upstreamKey = try makeCache()
-                let upstreamValue = try makeCache()
-                upstreamConcurrentUpdate(
-                    keyTensor: upstreamKey, keySlice: keySlice,
-                    valueTensor: upstreamValue, valueSlice: valueSlice,
-                    insertAtIndex: insertIndex
-                )
+        let memcpyKey = try makeCache()
+        let memcpyValue = try makeCache()
+        serialMemcpyUpdate(
+            keyTensor: memcpyKey, keySlice: keySlice,
+            valueTensor: memcpyValue, valueSlice: valueSlice,
+            insertAtIndex: insertIndex
+        )
 
-                let memcpyKey = try makeCache()
-                let memcpyValue = try makeCache()
-                serialMemcpyUpdate(
-                    keyTensor: memcpyKey, keySlice: keySlice,
-                    valueTensor: memcpyValue, valueSlice: valueSlice,
-                    insertAtIndex: insertIndex
-                )
+        let productionKey = try makeCache()
+        let productionValue = try makeCache()
+        TextDecoder.updateKVCache(
+            keyTensor: productionKey, keySlice: keySlice,
+            valueTensor: productionValue, valueSlice: valueSlice,
+            insertAtIndex: insertIndex
+        )
 
-                let productionKey = try makeCache()
-                let productionValue = try makeCache()
-                TextDecoder.updateKVCache(
-                    keyTensor: productionKey, keySlice: keySlice,
-                    valueTensor: productionValue, valueSlice: valueSlice,
-                    insertAtIndex: insertIndex
-                )
-
-                #expect(tensorData(memcpyKey) == tensorData(upstreamKey), "memcpy key width=\(testCase.width) index=\(insertIndex)")
-                #expect(tensorData(memcpyValue) == tensorData(upstreamValue), "memcpy value width=\(testCase.width) index=\(insertIndex)")
-                #expect(tensorData(productionKey) == tensorData(upstreamKey), "production key width=\(testCase.width) index=\(insertIndex)")
-                #expect(tensorData(productionValue) == tensorData(upstreamValue), "production value width=\(testCase.width) index=\(insertIndex)")
-            }
-        }
+        #expect(tensorData(memcpyKey) == tensorData(upstreamKey))
+        #expect(tensorData(memcpyValue) == tensorData(upstreamValue))
+        #expect(tensorData(productionKey) == tensorData(upstreamKey))
+        #expect(tensorData(productionValue) == tensorData(upstreamValue))
     }
 
     @Test("Production scatter round-trips a simulated fallback reset")
     func productionMatchesUpstreamThroughFallbackReset() async throws {
-        // A fallback retry re-prefills at index 0 and re-decodes over a cache
-        // that already holds a partial window. Replay that sequence through
-        // both implementations and require bit-identical caches at the end.
         let sequence: [(width: Int, index: Int)] = [
             (3, 0), (1, 3), (1, 4), (1, 5), // first attempt
             (3, 0), (1, 3), (1, 4), // fallback: re-prefill over stale entries

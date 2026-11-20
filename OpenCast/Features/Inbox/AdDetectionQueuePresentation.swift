@@ -1,7 +1,3 @@
-/// Pure mapping from the coordinator's queue snapshot (plus the background
-/// session's armed bit) to everything the Inbox toolbar indicator and the
-/// Ad Detection queue screen render. Kept free of view state so the full
-/// state table is unit-testable.
 struct AdDetectionQueuePresentation: Equatable {
     enum Indicator: Equatable {
         case hidden
@@ -26,8 +22,6 @@ struct AdDetectionQueuePresentation: Equatable {
             case completed(zoneCount: Int)
             case failed(message: String)
             case cloudUnavailable(message: String)
-            /// The cloud job keeps running on the server; the queue-level
-            /// Resume re-attaches it.
             case remoteParked(RemoteTranscriptionJobExit)
         }
 
@@ -62,8 +56,6 @@ struct AdDetectionQueuePresentation: Equatable {
         }
     }
 
-    /// Says what to do when an item of this drain needed the listener's
-    /// own key; shown above the queue whatever its state.
     static let keyRequiredNotice = "Add a key in Settings › AI Services to keep detecting ads"
 
     let indicator: Indicator

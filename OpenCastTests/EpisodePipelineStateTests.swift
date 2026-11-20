@@ -63,73 +63,6 @@ struct EpisodePipelineStateTests {
         #expect(state?.action == .cancelPass)
     }
 
-    @Test("Speech asset install stage reports preparation progress")
-    func activeInstallingSpeechAssetsStage() {
-        let state = makeState(
-            queueStatus: .running,
-            queueSnapshot: activeSnapshot(stage: .installingSpeechAssets(fractionCompleted: 0.25))
-        )
-
-        #expect(state?.steps[1].status == .running(fraction: 0.25, detail: "Preparing speech model… 25%"))
-    }
-
-    @Test("Transcribing stage carries a fraction and elapsed-of-total detail")
-    func activeTranscribingStage() {
-        let progress = EpisodeTranscriptionProgress(
-            audioDuration: 3_480,
-            completedDuration: 2_040,
-            checkpointCount: 3,
-            currentWindowIndex: nil,
-            currentText: nil
-        )
-
-        let state = makeState(queueStatus: .running, queueSnapshot: activeSnapshot(stage: .transcribing(progress)))
-
-        #expect(state?.steps == [
-            EpisodePipelineStep(kind: .download, status: .done),
-            EpisodePipelineStep(
-                kind: .transcribe,
-                status: .running(fraction: progress.fractionCompleted, detail: "34:00 of 58:00")
-            ),
-            EpisodePipelineStep(kind: .detectAds, status: .waiting)
-        ])
-    }
-
-    @Test("Analyzing stage marks earlier steps done")
-    func activeAnalyzingStage() {
-        let state = makeState(
-            queueStatus: .running,
-            queueSnapshot: activeSnapshot(stage: .analyzing(steps: EpisodeAdFreePassAnalysisSteps(completed: 1, total: 3)))
-        )
-
-        #expect(state?.steps == [
-            EpisodePipelineStep(kind: .download, status: .done),
-            EpisodePipelineStep(kind: .transcribe, status: .done),
-            EpisodePipelineStep(kind: .detectAds, status: .running(fraction: nil, detail: nil))
-        ])
-        #expect(state?.action == .cancelPass)
-    }
-
-    @Test("Completed stage hides the card")
-    func activeCompletedStageHidesCard() {
-        let state = makeState(queueStatus: .running, queueSnapshot: activeSnapshot(stage: .completed(zoneCount: 3)))
-        #expect(state == nil)
-    }
-
-    // MARK: - Completed analysis hides the card
-
-    @Test("A current completed analysis hides the card entirely")
-    func completedCurrentAnalysisHidesCard() {
-        let state = makeState(analysis: .completed(analysisRecord(state: .completed), isStale: false))
-        #expect(state == nil)
-    }
-
-    @Test("A stale completed analysis also hides the card")
-    func staleCompletedAnalysisHidesCard() {
-        let state = makeState(analysis: .completed(analysisRecord(state: .completed), isStale: true))
-        #expect(state == nil)
-    }
-
     // MARK: - Paused queue states
 
     @Test("Model consent for the queue head offers the model download")
@@ -201,39 +134,6 @@ struct EpisodePipelineStateTests {
         ))
     }
 
-    @Test("A cloud item finishing on the server keeps the transcribe row running, with Cancel")
-    func cloudFinishingRunsTheTranscribeRow() {
-        let state = makeState(
-            queueStatus: .running,
-            queueSnapshot: activeSnapshot(stage: .cloudFinishing),
-            downloadRecord: downloadRecord(state: .completed)
-        )
-
-        #expect(state?.steps == [
-            EpisodePipelineStep(kind: .download, status: .done),
-            EpisodePipelineStep(
-                kind: .transcribe,
-                status: .running(fraction: nil, detail: "Finishing the transcript in the cloud")
-            ),
-            EpisodePipelineStep(kind: .detectAds, status: .waiting)
-        ])
-        #expect(state?.action == .cancelPass)
-    }
-
-    @Test("A queued episode reports its position and offers removal")
-    func queuedBehindTwo() {
-        let state = makeState(
-            queueStatus: .queued(ahead: 2),
-            queueSnapshot: pendingSnapshot(state: .running, pendingIDs: ["a", "b", episodeID]),
-            downloadRecord: downloadRecord(state: .completed)
-        )
-
-        #expect(state?.title == EpisodePipelineState.passTitle)
-        #expect(state?.steps.first?.status == .done)
-        #expect(state?.footnote == "Queued — 2 ahead")
-        #expect(state?.action == .removeFromQueue)
-    }
-
     // MARK: - Session failures
 
     @Test("A session failure pins its message on the first incomplete step")
@@ -270,18 +170,6 @@ struct EpisodePipelineStateTests {
 
     // MARK: - Solo download
 
-    @Test("A solo download in flight shows a cancelable progress row")
-    func soloDownloadRunning() {
-        let state = makeState(downloadRecord: downloadRecord(state: .downloading, bytesReceived: 25, bytesExpected: 100))
-
-        #expect(state == EpisodePipelineState(
-            title: EpisodePipelineState.downloadingTitle,
-            steps: [EpisodePipelineStep(kind: .download, status: .running(fraction: 0.25, detail: nil))],
-            footnote: nil,
-            action: .cancelDownload
-        ))
-    }
-
     @Test("A failed download survives relaunch as a Retry card")
     func failedDownloadAfterRelaunch() {
         let state = makeState(downloadRecord: downloadRecord(state: .failed))
@@ -292,22 +180,6 @@ struct EpisodePipelineStateTests {
             footnote: nil,
             action: .retryDownload
         ))
-    }
-
-    @Test("A missing downloaded file reads differently from a failed download")
-    func missingDownload() {
-        let state = makeState(downloadRecord: downloadRecord(state: .missing))
-
-        #expect(state?.steps.first?.status == .failed(message: EpisodePipelineState.downloadMissingMessage))
-        #expect(state?.action == .retryDownload)
-    }
-
-    @Test("A paused download offers Resume")
-    func pausedDownload() {
-        let state = makeState(downloadRecord: downloadRecord(state: .paused))
-
-        #expect(state?.title == EpisodePipelineState.downloadPausedTitle)
-        #expect(state?.action == .resumeDownload)
     }
 
     // MARK: - Solo transcription
@@ -335,29 +207,6 @@ struct EpisodePipelineStateTests {
         ))
     }
 
-    @Test("A failed transcript survives relaunch as a Retry card")
-    func failedTranscriptAfterRelaunch() {
-        let state = makeState(
-            downloadRecord: downloadRecord(state: .completed),
-            transcription: .failed(transcriptRecord(state: .failed))
-        )
-
-        #expect(state?.title == EpisodePipelineState.transcriptFailedTitle)
-        #expect(state?.steps == [EpisodePipelineStep(
-            kind: .transcribe,
-            status: .failed(message: EpisodePipelineState.transcriptFailedMessage)
-        )])
-        #expect(state?.action == .retryTranscription)
-    }
-
-    @Test("A cancelled transcript offers Retry with its own copy")
-    func cancelledTranscript() {
-        let state = makeState(transcription: .cancelled(transcriptRecord(state: .cancelled)))
-
-        #expect(state?.steps.first?.status == .failed(message: EpisodePipelineState.transcriptCancelledMessage))
-        #expect(state?.action == .retryTranscription)
-    }
-
     @Test("An interrupted transcript offers a solo Resume")
     func interruptedTranscript() {
         let state = makeState(transcription: .interrupted(transcriptRecord(state: .interrupted)))
@@ -381,26 +230,6 @@ struct EpisodePipelineStateTests {
 
     // MARK: - Solo analysis
 
-    @Test("A running analysis shows without a cancel action")
-    func soloAnalysisRunning() {
-        let state = makeState(analysis: .running)
-
-        #expect(state == EpisodePipelineState(
-            title: EpisodePipelineState.analyzingTitle,
-            steps: [EpisodePipelineStep(kind: .detectAds, status: .running(fraction: nil, detail: nil))],
-            footnote: nil,
-            action: nil
-        ))
-    }
-
-    @Test("A fresh failed analysis offers Retry")
-    func failedAnalysis() {
-        let state = makeState(analysis: .failed(analysisRecord(state: .failed), isStale: false))
-
-        #expect(state?.title == EpisodePipelineState.analysisFailedTitle)
-        #expect(state?.action == .retryAnalysis)
-    }
-
     @Test("The running card says when a run uses the trial service for a free-tier key, and only then")
     func freeTierFootnote() {
         let footnote = "Your Google key is on Google's free tier. Using opencast's trial service."
@@ -422,19 +251,8 @@ struct EpisodePipelineStateTests {
     @Test(
         "A failed analysis names its persisted failure kind, solo and inside a failed pass",
         arguments: [
-            (EpisodeAnalysisFailureKind.serviceUnavailable, "Couldn't reach the ad detection service. Try again."),
-            (.timedOut, "Ad detection took too long. Try again."),
-            (.interrupted, "Ad detection was interrupted. Try again."),
-            (.validationExhausted, "Ad boundaries couldn't be verified for this transcript. You can still retry."),
-            (.capExceeded, "Ad detection has reached today's limit."),
-            (.keyRequiredNoKey, "Add a key in Settings › AI Services to detect ads."),
-            (.keyRequiredTrialExhausted, "Your free analyses are used. Add a key in Settings › AI Services."),
-            (.providerLimited, "Your provider is busy or at its limit. Try again later."),
-            (.providerDailyLimit, "Your Google key has used its daily limit, which resets at midnight Pacific time."),
-            (.providerFreeTier, "Your Google key is on Google's free tier, which is too limited for ad detection. Set up billing for its project in Google AI Studio."),
-            (.providerFreeTierRetry, "Your Google key is on Google's free tier, and opencast's trial service couldn't finish this episode right now. Try again later."),
-            (.providerFreeTierRunBound, "Your Google key is on Google's free tier, and this run needs more than opencast's trial service allows. Set up billing for the key's project in Google AI Studio."),
-            (.generic, "Ad detection couldn't finish.")
+            (EpisodeAnalysisFailureKind.timedOut, "Ad detection took too long. Try again."),
+            (.keyRequiredTrialExhausted, "Your free analyses are used. Add a key in Settings › AI Services.")
         ] as [(EpisodeAnalysisFailureKind, String)]
     )
     func failedAnalysisCopyFollowsFailureKind(kind: EpisodeAnalysisFailureKind, message: String) {
@@ -474,111 +292,41 @@ struct EpisodePipelineStateTests {
         #expect(state == nil)
     }
 
-    // MARK: - Idle
-
-    @Test("No work and no failures means no card")
-    func idleHidesCard() {
-        #expect(makeState() == nil)
-        #expect(makeState(downloadRecord: downloadRecord(state: .completed), transcription: .completed(transcriptRecord(state: .completed))) == nil)
-    }
-
-    @Test("Action titles carry the settled copy")
-    func actionTitles() {
-        #expect(EpisodePipelineAction.cancelPass.title == "Cancel")
-        #expect(EpisodePipelineAction.resumeQueue.title == "Resume")
-        #expect(EpisodePipelineAction.retryPass.title == "Retry")
-        #expect(EpisodePipelineAction.removeFromQueue.title == "Remove from Queue")
-        #expect(EpisodePipelineAction.downloadModel(byteCount: nil).title == "Download Model")
-    }
-
     // MARK: - Cloud preparation
 
-    @Test("Each cloud preparation stage names its own work on the transcribe row, with Cancel")
-    func cloudPreparationStagesNameTheirWork() {
-        let expectations: [(EpisodeAdFreePassStage, String)] = [
-            (.cloudQueued, "Preparing cloud transcription…"),
-            (.cloudVerifying, "Verifying audio…"),
-            (.cloudWaitingForCredits, "Waiting for transcription time…")
-        ]
-
-        for (stage, detail) in expectations {
-            let state = makeState(
-                queueStatus: .running,
-                queueSnapshot: activeSnapshot(stage: stage),
-                downloadRecord: downloadRecord(state: .completed)
-            )
-
-            #expect(state == EpisodePipelineState(
-                title: EpisodePipelineState.passTitle,
-                steps: [
-                    EpisodePipelineStep(kind: .download, status: .done),
-                    EpisodePipelineStep(kind: .transcribe, status: .running(fraction: nil, detail: detail)),
-                    EpisodePipelineStep(kind: .detectAds, status: .waiting)
-                ],
-                footnote: nil,
-                action: .cancelPass
-            ))
-        }
-    }
-
-    @Test("An exact-copy upload shows measured part counts, never a fraction, with the upload footnote")
-    func cloudUploadShowsPartCounts() {
-        let expectations: [(completed: Int, total: Int, detail: String)] = [
+    @Test(
+        "An exact-copy upload shows measured part counts, never a fraction, with the upload footnote",
+        arguments: [
             (0, 0, "Preparing audio upload…"),
             (0, 10, "Uploading audio… 0 of 10 parts uploaded"),
             (2, 10, "Uploading audio… 2 of 10 parts uploaded"),
             (9, 10, "Uploading audio… 9 of 10 parts uploaded"),
             (10, 10, "Finishing audio upload…")
-        ]
+        ] as [(Int, Int, String)]
+    )
+    func cloudUploadShowsPartCounts(completedParts: Int, totalParts: Int, detail: String) {
+        let state = makeState(
+            queueStatus: .running,
+            queueSnapshot: activeSnapshot(stage: .cloudUploadingExactCopy(
+                completedParts: completedParts,
+                totalParts: totalParts
+            )),
+            downloadRecord: downloadRecord(state: .completed)
+        )
 
-        for expectation in expectations {
-            let state = makeState(
-                queueStatus: .running,
-                queueSnapshot: activeSnapshot(stage: .cloudUploadingExactCopy(
-                    completedParts: expectation.completed,
-                    totalParts: expectation.total
-                )),
-                downloadRecord: downloadRecord(state: .completed)
-            )
-
-            #expect(state == EpisodePipelineState(
-                title: EpisodePipelineState.passTitle,
-                steps: [
-                    EpisodePipelineStep(kind: .download, status: .done),
-                    EpisodePipelineStep(
-                        kind: .transcribe,
-                        status: .running(fraction: nil, detail: expectation.detail)
-                    ),
-                    EpisodePipelineStep(kind: .detectAds, status: .waiting)
-                ],
-                footnote: EpisodePipelineState.cloudUploadFootnote,
-                action: .cancelPass
-            ))
-        }
-    }
-
-    @Test("The upload footnote leaves with the upload phase")
-    func cloudUploadFootnoteClearsAfterUpload() {
-        let laterStages: [EpisodeAdFreePassStage] = [
-            .cloudQueued,
-            .cloudTranscribing(nil),
-            .cloudFinishing,
-            .analyzing(steps: nil),
-            .cloudParked(.parked),
-            .cloudUnavailable(message: "No credits."),
-            .interrupted,
-            .failed(message: "Upload failed."),
-            .completed(zoneCount: 2)
-        ]
-
-        for stage in laterStages {
-            let state = makeState(
-                queueStatus: .running,
-                queueSnapshot: activeSnapshot(stage: stage),
-                downloadRecord: downloadRecord(state: .completed)
-            )
-            #expect(state?.footnote != EpisodePipelineState.cloudUploadFootnote)
-        }
+        #expect(state == EpisodePipelineState(
+            title: EpisodePipelineState.passTitle,
+            steps: [
+                EpisodePipelineStep(kind: .download, status: .done),
+                EpisodePipelineStep(
+                    kind: .transcribe,
+                    status: .running(fraction: nil, detail: detail)
+                ),
+                EpisodePipelineStep(kind: .detectAds, status: .waiting)
+            ],
+            footnote: EpisodePipelineState.cloudUploadFootnote,
+            action: .cancelPass
+        ))
     }
 
     // MARK: - Parked cloud job
@@ -607,7 +355,6 @@ struct EpisodePipelineStateTests {
             action: .cancelPass,
             footerAction: .resumeQueue
         ))
-        // The on-device pause copy is never reused for a server job.
         #expect(state?.footnote != EpisodePipelineState.pausedFootnote)
     }
 

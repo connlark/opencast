@@ -1,8 +1,6 @@
 import Foundation
 import OpenCastTranscription
 
-/// Typed surface of the remote transcription worker. Injected so simulator
-/// tests and UI fixtures run against StoreKit-free fakes.
 nonisolated protocol RemoteTranscriptionAPI: Sendable {
     func bootstrap() async throws -> OpenCastRemoteTranscriptionBootstrapResponse
     func createJob(

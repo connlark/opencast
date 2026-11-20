@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// Scoped to one episode by the host's identity. Hidden events are consumed
-/// without replaying feedback when the prepared card becomes visible again.
+/// Stays alive under the hidden prepared card: events then are consumed, never replayed.
 struct NowPlayingAutoSkipFeedbackView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -33,8 +32,6 @@ struct NowPlayingAutoSkipFeedbackView: View {
             guard feedback > 0 else { return }
             do {
                 try await Task.sleep(for: .milliseconds(2500))
-            } catch is CancellationError {
-                return
             } catch {
                 return
             }

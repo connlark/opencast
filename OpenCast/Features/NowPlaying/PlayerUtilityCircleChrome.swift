@@ -9,7 +9,6 @@ struct PlayerUtilityCircleChrome: ViewModifier {
 
     let isActive: Bool
     let progress: Double?
-    /// The speed button's label is text, fitted like the symbols' glyphs.
     let labelIsText: Bool
 
     func body(content: Content) -> some View {
@@ -48,16 +47,12 @@ struct PlayerUtilityCircleChrome: ViewModifier {
             .glassEffect(.regular.interactive(), in: .circle)
     }
 
-    /// The circle never outgrows the play button resolved at the same Dynamic
-    /// Type size (`NowPlayingTransportControls.resolvedPlayButtonDiameter`).
     nonisolated static func diameter(scaled: Double, playButtonDiameter: Double) -> Double {
         max(minimumDiameter, min(scaled, playButtonDiameter))
     }
 }
 
 extension EnvironmentValues {
-    /// The resolved play-button diameter `NowPlayingUtilityControls` passes to
-    /// its circles; unbounded outside the row.
     @Entry var playerUtilityCircleCeiling: Double = .infinity
 }
 

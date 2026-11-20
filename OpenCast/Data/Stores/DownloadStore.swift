@@ -8,15 +8,10 @@ import SwiftData
 final class DownloadStore {
     static let autoDeletePlayedEpisodesPreferenceKey = "downloads.autoDeletePlayedEpisodes"
 
-    // The index rebuilds on every mutation (didSet), so per-row lookups stay
-    // O(1) and can never go stale (house precedent:
-    // LibraryStore.episodeIndexByID). Mutations are rare; lookups run in
-    // every episode-row body.
     private(set) var records: [EpisodeDownloadRecord] = [] {
         didSet {
             recordsRevision &+= 1
-            // Keep-first mirrors the replaced `records.first` lookup while
-            // startup duplicate repair can still hold transient twins.
+            // Duplicate repair can leave transient twins; the first record wins.
             recordsByEpisodeID = Dictionary(
                 records.map { ($0.episodeID, $0) },
                 uniquingKeysWith: { first, _ in first }
@@ -24,24 +19,15 @@ final class DownloadStore {
         }
     }
     @ObservationIgnored private var recordsByEpisodeID: [String: EpisodeDownloadRecord] = [:]
-    // Pairs the ignored index with a tracked revision so `record(for:)`
-    // registers a dependency even when it returns nil — a body that saw no
-    // record must still invalidate when one appears (house pattern:
-    // LibraryStore.progressIndexRevision). Readable so a memo key (smart
-    // playlist evaluations) can track record changes without observing
-    // `records` itself.
+    // `record(for:)` reads this so a body that saw no record still invalidates when one appears.
     private(set) var recordsRevision = 0
     private(set) var lastErrorMessage: String?
     private(set) var autoDeletesPlayedDownloads = false
-    /// Episode-ID groups that held more than one record and were collapsed to
-    /// a proven survivor, cumulative for this process (startup repair plus
-    /// migration collisions). Diagnostics-only; never names episodes.
+    /// Duplicate groups collapsed to one record, cumulative for this process.
     private(set) var duplicateRepairCount = 0
     private var lastErrorEpisodeID: String?
-    // Live byte progress never touches the SwiftData record: per-tick record
-    // writes get autosaved, and every save re-enters the persistent-history →
-    // remote-change → synced-reload cascade. Records carry bytes only at
-    // committed state transitions (pause/complete/fail).
+    // Kept off the record: every save re-enters the persistent-history → remote-change → reload
+    // cascade, so records carry bytes only at pause, completion and failure.
     private var liveByteProgressByEpisodeID: [String: DownloadByteProgress] = [:]
 
     @ObservationIgnored private let downloader: any EpisodeAudioDownloading
@@ -50,17 +36,11 @@ final class DownloadStore {
     @ObservationIgnored private var downloadTaskTokens: [String: String] = [:]
     @ObservationIgnored private var progressCheckpoints: [String: DownloadProgressCheckpoint] = [:]
     @ObservationIgnored private var pauseRequestedEpisodeIDs: Set<String> = []
-    // The live response's filename and type, kept per download token until
-    // its task ends, for naming a completed file whose URL has no extension.
     @ObservationIgnored private var responseMetadataByToken: [String: EpisodeDownloadResponseMetadata] = [:]
     @ObservationIgnored private let stateChanges = StoreChangeNotifier()
     @ObservationIgnored var onEpisodeStateChanged: (@MainActor (String) -> Void)?
     // Once per finished download, after its completed state is saved.
-    // `onEpisodeStateChanged` is no substitute: it fires on every state
-    // change and for every record a reload touches.
     @ObservationIgnored var onDownloadCompleted: (@MainActor (EpisodeDownloadRecord, ModelContext) -> Void)?
-    // Runs between launch reconciliation's file probes and their verdicts,
-    // the window in which a fresh download can replace a probed record.
     @ObservationIgnored var afterReconcileProbesForTesting: (@MainActor () async -> Void)?
 
     private static let minimumProgressPublicationInterval: TimeInterval = 0.25
@@ -149,8 +129,6 @@ final class DownloadStore {
         return recordsByEpisodeID[episodeID]
     }
 
-    /// Byte progress for display: the transient live value while a download is
-    /// running, otherwise the record's last committed bytes.
     func byteProgress(for episodeID: String) -> DownloadByteProgress? {
         guard let record = record(for: episodeID) else {
             return nil
@@ -173,10 +151,7 @@ final class DownloadStore {
         return lastErrorMessage
     }
 
-    /// Exact byte identity of a completed download, or nil when it cannot be
-    /// trusted: no persisted hash, missing file, or on-disk size drifting
-    /// from the recorded byte count (replacement/corruption). The record's
-    /// duration is RSS display metadata, not a measurement of the local file.
+    /// Leaves out the duration: the record's is feed metadata, not a measurement of this file.
     func completedSourceIdentity(for episodeID: String) -> OpenCastRemoteTranscriptionSourceIdentity? {
         guard let record = record(for: episodeID),
               record.state == .completed,
@@ -214,9 +189,7 @@ final class DownloadStore {
         return fileStore.fileExists(relativePath: relativePath)
     }
 
-    /// Unlike `localFileURL(for:)` this resolves the path for any state, so
-    /// the diagnostics sheet can report exactly which location it checked
-    /// even when the record is partial, failed, or missing.
+    /// Resolves for any state, not only completed.
     func diagnosticsFileURL(for record: EpisodeDownloadRecord) -> URL? {
         record.localRelativePath.map(fileStore.fileURL(relativePath:))
     }
@@ -231,10 +204,7 @@ final class DownloadStore {
         try commit(episodeID: record.episodeID, modelContext: modelContext, resort: true)
     }
 
-    /// The completed download's file as it is now, or nil while the record
-    /// is not completed or its file cannot be read. Taken before a caller
-    /// measures the file, it lets `adoptSourceHash` refuse a download that
-    /// was replaced while the measurement ran.
+    /// Take it before measuring the file, so `adoptSourceHash` can refuse a replaced file.
     func completedFileStamp(of record: EpisodeDownloadRecord) -> EpisodeDownloadFileStamp? {
         guard let fileURL = localFileURL(for: record),
               let localRelativePath = record.localRelativePath,
@@ -250,13 +220,8 @@ final class DownloadStore {
         )
     }
 
-    /// Gives an unhashed completed download the identity a caller computed
-    /// from its file, so it reads trusted (`completedSourceIdentity`). The
-    /// hash took a suspension to compute, so this writes only while the
-    /// record is still completed, still unhashed and still of `byteCount`
-    /// bytes, and its file is still the one `measuredFile` stamped before
-    /// the hash began: a replacement meanwhile, even of the same size, is
-    /// refused. Any other record is left as it is. Returns whether it wrote.
+    /// The hash spans a suspension, so this writes only while the record and its file are still
+    /// the ones `measuredFile` stamped; a replacement of the same size is refused too.
     @discardableResult
     func adoptSourceHash(
         _ sha256: String,
@@ -281,9 +246,7 @@ final class DownloadStore {
         return true
     }
 
-    /// Returns whether the download is now in flight. A `false` leaves the
-    /// reason in `lastErrorMessage(for:)`, so a bulk caller can report the
-    /// failures that a later successful start would otherwise clear.
+    /// On `false` the reason is in `lastErrorMessage(for:)` until a later start clears it.
     @discardableResult
     func startDownload(for episode: EpisodeListItemSnapshot, modelContext: ModelContext) -> Bool {
         do {
@@ -341,8 +304,6 @@ final class DownloadStore {
         }
 
         if record.bytesReceived == 0 {
-            // Paused before the first byte: there is no partial to append
-            // to, so resuming is starting the download over.
             retryDownload(record, modelContext: modelContext)
             return
         }
@@ -608,9 +569,8 @@ final class DownloadStore {
             return
         }
 
-        // A still-running old-ID task would race the re-key and the file
-        // moves. Orphan it: with its token cleared, every callback
-        // token-mismatches, cleans its temporary file, and exits.
+        // Orphan any old-ID task before the re-key and file moves: with its token cleared, each
+        // callback token-mismatches, cleans its temporary file and exits.
         downloadTasks[oldEpisodeID]?.cancel()
         downloadTasks[oldEpisodeID] = nil
         downloadTaskTokens[oldEpisodeID] = nil
@@ -619,18 +579,13 @@ final class DownloadStore {
 
         let targetRecords = try fetchAllRecords(episodeID: newEpisodeID, modelContext: modelContext)
         if targetRecords.contains(where: isMigrationKeeperTarget) {
-            // The successor already owns a valid artifact or a live download.
-            // Never overwrite it with the old identity's file: drop the old
-            // rows; once the deletion is durable the next launch's unclaimed
-            // sweep collects their audio. Record-only, so an interrupted save
-            // changes nothing on disk.
+            // Record-only, so an interrupted save changes nothing on disk; the next launch's
+            // unclaimed sweep collects the old audio once the deletion is durable.
             duplicateRepairCount += 1
             removeRecordsForMigration(migratingRecords, modelContext: modelContext)
             return
         }
 
-        // No valid successor artifact: the old identity's files migrate over
-        // and any invalid successor rows make way.
         if !targetRecords.isEmpty {
             duplicateRepairCount += 1
             removeRecordsForMigration(targetRecords, modelContext: modelContext)
@@ -647,16 +602,11 @@ final class DownloadStore {
                 record.localRelativePath = newRelativePath
             }
         }
-        // Records were re-keyed in place, but the keyed index only rebuilds
-        // on a `records` reassignment. Reload — like the transcription twin —
-        // so lookups observe the successor identity.
+        // The keyed index rebuilds only when `records` is reassigned, not on an in-place re-key.
         try reload(modelContext: modelContext)
         stateChanges.notify()
     }
 
-    /// A successor row that must survive a collision migration untouched: a
-    /// completed download whose file is present with the recorded size, or a
-    /// download that is actively in flight.
     private func isMigrationKeeperTarget(_ record: EpisodeDownloadRecord) -> Bool {
         switch record.state {
         case .downloading, .paused:
@@ -690,14 +640,7 @@ final class DownloadStore {
         case notCompleted(state: EpisodeDownloadState, errorMessage: String?)
     }
 
-    /// One shared "make this episode's download completed" wait loop for the
-    /// ad-free pass, transcription-request, and remote-job coordinators.
-    /// `onWaitStarted` runs at the top of every iteration — it injects the
-    /// caller's cancellation check (plain `Task.checkCancellation` versus a
-    /// request-scoped variant) plus any per-iteration phase update, and its
-    /// errors propagate unmapped. A `.completed` record whose file is gone is
-    /// flipped to `.missing` before this throws, so the store self-heals
-    /// instead of handing a caller a URL with no file behind it.
+    /// `onWaitStarted` runs at the top of every iteration, and its errors propagate unmapped.
     func ensureCompletedDownload(
         for episode: EpisodeListItemSnapshot,
         modelContext: ModelContext,
@@ -712,10 +655,8 @@ final class DownloadStore {
                 startDownload(for: episode, modelContext: modelContext)
                 didStartDownload = true
                 guard record(for: episode.episodeID) != nil else {
-                    // `startDownload(for:)` swallowed a setup failure before
-                    // any record existed. With no record and no task,
-                    // `waitForDownload` returns without suspending, so
-                    // looping again would busy-spin the main actor forever.
+                    // A setup failure left no record and no task, so `waitForDownload` would
+                    // return without suspending and the loop would spin the main actor forever.
                     throw CompletedDownloadError.notCompleted(
                         state: .failed,
                         errorMessage: lastErrorMessage(for: episode.episodeID)
@@ -973,8 +914,7 @@ final class DownloadStore {
             )
             try fileStore.moveCompletedDownload(from: temporaryURL, relativePath: completedRelativePath)
             let fileSize = try fileStore.fileSize(relativePath: completedRelativePath)
-            // Definitive identity is always the completed assembled file, so
-            // pause/resume and appended partials cannot skew the hash.
+            // Hash the assembled file, so resumed partials cannot skew the identity.
             let sourceFileSHA256 = try await OpenCastSHA256.hashFileOffCaller(
                 at: fileStore.fileURL(relativePath: completedRelativePath)
             )
@@ -1074,8 +1014,6 @@ final class DownloadStore {
         do {
             try commit(episodeID: episodeID, modelContext: modelContext, resort: true)
         } catch {
-            // The stable partial still lets startup reconciliation recover even
-            // if persisting the failed transition fails in this process.
             recordFailure(error, episodeID: episodeID)
         }
         recordFailure(error, episodeID: episodeID)
@@ -1105,9 +1043,7 @@ final class DownloadStore {
             return
         }
 
-        // The record no longer carries live byte totals mid-download, so the
-        // durable transitions read the server-reported total from the
-        // transient progress (before clearing it).
+        // Read before `clearTransientProgress`: the record has no byte total mid-download.
         let knownBytesExpected = liveByteProgressByEpisodeID[episodeID]?.bytesExpected
         do {
             if let record = try fetchRecord(episodeID: episodeID, modelContext: modelContext),
@@ -1137,9 +1073,7 @@ final class DownloadStore {
                 }
             }
 
-            // A pause that lands before the first byte is still a pause, not
-            // a failure: there is nothing to resume from, so the record
-            // pauses at zero with no partial and resume starts over.
+            // A pause before the first byte is still a pause, at zero bytes with no partial.
             let fileSize: Int64
             if let temporaryFileSize = try fileSizeIfPresent(at: temporaryURL), temporaryFileSize > 0 {
                 fileSize = try fileStore.promoteTemporaryFileToPausedPartial(
@@ -1177,11 +1111,8 @@ final class DownloadStore {
         }
     }
 
-    /// Names the completed file after the format its bytes or response prove
-    /// when the enclosure URL carries no audio extension. A changed name is
-    /// saved while the record is still downloading, before the move, so the
-    /// record never names a file that will not exist: a process death after
-    /// the move finalizes through launch reconciliation's downloading branch.
+    /// Saves a changed name before the move, so the record never names a file that will not
+    /// exist; a death after the move finalizes through launch reconciliation.
     private func settleCompletedRelativePath(
         episodeID: String,
         token: String,
@@ -1257,13 +1188,8 @@ final class DownloadStore {
             }
 
             let received = max(0, bytesReceived)
-            // The live value must always carry the latest report: the
-            // URLSession delegate already coalesces callback frequency, and
-            // a report suppressed here would stay lost if it turns out to be
-            // the last one before a stall (the resume seed stamps a fresh
-            // checkpoint, so the first post-resume report otherwise falls
-            // inside the throttle window). Only checkpoint persistence is
-            // paced by shouldPublishProgress.
+            // Never throttle the live value: a dropped report may be the last before a stall.
+            // Only the checkpoint is paced by `shouldPublishProgress`.
             liveByteProgressByEpisodeID[episodeID] = DownloadByteProgress(
                 bytesReceived: received,
                 bytesExpected: bytesExpected
@@ -1383,12 +1309,8 @@ final class DownloadStore {
         record.publishedAt = episode.publishedAt
     }
 
-    /// Deletes the records and saves in one batch before touching any file:
-    /// a failed save rolls back with nothing unlinked yet, and a failed file
-    /// removal can no longer strand unsaved deletions in the shared context
-    /// for an unrelated later save to commit. Orphaned audio from a failed
-    /// removal is reclaimed by the next launch's unclaimed-file sweep, per
-    /// the migration code's record-first durability rule.
+    /// Saves the deletions before touching any file, so a failed save unlinks nothing; audio a
+    /// failed removal leaves behind goes in the next launch's unclaimed-file sweep.
     private func deleteDownloadRecords(
         _ recordsToDelete: [EpisodeDownloadRecord],
         modelContext: ModelContext
@@ -1451,11 +1373,8 @@ final class DownloadStore {
         )
     }
 
-    // The per-record file probes and partial adoption run off the main actor
-    // (@concurrent worker); record mutations commit back here, each guarded
-    // on the state the file system was actually probed for, so actor
-    // reentrancy across the hop can never apply a stale verdict. The
-    // adoption/repair semantics mirror the pre-hop loop case for case.
+    // File probes run off the main actor; each verdict applies only if its record still has the
+    // probed state, since actor reentrancy across the hop can change it.
     private func reconcile(modelContext: ModelContext) async throws {
         var fetchedRecords = try fetchRecords(modelContext: modelContext)
         var changed = false
@@ -1506,8 +1425,7 @@ final class DownloadStore {
             switch outcome {
             case .finalizeCompleted(let size):
                 guard record.state == .downloading else { continue }
-                // Completion moves the file before saving the terminal
-                // record state. Recover a process death in that small gap.
+                // Completion moves the file before saving `.completed`; recover a death in between.
                 record.state = .completed
                 record.bytesReceived = size
                 record.bytesExpected = size
@@ -1567,9 +1485,8 @@ final class DownloadStore {
             case .refreshCompletedSize(let fileSize):
                 guard isProbedCompletedRecord else { continue }
                 if record.bytesReceived != fileSize {
-                    // The hash measured the bytes the old count describes;
-                    // kept, the corrected count would make the drifted file
-                    // read as trusted again.
+                    // The hash belongs to the old count; kept, it would make the drifted file
+                    // read as trusted.
                     record.bytesReceived = fileSize
                     record.sourceFileSHA256 = ""
                     record.updatedAt = .now
@@ -1577,12 +1494,9 @@ final class DownloadStore {
                 }
             case .relocateCompleted(let fromPath, let relativePath, let size):
                 guard isProbedCompletedRecord else { continue }
-                // The rename sits beside the record update; a death before
-                // the save leaves the record on a vanished path, which the
-                // next launch's sibling probe re-points. The SHA-256 covers
-                // content only, so a rename keeps it valid; a size the
-                // extension repair corrects means the content drifted since
-                // hashing, so the hash goes with the old count.
+                // A rename keeps the hash valid; a corrected size means the content drifted, so it
+                // goes. A death before the save leaves the record on a vanished path, which the
+                // next launch's sibling probe re-points.
                 if fileStore.fileExists(relativePath: fromPath) {
                     do {
                         try fileStore.moveCompletedDownload(
@@ -1635,8 +1549,6 @@ final class DownloadStore {
         case failPausedInterrupted
         case markMissing
         case refreshCompletedSize(Int64)
-        /// Re-points a completed record from `fromPath` to `relativePath`,
-        /// moving the file first when it is still at `fromPath`.
         case relocateCompleted(fromPath: String, relativePath: String, size: Int64)
     }
 
@@ -1679,9 +1591,8 @@ final class DownloadStore {
                 if let stablePartialSize, stablePartialSize > 0 {
                     partialSize = stablePartialSize
                 } else {
-                    // Resume moves the stable partial to a token file before
-                    // persisting `.downloading`. Recover that narrow crash
-                    // window without throwing away otherwise resumable bytes.
+                    // Resume moves the partial to a token file before saving `.downloading`;
+                    // adopt it so a death in between keeps the bytes.
                     partialSize = try fileStore.adoptNewestTemporaryPartial(
                         episodeID: input.episodeID
                     )
@@ -1784,18 +1695,8 @@ final class DownloadStore {
         }
     }
 
-    /// Collapses duplicate records left under one episode ID by an identity
-    /// migration collision. The survivor is the record the physical file
-    /// proves — an exact stored-hash match outranks a byte-count match — and
-    /// a group no row can prove keeps one deterministic record marked
-    /// `.missing` so nothing claims a false identity. Record-only: loser
-    /// files become unclaimed once the save is durable, and the sweep at the
-    /// end of `reconcile` collects them.
-    ///
-    /// Hashing a duplicated 100-200MB download must not stall the launch
-    /// frame, so the file probes run off the main actor; verdicts apply only
-    /// to groups whose records still match the probed snapshot, and a
-    /// drifted group waits for the next launch's repair.
+    /// Record-only: losers' files are swept as unclaimed once the save is durable. Hashing runs
+    /// off the main actor, so a group that changed meanwhile waits for the next launch.
     private func repairDuplicateRecordGroups(
         _ fetchedRecords: [EpisodeDownloadRecord],
         modelContext: ModelContext
@@ -1927,12 +1828,8 @@ final class DownloadStore {
 
     private enum DownloadRepairVerdict {
         case provenByHash(fileSize: Int64)
-        /// Rows persisted before completed-file hashing existed can only be
-        /// proven by byte count.
         case consistentUnhashed(fileSize: Int64)
-        /// Completed, but the file on disk contradicts the record.
         case unproven
-        /// Downloading/paused; the per-state reconciliation pass owns these.
         case resumable
         case dead
 
@@ -1981,10 +1878,7 @@ final class DownloadStore {
                 record.updatedAt = .now
             }
         case .unproven:
-            // The file exists but matches no surviving identity; an explicit
-            // re-download replaces it rather than any record claiming it
-            // falsely. The path stays so the sweep keeps the file claimed
-            // until then.
+            // The path stays, so the sweep keeps the file until a re-download replaces it.
             record.state = .missing
             record.sourceFileSHA256 = ""
             record.errorMessage = EpisodeDownloadError.invalidDownloadedRecord.localizedDescription

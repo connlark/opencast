@@ -1,8 +1,6 @@
 import Foundation
 @preconcurrency import WhisperKit
 
-/// WhisperKit per-phase totals and run counts exported for benchmark and
-/// proof results. Not part of the persisted transcript document schema.
 public struct OpenCastTranscriptionPhaseTimings: Codable, Sendable, Equatable {
     public var inputAudioSeconds: TimeInterval
     public var timeToFirstToken: TimeInterval?

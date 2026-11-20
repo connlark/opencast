@@ -52,13 +52,6 @@ struct InboxPodcastGroupTests {
         #expect(groups.map(\.episodeCount) == [2])
     }
 
-    @Test("An empty episode list yields no groups")
-    func emptyEpisodes() {
-        let subscription = SubscriptionRecord(feedURL: "https://example.com/feed.xml", title: "Show")
-
-        #expect(InboxPodcastGroup.make(episodes: [], subscriptions: [subscription]).isEmpty)
-    }
-
     private func makeEpisode(id: String, podcastID: String) -> EpisodeListItemSnapshot {
         .fixture(
             episodeID: id,

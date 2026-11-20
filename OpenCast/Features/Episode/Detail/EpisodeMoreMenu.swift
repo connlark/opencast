@@ -1,9 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// The episode detail toolbar's "Episode Actions" menu: Play Next / Play
-/// Last, progress actions, and the solo download/transcript/ad-analysis steps
-/// the one-tap pipeline otherwise automates.
 struct EpisodeMoreMenu: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
@@ -15,12 +12,9 @@ struct EpisodeMoreMenu: View {
     let episode: EpisodeListItemSnapshot
     let isPlayed: Bool
     let isArchived: Bool
-    /// A progress row that holds more than an archive: an archive-only row
-    /// leaves through Unarchive instead.
+    /// False for an archive-only progress row, which leaves through Unarchive instead.
     let offersClearProgress: Bool
     let onClearProgress: () -> Void
-    /// The page's Make Ad-Free route, offered by name when the page's
-    /// caption says the skips need it.
     let onDetectAdsAgain: () -> Void
     let onShowEpisodeDiagnostics: () -> Void
     let onActionError: (String) -> Void
@@ -128,8 +122,6 @@ struct EpisodeMoreMenu: View {
         remoteTranscriptActions
     }
 
-    /// Remote eligibility is independent of download and local-model state.
-    /// The purchase store still gates this to a resolved backend lane.
     @ViewBuilder
     private var remoteTranscriptActions: some View {
         if appModel.remoteTranscriptionPurchases.isSurfaceVisible {
@@ -143,8 +135,7 @@ struct EpisodeMoreMenu: View {
             } else if RemoteTranscriptionStatusPresentation.make(
                 phase: appModel.remoteTranscription.store.phase(for: episode.episodeID)
             )?.offersRetry == true {
-                // The status card's Try Again: re-runs the same reference
-                // where one is kept.
+                // Resume, so the same reference re-runs where one is kept.
                 Button("Retry Remote Transcript", systemImage: "arrow.clockwise", action: resumeRemoteTranscript)
             } else {
                 // Disabled while a cloud detect pass owns this episode — it
@@ -217,7 +208,6 @@ struct EpisodeMoreMenu: View {
     }
 
     private func requestRemoteTranscript() {
-        // The consumption preview sheet (episode detail) owns the actual start.
         appModel.remoteTranscription.store.startPreview = RemoteTranscriptionStartPreviewRequest(
             episodeID: episode.episodeID,
             durationSeconds: episode.duration

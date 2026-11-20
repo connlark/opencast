@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// The picker's first row: names a new playlist that starts out holding the
-/// episode.
 struct AddToPlaylistNewRow: View {
     let action: () -> Void
 

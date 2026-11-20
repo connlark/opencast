@@ -2,11 +2,9 @@ import CryptoKit
 import Foundation
 import OpenCastAnalysis
 
-/// The durable record of one analysis run, written before the run's first
-/// dispatch and updated at every send and at the end. It holds ids, closed
-/// values and numbers only: no key, no transcript or provider text, no URL.
-/// A run killed after dispatch resumes under the same id, so the trial
-/// service counts it once.
+/// Holds ids, closed values and numbers only: no key, no transcript or provider text, no URL.
+/// Written before the first dispatch; a killed run resumes under the same id, so the trial counts
+/// it once.
 nonisolated struct AnalysisRunRecord: Codable, Sendable, Hashable, Identifiable {
     enum State: String, Codable, Sendable, Hashable {
         /// Written before the first send; still running, or killed.
@@ -28,20 +26,13 @@ nonisolated struct AnalysisRunRecord: Codable, Sendable, Hashable, Identifiable 
         case downloaded
     }
 
-    /// What the run's sends say about one ad-detection window (Chapters
-    /// keeps window 0).
+    /// Chapters & Summary uses window 0 only.
     enum WindowVerdict: String, Codable, Sendable, Hashable {
-        /// The first request is out.
         case dispatched
-        /// The latest send of the window got an answer.
         case answered
-        /// The corrective request is out.
         case repairing
-        /// The finished run accepted the window.
         case accepted
-        /// The window ended the run.
         case failed
-        /// The run stopped before the window finished.
         case cancelled
     }
 
@@ -54,13 +45,11 @@ nonisolated struct AnalysisRunRecord: Codable, Sendable, Hashable, Identifiable 
     let feature: AnalysisFeature
     /// The app's episode id (itself a digest).
     let episodeID: String
-    /// SHA-256 of the podcast id, which is a feed URL and may carry
-    /// credentials; never the id itself.
+    /// Never the podcast id itself: it is a feed URL and may carry credentials.
     let podcastDigest: String
     let transcriptFingerprint: String
-    /// SHA-256 of everything the run's result depends on besides the
-    /// provider's replies (the whole request, timings and durations
-    /// included); a resume must match it.
+    /// SHA-256 of everything the result depends on besides the provider's replies; a resume must
+    /// match it.
     let inputDigest: String?
     let route: Route
     let provider: AnalysisProvider
@@ -79,20 +68,15 @@ nonisolated struct AnalysisRunRecord: Codable, Sendable, Hashable, Identifiable 
     var exchangeSeconds: Double
     /// `completed`, or the run's failure code (`AnalysisFailureCode`).
     var outcomeCode: String?
-    /// The listener-facing failure (`AnalysisProviderFailure` raw value).
+    /// An `AnalysisProviderFailure` raw value.
     var listenerFailure: String?
-    /// Whether a continued-processing card held the run when it finished.
     var background: Bool?
-    /// Whether the run's token totals are saved in the listener's usage
-    /// (direct runs); a run that ended without it is counted at the next
-    /// launch.
+    /// Direct runs only; a run that ended without it is counted at the next launch.
     var usageRecorded: Bool?
     var finishedAt: Date?
-    /// The run used the trial service because Google named the key free
-    /// tier. Operational: a resumed run keeps its failure policy from it.
+    /// The trial took the run over from a free-tier key; a resume keeps its failure policy from it.
     var freeTier: Bool?
-    /// The direct run this one took over from, when there was one.
-    /// Operational: it decides which of two open records remains.
+    /// The direct run this one took over from; decides which of two open records remains.
     var handoverOf: String?
 
     enum CodingKeys: String, CodingKey {
@@ -127,7 +111,6 @@ nonisolated struct AnalysisRunRecord: Codable, Sendable, Hashable, Identifiable 
 }
 
 nonisolated extension AnalysisRunRecord {
-    /// A new record for a run about to dispatch.
     init(
         id: String = UUID().uuidString,
         feature: AnalysisFeature,
@@ -167,7 +150,6 @@ nonisolated extension AnalysisRunRecord {
 }
 
 nonisolated extension AnalysisRunRecord {
-    /// Lowercase hex SHA-256 of `text`'s UTF-8 bytes.
     static func digest(_ text: String) -> String {
         SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }

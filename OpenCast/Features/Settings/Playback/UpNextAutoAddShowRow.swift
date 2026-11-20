@@ -1,8 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// A show in Auto Add to Up Next with its Off / Top / Bottom choice, which
-/// applies on change. Accessibility sizes put the choice below the show.
 struct UpNextAutoAddShowRow: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext

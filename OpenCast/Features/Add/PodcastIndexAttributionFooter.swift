@@ -1,8 +1,6 @@
 import OpenCastCore
 import SwiftUI
 
-/// Attribution shown under directory results whenever Podcast Index
-/// contributed to them.
 struct PodcastIndexAttributionFooter: View {
     let results: [DirectoryPodcastResult]
 

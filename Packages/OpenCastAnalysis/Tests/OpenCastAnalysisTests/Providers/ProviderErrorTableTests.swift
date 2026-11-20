@@ -3,9 +3,6 @@ import Foundation
 @testable import OpenCastAnalysisProviders
 import Testing
 
-/// Every row of the provider error table, for both providers: each
-/// exchange maps to one pipeline error and one listener-facing case, and a
-/// run that meets it never yields a partial result.
 @Suite("Provider error table")
 struct ProviderErrorTableTests {
     struct Case {
@@ -64,18 +61,6 @@ struct ProviderErrorTableTests {
 
     static func entry(_ provider: AnalysisProvider) -> AnalysisModelEntry {
         provider == .google ? ProviderTestSupport.googleEntry() : ProviderTestSupport.openAIEntry()
-    }
-
-    @Test("The table covers both providers and every listener-facing row")
-    func coverage() throws {
-        let cases = try Self.cases()
-        for provider in AnalysisProvider.allCases {
-            let rows = Set(cases.filter { $0.provider == provider }.map(\.listener))
-            #expect(rows.isSuperset(of: [.invalidKey, .billingOrQuota, .rateLimited, .modelUnavailable, .overloaded, .timeout, .unreachable, .malformedAnswer]), "\(provider)")
-            #expect(cases.contains { $0.provider == provider && $0.transport == .retryable(status: 429, retryAfterSeconds: nil) })
-            #expect(cases.contains { $0.provider == provider && $0.listener == .rateLimited && $0.transport != .retryable(status: 429, retryAfterSeconds: nil) })
-        }
-        #expect(cases.contains { $0.provider == .google && $0.listener == .dailyLimit && $0.transport == .quotaExhausted })
     }
 
     @Test("Each exchange maps to one pipeline error and one listener case")

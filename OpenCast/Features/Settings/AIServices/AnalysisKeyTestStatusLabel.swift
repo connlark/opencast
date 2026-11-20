@@ -2,14 +2,10 @@ import OpenCastAnalysis
 import OpenCastAnalysisProviders
 import SwiftUI
 
-/// The key field's footer: "Testing…", the last test's outcome, or the
-/// warning that the field does not hold a whole key. The icon carries the
-/// outcome's color and shape; the text keeps the footer style.
 struct AnalysisKeyTestStatusLabel: View {
     let provider: AnalysisProvider
     let isTesting: Bool
     let result: AnalysisKeyTestResult?
-    /// Google accepted the key and then named it free tier.
     var isFreeTier = false
     let showsImplausibleWarning: Bool
 

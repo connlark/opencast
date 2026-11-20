@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// A Group by Show section header: the show, its download count and size,
-/// its Keep Downloaded chip (a link to the show's download settings while
-/// it is in the library) and the collapse control.
 struct DownloadsShowSectionHeader: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.editMode) private var editMode
@@ -16,8 +13,6 @@ struct DownloadsShowSectionHeader: View {
         appModel.library.podcastCache(for: group.podcastID)
     }
 
-    /// Accessibility sizes stack the header, as `DownloadsStorageLegendRow`
-    /// does, with the chip and collapse control on their own line.
     var body: some View {
         let layout = dynamicTypeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))

@@ -1,12 +1,9 @@
 import Foundation
 import SwiftData
 
-/// What the shared analysis record machinery (reconciler, record set) needs
-/// from a transcript-derived analysis row; both analysis `@Model` types
-/// conform. `#Predicate` cannot abstract over protocol key paths, so fetch
-/// descriptors stay with the concrete stores. Nonisolated like the models:
-/// a main-actor protocol would infer isolation onto them and make their
-/// key paths non-Sendable inside `FetchDescriptor`.
+/// `#Predicate` cannot abstract over protocol key paths, so fetches stay in the concrete
+/// stores. Nonisolated: a main-actor protocol would infer isolation onto the models and make
+/// their key paths non-Sendable inside `FetchDescriptor`.
 nonisolated protocol TranscriptDerivedAnalysisRecord: PersistentModel {
     var episodeID: String { get set }
     var podcastID: String { get set }

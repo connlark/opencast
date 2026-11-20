@@ -2,10 +2,6 @@ import Foundation
 import Testing
 @testable import OpenCastVoiceBoost
 
-/// Requirements for the gated loudness engine: output convergence to
-/// target (flipped from a `withKnownIssue` spec gap to a hard
-/// requirement), runtime/offline agreement on one fixture, honest K-weighted
-/// output metering, and silence robustness (never chase silence).
 struct VoiceBoostLoudnessEngineTests {
     @Test("Output integrated LUFS converges to targetLUFS within ±1 LU")
     func outputIntegratedLoudnessConvergesToTarget() throws {
@@ -24,9 +20,8 @@ struct VoiceBoostLoudnessEngineTests {
         )
         let inputLUFS = try #require(inputAnalysis.integratedLUFS)
         let configuration = VoiceBoostConfiguration.default
-        // The target must be reachable within the configured gain bounds with
-        // headroom for the measured wet-chain loudness loss (EQ + compressor)
-        // for convergence to be a fair expectation.
+        // Convergence is only fair when the target is reachable within the gain
+        // bounds, with headroom for the wet chain's loudness loss.
         #expect(configuration.targetLUFS - inputLUFS <= configuration.maximumPositiveGainDB - 3)
 
         let processor = VoiceBoostProcessor(
@@ -57,9 +52,8 @@ struct VoiceBoostLoudnessEngineTests {
         arguments: [(48_000.0, 2), (44_100.0, 1)]
     )
     func runtimeIntegratedInputAgreesWithOfflineAnalyzer(sampleRate: Double, channelCount: Int) throws {
-        // 40 s keeps the fixture inside the engine's 60 s rolling window so
-        // both meters integrate the same complete history; the alternating
-        // levels exercise the relative gate.
+        // 40 s stays inside the engine's 60 s rolling window, so both meters
+        // integrate the same history; alternating levels exercise the relative gate.
         var buffer = VoiceBoostFixtureGenerator.alternatingSpeechLike(
             quietAmplitude: 0.04,
             loudAmplitude: 0.3,
@@ -87,8 +81,8 @@ struct VoiceBoostLoudnessEngineTests {
         )
         let runtimeIntegrated = try #require(processor.metrics.integratedInputLUFS)
 
-        // Plan target is <= 0.3 LU; the shared grid and coefficients keep the
-        // two meters numerically identical in practice.
+        // The meters share the sub-block grid and coefficients, so they agree
+        // almost exactly.
         #expect(abs(runtimeIntegrated - offlineIntegrated) <= 0.05)
     }
 
@@ -121,9 +115,8 @@ struct VoiceBoostLoudnessEngineTests {
             ).integratedLUFS
         )
 
-        // The rolling gated output estimate inserts on the input gate, so it
-        // is not bit-identical to a full offline pass; it must still land
-        // well inside the honest-metering tolerance.
+        // The rolling output estimate is gated on the input, so it differs
+        // slightly from a full offline pass.
         #expect(abs(runtimeOutput - offlineOutput) <= 0.3)
     }
 
@@ -152,10 +145,8 @@ struct VoiceBoostLoudnessEngineTests {
             channelCount: channelCount
         )
 
-        // The momentary windows straddling the speech-to-silence boundary
-        // legitimately pass the gate (they contain speech energy), so flush
-        // them before snapshotting: divergence means drift during *sustained*
-        // silence, not the standard's boundary-block behavior.
+        // Windows straddling the speech-to-silence boundary still pass the
+        // gate, so flush them first: the check is for drift in sustained silence.
         var boundarySilence = VoiceBoostFixtureGenerator.silence(
             sampleRate: sampleRate,
             duration: 2,
@@ -192,7 +183,6 @@ struct VoiceBoostLoudnessEngineTests {
             channelCount: channelCount
         )
         let afterResume = processor.metrics
-        // Resuming the same program must not require re-convergence.
         #expect(abs(afterResume.currentAutoGainDB - beforeSilence.currentAutoGainDB) <= 1.0)
     }
 }

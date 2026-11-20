@@ -1,6 +1,5 @@
-/// What the car needs to know about the transport: which episode is loaded, and
-/// whether it is actually producing audio. `CPListItem.isPlaying` renders a
-/// "currently playing" icon, so a loaded-but-paused episode must not claim it.
+/// `isPlaying` means producing audio: `CPListItem.isPlaying` draws a "currently playing"
+/// icon, so a loaded but paused episode must not claim it.
 nonisolated struct CarPlayNowPlayingState: Equatable, Sendable {
     static let idle = CarPlayNowPlayingState(episodeID: nil, isPlaying: false)
 

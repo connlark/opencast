@@ -1,10 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// One playlist. A smart playlist hands off to `SmartPlaylistDetailView`. A
-/// manual playlist shows the hero with Play and Shuffle, then its episodes in
-/// the listener's order. Tapping a row plays from there. Items whose episode
-/// no longer resolves stay in place as unavailable rows until removed.
 struct PlaylistDetailView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -169,10 +165,7 @@ struct PlaylistDetailView: View {
         }
     }
 
-    /// The glow blurs one decoded preview rather than the whole mosaic: the
-    /// first cover show's, falling back to one of its resolved episodes' so
-    /// shows no longer in the library still glow, as they still draw in the
-    /// mosaic. With none, the screen keeps its plain background.
+    /// The glow blurs one decoded preview, not the whole mosaic.
     private func glowPreview(for summary: PlaylistSummary, items: [PlaylistResolvedItem]) -> ArtworkPreview? {
         for podcastID in summary.coverPodcastIDs {
             if let podcast = appModel.library.podcastCache(for: podcastID),

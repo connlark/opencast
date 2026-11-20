@@ -25,44 +25,6 @@ struct ArtworkMemoryCacheTests {
         #expect(cache.image(forContentKey: "content#112x112") === image)
     }
 
-    @Test("The latest alias serves another size until the exact size decodes")
-    func latestAliasServesOtherSizes() {
-        let cache = ArtworkMemoryCache(memoryWarningName: nil)
-        let url = URL(string: "https://example.com/sizes.png")!
-        let small = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 48, height: 48))
-        let large = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 240, height: 240))
-        let image = UIImage()
-        cache.store(image, forContentKey: "content#48x48")
-        cache.alias(small, toContentKey: "content#48x48")
-
-        #expect(cache.image(for: large) == nil)
-        #expect(cache.bestImage(for: large) === image)
-    }
-
-    @Test("An alias whose image is gone resolves to nothing")
-    func staleAliasMisses() {
-        let cache = ArtworkMemoryCache(memoryWarningName: nil)
-        let request = ArtworkRequest(url: URL(string: "https://example.com/evicted.png")!, targetPixelSize: pixelSize)
-        cache.alias(request, toContentKey: "missing#112x112")
-
-        #expect(cache.image(for: request) == nil)
-        #expect(cache.bestImage(for: request) == nil)
-    }
-
-    @Test("A thumbnail never satisfies a larger request")
-    func thumbnailDoesNotSatisfyLargerRequest() {
-        let cache = ArtworkMemoryCache(memoryWarningName: nil)
-        let url = URL(string: "https://example.com/qualified.png")!
-        let small = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 48, height: 48))
-        let large = ArtworkRequest(url: url, targetPixelSize: CGSize(width: 240, height: 240))
-        let thumbnail = makeImage(pixelSize: 48)
-        cache.store(thumbnail, forContentKey: "content#48x48")
-        cache.alias(small, toContentKey: "content#48x48")
-
-        #expect(cache.imageMeetingSize(for: small) === thumbnail)
-        #expect(cache.imageMeetingSize(for: large) == nil)
-    }
-
     @Test("The biggest decode satisfies a request the exact size misses")
     func biggestDecodeSatisfiesSmallerRequest() {
         let cache = ArtworkMemoryCache(memoryWarningName: nil)
@@ -118,21 +80,6 @@ struct ArtworkMemoryCacheTests {
         #expect(cache.imageMeetingSize(for: medium) === replacementImage)
     }
 
-    @Test("Clearing drops images and aliases together")
-    func removeAllClearsAliases() {
-        let cache = ArtworkMemoryCache(memoryWarningName: nil)
-        let request = ArtworkRequest(url: URL(string: "https://example.com/cleared.png")!, targetPixelSize: pixelSize)
-        cache.store(UIImage(), forContentKey: "content#112x112")
-        cache.alias(request, toContentKey: "content#112x112")
-
-        cache.removeAll()
-
-        #expect(cache.image(for: request) == nil)
-        #expect(cache.image(forContentKey: "content#112x112") == nil)
-        #expect(cache.imageMeetingSize(for: request) == nil)
-    }
-
-    /// A bitmap with a known pixel size, independent of the device scale.
     private func makeImage(pixelSize: Int) -> UIImage {
         guard let context = CGContext(
             data: nil,

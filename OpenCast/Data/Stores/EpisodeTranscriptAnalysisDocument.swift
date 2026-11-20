@@ -18,10 +18,8 @@ nonisolated struct EpisodeTranscriptAnalysisDocument: Codable, Sendable, Equatab
     var createdAt: Date
     var updatedAt: Date
 
-    /// Whether the analysis carries anything the detail surface can render.
-    /// A completed-but-empty analysis (no chapters, no summary) must not
-    /// count as a presentable result: treating it as current would blank the
-    /// surface and suppress Generate permanently.
+    /// A completed but empty analysis is not presentable: treating it as current would blank the
+    /// surface and suppress Generate for good.
     var hasPresentableContent: Bool {
         !chapters.isEmpty || summary != nil
     }

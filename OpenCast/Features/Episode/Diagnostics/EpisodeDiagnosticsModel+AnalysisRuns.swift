@@ -9,8 +9,6 @@ extension EpisodeDiagnosticsModel {
         )
     }
 
-    /// The latest run of each feature for this episode, with the same fields
-    /// as the Share Analysis Runs export: built from the run records only.
     nonisolated static func analysisRunsSection(
         records: [AnalysisRunRecord],
         episodeID: String

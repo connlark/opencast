@@ -1,17 +1,11 @@
 import Foundation
 import OpenCastPlayback
 
-/// Resolves the "Skipped promo" pill's undo action: the seek target is the
-/// skipped zone's start, and the seek lands with `.scrub` intent so
-/// `PlaybackAdSkipPolicy` disarms that zone until playback exits it (plays
-/// through once, re-arms after exit).
+/// The undo seek uses `.scrub` so the skip policy disarms the zone until playback leaves it.
 enum NowPlayingAutoSkipUndo {
     nonisolated static let seekIntent: PlaybackSeekIntent = .scrub
-    /// A seek to exactly `zone.startTime` can land a frame *before* the zone
-    /// (AVPlayer landing wobble), so the `.scrub` landing misses the zone, no
-    /// disarm happens, and the very next tick re-skips — measured live on the
-    /// original bug-report episode (undo landed at 0:50 against a 0:50.x zone
-    /// start and instantly re-skipped to 2:10). Land safely inside instead.
+    /// AVPlayer can land a seek to exactly `zone.startTime` a frame before the zone, so the
+    /// `.scrub` landing misses it and the next tick re-skips. Land inside instead.
     nonisolated static let landingMargin: TimeInterval = 0.5
 
     nonisolated static func seekTarget(

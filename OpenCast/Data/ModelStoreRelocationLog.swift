@@ -1,8 +1,7 @@
 import Foundation
 import os
 
-/// One line per store per launch, to the unified log and to a capped file in
-/// the app data container: a Wi-Fi-paired device exposes its container to
+/// Also written to a capped file: a Wi-Fi-paired device exposes its container to
 /// `devicectl device copy from` but not its unified log.
 nonisolated struct ModelStoreRelocationLog: Sendable {
     let fileURL: URL
@@ -19,8 +18,6 @@ nonisolated struct ModelStoreRelocationLog: Sendable {
         self.logger = logger
     }
 
-    /// Never throws: a file that cannot be written is reported through the
-    /// logger and the launch goes on.
     func record(_ results: [ModelStoreRelocationResult], at date: Date = .now) {
         let lines = results.map(Self.line(for:))
         for (result, line) in zip(results, lines) {

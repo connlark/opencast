@@ -1,8 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// The Downloads tab's options: the Unplayed Only filter, Group by Show
-/// (kept on this device) and Remove Played behind a confirmation.
 struct DownloadsOptionsMenu: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext

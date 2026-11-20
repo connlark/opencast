@@ -4,8 +4,6 @@ import Foundation
 import ImageIO
 
 nonisolated struct ArtworkPreviewGenerator {
-    typealias ThreadObserver = @Sendable (_ isMainThread: Bool) -> Void
-
     private static let bitmapInfo = CGBitmapInfo.byteOrder32Big.union(
         CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
     )
@@ -16,14 +14,12 @@ nonisolated struct ArtworkPreviewGenerator {
     static func generate(
         from data: Data,
         sourceHash: String? = nil,
-        canonicalArtworkURLKey: String,
-        threadObserver: ThreadObserver? = nil
+        canonicalArtworkURLKey: String
     ) async -> ArtworkPreview? {
         guard !Task.isCancelled else {
             return nil
         }
 
-        threadObserver?(isRunningOnMainThread())
         return makePreview(
             from: data,
             sourceHash: sourceHash,
@@ -37,10 +33,6 @@ nonisolated struct ArtworkPreviewGenerator {
             let hex = String(byte, radix: 16)
             return hex.count == 1 ? "0\(hex)" : hex
         }.joined()
-    }
-
-    private nonisolated static func isRunningOnMainThread() -> Bool {
-        Thread.isMainThread
     }
 
     private nonisolated static func makePreview(

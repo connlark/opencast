@@ -1,28 +1,18 @@
 import OpenCastAnalysis
 import OpenCastAnalysisProviders
 
-/// How far one device ad-detection run has come, in steps: each window's
-/// first request, plus each corrective request the run has needed so far.
-/// A step is done once a reply answers it, sent now or kept from an earlier
-/// attempt of the same run.
+/// Steps are each window's first request plus each corrective request so far. A step is done
+/// once a reply answers it, sent now or kept from an earlier attempt of the same run.
 nonisolated struct AdAnalysisRunProgress: Sendable, Hashable {
     private(set) var completed = 0
     private(set) var total: Int
-    /// The longest one step can take before it gives up: the model's
-    /// per-call timeout for each send a window's first request may make,
-    /// plus the longest pause between them. Progress paces its creep inside
-    /// a step over this, so a slow step never reaches its end early.
     let stepBudgetSeconds: Double
-    /// The run record these steps count for.
     let attemptID: String?
-    /// The run uses the trial service because Google named the key free tier.
     let isFreeTierTrial: Bool
     private var answered: Set<AnalysisProviderRequest.Purpose> = []
     private var repairs: Set<Int> = []
     private let windowCount: Int
 
-    /// `model` is the entry the run uses; without one, the slowest entry
-    /// the baked bundle qualifies for ad detection.
     init(windowCount: Int, model: AnalysisModelEntry? = nil, attemptID: String? = nil, isFreeTierTrial: Bool = false) {
         self.attemptID = attemptID
         self.isFreeTierTrial = isFreeTierTrial
@@ -45,7 +35,6 @@ nonisolated struct AdAnalysisRunProgress: Sendable, Hashable {
         .map(\.perCallTimeoutSeconds)
         .max() ?? 120
 
-    /// Counts one send of `purpose`; `answered` when a reply came back.
     mutating func note(_ purpose: AnalysisProviderRequest.Purpose, answered isAnswered: Bool) {
         if case .adRepair(let index) = purpose {
             repairs.insert(index)
@@ -57,8 +46,6 @@ nonisolated struct AdAnalysisRunProgress: Sendable, Hashable {
         completed = min(answered.count, total)
     }
 
-    /// Feeds a run's sends into its progress; a send the run cancelled
-    /// counts for nothing.
     struct SendObserver: AnalysisProviderSendObserver {
         let onSend: @Sendable (AnalysisProviderRequest.Purpose, Bool) -> Void
 

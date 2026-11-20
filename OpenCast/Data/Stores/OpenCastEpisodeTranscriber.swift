@@ -27,9 +27,8 @@ struct OpenCastEpisodeTranscriber: EpisodeTranscribing {
                     await retainOrUnload(prepared)
                     continuation.finish()
                 } catch {
-                    // A failed or cancelled attempt never leaves a runtime
-                    // behind — the cpuOnly recovery rung and any later drain
-                    // item start from a fresh load.
+                    // A failed or cancelled attempt never leaves a runtime behind: the cpuOnly
+                    // recovery rung and any later drain item start from a fresh load.
                     retention.invalidate(reason: "run-failed")
                     await unload(preparedStream?.serviceToken)
                     continuation.finish(throwing: error)
@@ -52,9 +51,8 @@ struct OpenCastEpisodeTranscriber: EpisodeTranscribing {
     }
 
     func releaseRunResources() async {
-        // Post-success cleanup: the stream task has already retained or
-        // unloaded its own service; anything still tracked here was never
-        // handed to retention.
+        // The stream task already retained or unloaded its own service; anything still tracked
+        // here was never handed to retention.
         if let injectedService {
             await injectedService.unload()
         } else {
@@ -194,9 +192,6 @@ struct OpenCastEpisodeTranscriber: EpisodeTranscribing {
         )
     }
 
-    /// Devices granted background GPU get WhisperKit-default compute back;
-    /// everything else keeps the CPU+ANE pin. Explicit
-    /// profiles (the cpuOnly fallback/sticky rung) are never upgraded.
     static func resolvedComputeProfile(
         requestedProfile: OpenCastTranscriptionComputeProfile,
         supportsBackgroundGPU: Bool
@@ -312,8 +307,7 @@ private final class CurrentTranscriptionServiceTracker: @unchecked Sendable {
         }
     }
 
-    /// Stops tracking without unloading — the service moved into drain
-    /// retention and stays loaded.
+    /// Stops tracking without unloading: the service moved into drain retention.
     func clear(_ token: UUID?) {
         guard let token else {
             return
@@ -345,15 +339,5 @@ private final class CurrentTranscriptionServiceTracker: @unchecked Sendable {
     private struct CurrentService {
         var token: UUID
         var unload: @Sendable () async -> Void
-    }
-}
-
-private extension NSLock {
-    func withLock<Result>(_ work: () -> Result) -> Result {
-        lock()
-        defer {
-            unlock()
-        }
-        return work()
     }
 }

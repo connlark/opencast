@@ -1,19 +1,13 @@
 import Foundation
 
-/// Every way a Private Cloud Compute request ends short of a result, reduced
-/// to what the product reacts to. The PCC client maps Foundation Models
-/// errors here; the scripted test client throws these directly.
 nonisolated enum TranscriptIntelligenceFailure: Error, Equatable, Sendable {
     case cancelled
-    /// Apple's input or output guardrail declined the passage; the side says
-    /// which check fired.
     case guardrailViolation(TranscriptIntelligenceGuardrailSide)
     case refusal
     case rateLimited(resetDate: Date?)
     case quotaLimitReached(resetDate: Date?)
     case contextSizeExceeded(tokenCount: Int, contextSize: Int)
-    /// Generation failed because the running build lacks the PCC entitlement;
-    /// availability reads `.available` regardless, so only a request tells.
+    /// Model availability reads `.available` regardless, so only a request reveals it.
     case notEntitled
     case offline
     case serviceUnavailable
@@ -22,8 +16,7 @@ nonisolated enum TranscriptIntelligenceFailure: Error, Equatable, Sendable {
     case malformedOutput
     case unknown(String)
 
-    /// Clears on the next availability refresh. The rest either persist for
-    /// the process (`notEntitled`) or expire on their own clock (rate limits).
+    /// A transient failure clears on the next availability refresh.
     var isTransient: Bool {
         switch self {
         case .notEntitled, .rateLimited, .quotaLimitReached:
@@ -34,7 +27,6 @@ nonisolated enum TranscriptIntelligenceFailure: Error, Equatable, Sendable {
         }
     }
 
-    /// Calm, per-request copy. Cancellation is normal and shows nothing.
     var userMessage: String? {
         switch self {
         case .cancelled:

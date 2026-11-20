@@ -1,31 +1,10 @@
 import CoreGraphics
 
-/// How Now Playing arranges the player and its secondary pane, resolved on
-/// every layout from exactly the window's pose, the window's size and
-/// whether the scene has reported a fold. The decision table is total:
-///
-/// | Pose | Scene | Window | Arrangement |
-/// | --- | --- | --- | --- |
-/// | `compact` | any | any | `card` |
-/// | `foldedVertical(band:)` | any (the band is a fold report) | any | `split(band:)` |
-/// | `foldedHorizontal(band:)` | any (the band is a fold report) | any | `single(band:)` |
-/// | `regularFlat` | foldable | wider than tall | `split(band: nil)` |
-/// | `regularFlat` | foldable | square or taller than wide | `single(band: nil)` |
-/// | `regularFlat` | not foldable | any | `card` |
-///
-/// Compact always wins. Derive it on every layout, never from the hinge,
-/// orientation, idiom or the screen, and never cache it from an earlier one.
+/// Derive this on every layout, never from the hinge, orientation, idiom or screen, and
+/// never cache it from an earlier layout.
 nonisolated enum NowPlayingArrangement: Equatable, Sendable {
-    /// Today's card: every compact window, and every regular window whose
-    /// scene has never reported a fold.
     case card
-    /// The player beside the secondary pane on a wide display: the player on
-    /// the band's leading side and the pane on its trailing side when folded,
-    /// a plain split when flat. The band is in the window reader's space.
     case split(band: CGRect?)
-    /// One card on a tall display, the pane collapsed to its row: when
-    /// folded, the media above the band and the controls below it. The band
-    /// is in the window reader's space.
     case single(band: CGRect?)
 
     init(pose: WindowPose, windowSize: CGSize, isFoldableScene: Bool) {
@@ -45,9 +24,8 @@ nonisolated enum NowPlayingArrangement: Equatable, Sendable {
         }
     }
 
-    /// The scene flag as it stands on this layout: the scene's latch, or a
-    /// `.division` region in the regions this layout reads (active or not),
-    /// so the flag is updated before the arrangement is resolved.
+    /// Reads this layout's regions as well as the latch, so the flag is current before the
+    /// arrangement is resolved.
     static func isFoldableScene(latched: Bool, currentRegions: [WindowDivisionRegion]) -> Bool {
         latched || SceneLibraryLayouts.reportsFold(currentRegions)
     }
@@ -62,8 +40,6 @@ nonisolated enum NowPlayingArrangement: Equatable, Sendable {
         }
     }
 
-    /// Foldable arrangements lay out across the whole window, inside its safe
-    /// rectangle; the card keeps today's surface.
     var usesWindowSizedSurface: Bool {
         self != .card
     }

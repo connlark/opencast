@@ -1,10 +1,7 @@
 import SwiftUI
 
-/// "Share Episode" for the episode menus, or a nested "Share" menu that adds
-/// "Share from 12:34" when the episode has a playhead ("Share from Current
-/// Time" while it plays). A child view so the state reads and the token
-/// encode run when the menu is realised, not in the host's body (menu and
-/// context-menu builders run inline in their host).
+/// A child view so the state reads and token encode run when the menu is realised, not in the
+/// host's body: menu builders run inline in their host.
 struct EpisodeShareMenu: View {
     @Environment(OpenCastAppModel.self) private var appModel
 

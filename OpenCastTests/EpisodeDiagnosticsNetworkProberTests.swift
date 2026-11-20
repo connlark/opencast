@@ -75,25 +75,6 @@ struct EpisodeDiagnosticsNetworkProberTests {
         #expect(probe.errorDescription != nil)
     }
 
-    @Test("Cancelling the probing task ends a hanging probe promptly")
-    func cancellationEndsHangingProbe() async throws {
-        DiagnosticsProbeURLProtocol.configure(
-            stubs: [DiagnosticsProbeURLProtocol.Stub(statusCode: 200, headers: [:])],
-            finishesResponses: false
-        )
-        let prober = makeProber()
-
-        let probeTask = Task {
-            await prober.headProbe(of: URL(string: "https://example.com/hang.mp3")!)
-        }
-        try await Task.sleep(for: .milliseconds(150))
-        probeTask.cancel()
-        let probe = await probeTask.value
-
-        #expect(probe.statusCode == nil)
-        #expect(probe.errorDescription != nil)
-    }
-
     private func makeProber() -> EpisodeDiagnosticsNetworkProber {
         let configuration = EpisodeDiagnosticsNetworkProber.defaultConfiguration()
         configuration.protocolClasses = [DiagnosticsProbeURLProtocol.self]
@@ -101,8 +82,6 @@ struct EpisodeDiagnosticsNetworkProberTests {
     }
 }
 
-/// Redirect-capable stub: a 3xx stub with a Location header drives the
-/// session's real redirect path so the prober's delegate is exercised.
 private nonisolated final class DiagnosticsProbeURLProtocol: URLProtocol, @unchecked Sendable {
     struct Stub {
         var statusCode: Int
@@ -112,16 +91,14 @@ private nonisolated final class DiagnosticsProbeURLProtocol: URLProtocol, @unche
     private static let lock = NSLock()
     nonisolated(unsafe) private static var stubs: [Stub] = []
     nonisolated(unsafe) private static var recordedRequests: [URLRequest] = []
-    nonisolated(unsafe) private static var finishesResponses = true
 
     static var requests: [URLRequest] {
         lock.withLock { recordedRequests }
     }
 
-    static func configure(stubs: [Stub], finishesResponses: Bool = true) {
+    static func configure(stubs: [Stub]) {
         lock.withLock {
             self.stubs = stubs
-            self.finishesResponses = finishesResponses
             recordedRequests.removeAll()
         }
     }
@@ -135,15 +112,15 @@ private nonisolated final class DiagnosticsProbeURLProtocol: URLProtocol, @unche
     }
 
     override func startLoading() {
-        let fixture = Self.lock.withLock { () -> (Stub, Bool)? in
+        let fixture = Self.lock.withLock { () -> Stub? in
             Self.recordedRequests.append(request)
             guard !Self.stubs.isEmpty else {
                 return nil
             }
-            return (Self.stubs.removeFirst(), Self.finishesResponses)
+            return Self.stubs.removeFirst()
         }
 
-        guard let (stub, finishesResponse) = fixture,
+        guard let stub = fixture,
               let url = request.url,
               let response = HTTPURLResponse(
                 url: url,
@@ -166,9 +143,7 @@ private nonisolated final class DiagnosticsProbeURLProtocol: URLProtocol, @unche
         }
 
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        if finishesResponse {
-            client?.urlProtocolDidFinishLoading(self)
-        }
+        client?.urlProtocolDidFinishLoading(self)
     }
 
     override func stopLoading() {

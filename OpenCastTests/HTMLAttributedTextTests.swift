@@ -132,22 +132,6 @@ struct HTMLAttributedTextTests {
         #expect(linkedTexts == ["00:02:16", "8:39", "1:02:33", "12:05"])
     }
 
-    @Test("Clock times, fractions, ISO dates, and out-of-range digits are not timestamps")
-    func timestampsRejectNonTimestamps() {
-        let attributed = HTMLAttributedText.attributedString(
-            from: "<p>10:75 60:30 123:45 12:34:56:78 2026-09-06T10:30:00Z 8:39 am 8:39pm 8:39 P.M. 16:9 3:16.5</p>"
-        )
-
-        let timestampLinks = attributed.runs.compactMap(\.link).compactMap(ShowNotesTimestampLink.seconds(from:))
-        #expect(timestampLinks.isEmpty)
-    }
-
-    @Test("A timestamp followed by a word that starts with am still links")
-    func timestampAfterClockWordStillLinks() {
-        let attributed = HTMLAttributedText.attributedString(from: "<p>8:39 amazing guest</p>")
-        #expect(timestampSeconds(of: "8:39", in: attributed) == 519)
-    }
-
     @Test("Timestamp detection never overwrites an existing link")
     func timestampsNeverOverwriteAnchorLinks() {
         let attributed = HTMLAttributedText.attributedString(

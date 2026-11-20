@@ -281,7 +281,6 @@ struct FeedRefreshOfflineTests {
         #expect(try await cache.allRefreshLogs().isEmpty)
         #expect(library.state == .idle)
 
-        // Cancellation must not prevent recovery on the next activation.
         await library.recoverConnectivity(refreshesStaleFeeds: true, modelContext: context, now: currentDate)
         #expect(await service.requestCount(for: feedURL) == 2)
         #expect(!library.lastRefreshWasOffline)

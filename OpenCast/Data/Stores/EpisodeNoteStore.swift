@@ -20,7 +20,6 @@ enum EpisodeNoteStore {
 
     private typealias EpisodeInfo = (podcastID: String, podcastTitle: String, episodeTitle: String, artworkURL: String?)
 
-    /// One episode's notes in timeline order, for the views that list them.
     static func notes(for episodeID: String) -> FetchDescriptor<EpisodeNoteRecord> {
         FetchDescriptor(
             predicate: #Predicate { $0.episodeID == episodeID },
@@ -28,7 +27,6 @@ enum EpisodeNoteStore {
         )
     }
 
-    /// Every note across every episode, newest first, for the Notes library.
     static func allNotes() -> FetchDescriptor<EpisodeNoteRecord> {
         FetchDescriptor(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
     }
@@ -37,15 +35,12 @@ enum EpisodeNoteStore {
         try context.fetchCount(FetchDescriptor<EpisodeNoteRecord>())
     }
 
-    /// The positions of one episode's timestamped notes, for the Now Playing
-    /// rail; an episode without notes costs one empty fetch.
     static func noteTimestamps(for episodeID: String, in context: ModelContext) throws -> [TimeInterval] {
         try context.fetch(FetchDescriptor<EpisodeNoteRecord>(
             predicate: #Predicate { $0.episodeID == episodeID && $0.isEpisodeWide == false }
         )).map(\.timestamp)
     }
 
-    /// The episode's single whole-episode note, if one has been saved.
     static func wholeEpisodeNote(for episodeID: String, in context: ModelContext) throws -> EpisodeNoteRecord? {
         var descriptor = FetchDescriptor<EpisodeNoteRecord>(
             predicate: #Predicate { $0.episodeID == episodeID && $0.isEpisodeWide }
@@ -133,10 +128,6 @@ enum EpisodeNoteStore {
         return note
     }
 
-    /// Fills the display details a note lacks from its episode, for notes
-    /// saved before the note kept them. Stored details are never replaced, a
-    /// note whose episode does not resolve is left alone, and nothing is
-    /// saved unless a note changed.
     static func backfillEpisodeInfo(
         _ notes: [EpisodeNoteRecord],
         resolve: (String) -> EpisodeListItemSnapshot?,
@@ -172,8 +163,7 @@ enum EpisodeNoteStore {
         }
     }
 
-    /// Copies the draft's non-empty episode details onto the note, so an edit
-    /// from a surface that lacks one keeps the stored value.
+    /// Skips empty details so an edit from a surface that lacks one keeps the stored value.
     private static func applyEpisodeInfo(from draft: EpisodeNoteDraft, to note: EpisodeNoteRecord) {
         if !draft.podcastID.isEmpty { note.podcastID = draft.podcastID }
         if !draft.podcastTitle.isEmpty { note.podcastTitle = draft.podcastTitle }

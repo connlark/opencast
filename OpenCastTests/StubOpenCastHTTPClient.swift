@@ -9,8 +9,6 @@ import Synchronization
 actor StubOpenCastHTTPClient: OpenCastHTTPClient {
     enum Response: Sendable {
         case body(Data, statusCode: Int = 200)
-        /// What the streaming client throws once a body passes the cap.
-        case oversized
         case transportFailure(URLError.Code)
     }
 
@@ -83,8 +81,6 @@ actor StubOpenCastHTTPClient: OpenCastHTTPClient {
                     headers: [:]
                 )
             )
-        case .oversized:
-            throw OpenCastHTTPBodyTooLargeError(byteLimit: maximumBodyByteCount ?? 0)
         case .transportFailure(let code):
             throw URLError(code)
         case nil:

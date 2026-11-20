@@ -33,8 +33,6 @@ struct EpisodeShareURLTests {
             publishedAt: nil
         ))
 
-        // The sample payload says 3600 s; dynamically inserted ads make the
-        // served file longer, so a start past the feed's figure is kept.
         #expect(payload.maximumStartSeconds == 86_400)
         #expect(try EpisodeShareURL.url(base: base, payload: payload, startSeconds: 3598).query() == "t=3598")
         #expect(try EpisodeShareURL.url(base: base, payload: payload, startSeconds: 3599).query() == "t=3599")

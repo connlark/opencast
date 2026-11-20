@@ -5,15 +5,6 @@ import SwiftData
 import Testing
 @testable import OpenCast
 
-/// Launch and scene-activation recovery: kept references re-attach
-/// by their original client request ID without a second tap or a second job,
-/// a persisted user cancel is retried once per trigger instead of polling,
-/// housekeeping drops only expired references, and a persisted cloud head
-/// resumes through the queue's own path.
-///
-/// A "relaunch" builds a new store, coordinator, runner and reattacher over
-/// the same defaults, model context and fake server, so nothing held only in
-/// the earlier process's memory survives.
 @MainActor
 @Suite("Remote job re-attach", .serialized)
 struct OpenCastAppModelRemoteReattachTests {
@@ -49,12 +40,12 @@ struct OpenCastAppModelRemoteReattachTests {
             seedStore.existingReference(for: episodeID, purpose: purpose)
         }
 
-        /// Writes references as an earlier process (or an earlier day) left
-        /// them, including their creation time.
+        /// Writes references directly, so a test controls their creation time.
         func writeReferences(_ references: [RemoteTranscriptionJobReference]) throws {
             defaults.set(try JSONEncoder().encode(references), forKey: "remoteTranscription.jobReferences")
         }
 
+        /// A relaunch: nothing held only in the earlier process's memory survives.
         func launch(
             unresolvedEpisodeIDs: Set<String> = [],
             cloudQueueEpisodeIDs: @escaping () -> Set<String> = { [] }
@@ -210,7 +201,6 @@ struct OpenCastAppModelRemoteReattachTests {
         let expiredEvents = device.diagnostics.events(of: .housekeepingExpired)
         #expect(Set(expiredEvents.compactMap(\.clientRequestID)) == ["crid-expired", "crid-expired-cloud"])
         #expect(expiredEvents.allSatisfy { $0.disposition == .expired })
-        // Nothing was minted, created or cancelled during cleanup.
         #expect(device.api.traffic.isEmpty)
         #expect(device.api.mintedJobIDs.isEmpty)
         let skipped = device.diagnostics.events(of: .reattachSkipped)
@@ -327,7 +317,6 @@ struct OpenCastAppModelRemoteReattachTests {
         #expect(device.diagnostics.events(of: .runStarted).count == runsBefore)
         #expect(relaunched.store.phase(for: "ep-cancel-lost") == nil)
 
-        // Nothing is left for the next trigger.
         await relaunched.trigger(device)
         #expect(api.cancelCalls.count == 2)
     }
@@ -486,7 +475,6 @@ struct OpenCastAppModelRemoteReattachTests {
         // The drain's re-attach is the Resume that clears the park reason.
         #expect(device.reference("ep-cloud-parked", .adDetection)?.lastExit == nil)
 
-        // A reset parks the reference again; it never cancels the job.
         pass.reset()
         #expect(await waitUntil { device.reference("ep-cloud-parked", .adDetection)?.lastExit == .parked })
         #expect(device.api.cancelCalls.isEmpty)

@@ -4,15 +4,11 @@ nonisolated enum SearchTextNormalization {
     private static let foldingLocale = Locale(identifier: "en_US_POSIX")
 
     static func normalize(_ text: String) -> String {
-        // ASCII has no diacritics, width variants or dotless-I. Catalog
-        // indexing visits millions of ordinary words; avoid a Foundation
-        // locale-folding allocation for each one without changing its result.
+        // ASCII has no diacritics, width variants or dotless I, so this path skips a
+        // locale-folding allocation per word without changing the result.
         if text.utf8.allSatisfy({ $0 < 0x80 }) { return text.lowercased() }
-        // Locale-invariant folding keeps index and query normalization
-        // identical across device-locale changes, but it cannot express the
-        // Turkish dotted/dotless-I pairs: invariant folding maps "IŞIK" to
-        // "isik" while leaving "ışık" as "ısık". Fold dotless ı explicitly so
-        // both casings of a Turkish word converge to one form in every locale.
+        // Locale-invariant folding maps "IŞIK" to "isik" but leaves "ışık" as "ısık"; folding
+        // the dotless ı as well makes both casings converge in every locale.
         return text.folding(
             options: [.diacriticInsensitive, .widthInsensitive],
             locale: foldingLocale
@@ -22,9 +18,7 @@ nonisolated enum SearchTextNormalization {
     }
 
     static func searchTokens(in text: String) -> [String] {
-        // ASCII letters and digits occupy one byte. Avoid grapheme/property
-        // lookups for every character in large, ordinary show-note catalogs.
-        // Non-ASCII text keeps the Unicode segmentation and folding below.
+        // ASCII fast path: no grapheme or property lookups per character in large catalogs.
         if text.utf8.allSatisfy({ $0 < 0x80 }) {
             return text.utf8.split { byte in
                 !((byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122)

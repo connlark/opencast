@@ -1,7 +1,6 @@
 import Foundation
 
-/// Deletes only an existing install. It deliberately never repairs credentials
-/// or registers a key, including when the server has already forgotten it.
+/// Never repairs credentials or registers a key, even when the server has already forgotten it.
 nonisolated struct AppAttestInstallDeregistration: Sendable {
     enum Outcome: Sendable, Equatable {
         case notRegistered

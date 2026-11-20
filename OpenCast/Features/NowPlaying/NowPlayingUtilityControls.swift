@@ -9,10 +9,8 @@ struct NowPlayingUtilityControls: View {
     @ScaledMetric(relativeTo: .body) private var circleDiameter = PlayerUtilityCircleChrome.defaultDiameter
 
     let rate: Float
-    /// The width the controls are laid out in; a single row that would not
-    /// fit falls back to the grid instead of overflowing the screen edges.
     let availableWidth: Double
-    /// The transport's resolved play-button diameter: no circle outgrows it.
+    /// No circle outgrows it.
     let playButtonDiameter: Double
     let onShowSpeed: () -> Void
     let onShowSleepTimer: () -> Void

@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// The empty conversation: what Ask does and two questions to start with.
 struct TranscriptAskIntroView: View {
     static let suggestions = ["What is this episode about?", "What happens at the end?"]
 

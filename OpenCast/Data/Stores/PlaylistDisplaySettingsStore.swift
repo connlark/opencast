@@ -2,11 +2,9 @@ import Foundation
 import Observation
 import SwiftData
 
-/// Device-local playlist collection preferences. Every load and save runs in
-/// its own short-lived context: a failed save is discarded with that context
-/// instead of lingering as a dirty row that a later unrelated save would
-/// commit, and a preference save never flushes another context's pending
-/// synced edits. Published values change only after a save succeeds.
+/// Every load and save uses its own short-lived context: a failed save is discarded with it
+/// instead of lingering for a later unrelated save to commit, and a save never flushes another
+/// context's pending synced edits.
 @Observable
 final class PlaylistDisplaySettingsStore {
     static let sortOrderPreferenceKey = "playlists.sortOrder"
@@ -16,7 +14,6 @@ final class PlaylistDisplaySettingsStore {
 
     @ObservationIgnored private let save: (ModelContext) throws -> Void
 
-    /// `save` is the test seam for preference saves.
     init(save: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
         self.save = save
     }

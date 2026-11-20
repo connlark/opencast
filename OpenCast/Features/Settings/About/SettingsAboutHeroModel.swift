@@ -2,9 +2,8 @@ import Foundation
 import OSLog
 import RealityKit
 
-/// Owns the About hero's loaded RealityKit entities for the life of the About
-/// screen, so a `RealityView` that leaves the hierarchy (background, Low
-/// Power) re-adds the same stage without touching the file again.
+/// Lives as long as the About screen, so a `RealityView` that leaves the hierarchy re-adds the
+/// same stage without reading the file again.
 @Observable
 final class SettingsAboutHeroModel {
     nonisolated static let resourceName = "OpencastGlassIcon"
@@ -40,7 +39,6 @@ final class SettingsAboutHeroModel {
         }
     }
 
-    /// Turns in from a slight angle the first time the model is shown.
     func playEntranceIfNeeded(animated: Bool) {
         guard !hasPlayedEntrance else {
             return
@@ -58,8 +56,7 @@ final class SettingsAboutHeroModel {
         turn(toYaw: restingYaw, duration: animated ? 0.9 : 0, timingFunction: .easeInOut)
     }
 
-    /// Follows a horizontal drag live; `releaseOffset` is where the drag
-    /// would land given its velocity, which decides the face on release.
+    /// `releaseOffset` is where the drag would land given its velocity; it decides the face.
     func dragTurn(offset: Double, releaseOffset: Double) {
         motion?.stop()
         motion = nil
@@ -67,7 +64,6 @@ final class SettingsAboutHeroModel {
         turntable?.orientation = Self.rotation(yaw: restingYaw + Float(offset))
     }
 
-    /// Settles a drag on the nearer face; does nothing when no drag is live.
     func endDragTurn(animated: Bool) {
         guard let releaseOffset = dragReleaseOffset else {
             return

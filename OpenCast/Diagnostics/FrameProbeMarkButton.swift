@@ -1,12 +1,6 @@
 #if DEBUG || OPENCAST_PERFORMANCE_PROBES
 import SwiftUI
 
-/// Test-tappable mark source for the frame-pacing probe. Each tap records a
-/// `probe-window` mark, letting UI tests bracket arbitrary workloads (scroll
-/// runs, load scenarios) into flushed probe sessions. Compiled only into DEBUG
-/// and `OPENCAST_PERFORMANCE_PROBES` profiling builds and mounted only while
-/// the probe is enabled (`--opencast-frame-probe`), so the visible dot never
-/// ships in normal use.
 struct FrameProbeMarkButton: View {
     var body: some View {
         Button("Probe Mark", action: mark)

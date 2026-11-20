@@ -1,21 +1,9 @@
 import Foundation
 import SwiftData
 
-/// Launch and scene-activation recovery for kept remote job references
-/// (CONTRACTS §1, §4 and §7). Each trigger runs one pass, in order:
-///
-/// 1. Housekeeping drops only references older than the recovery window,
-///    never a younger one because its `jobID` is absent, never one a live run
-///    or the cloud queue still holds, and never mints a replacement.
-/// 2. Each persisted user-cancel intent is retried once through the runner
-///    the user's tap used, so a trigger racing a tap joins its resolution.
-///    This is cleanup of an earlier user action: it never polls and never
-///    mints a request ID.
-/// 3. The newest eligible plain reference re-attaches through the
-///    coordinator by its original client request ID. Cloud references stay
-///    with the ad-free-pass queue, whose launch restore drains them.
-///
-/// A failed pass waits for the next trigger; nothing here runs on a timer.
+/// A cancel intent retries through the runner the user's tap used, so a trigger racing the tap
+/// joins its resolution. Cloud references stay with the ad-free-pass queue, which drains them
+/// at launch.
 final class RemoteJobReattacher {
     enum Trigger: Sendable {
         case launch
@@ -26,9 +14,8 @@ final class RemoteJobReattacher {
     private let cloudRunner: RemoteTranscriptionJobRunner
     private let transcriptions: EpisodeTranscriptionStore
     private let resolveEpisode: (String) -> EpisodeListItemSnapshot?
-    /// Episodes the ad-free-pass queue holds (pending or active). The queue
-    /// owns those `.adDetection` references, and its absence of an active
-    /// item is never proof that a server job is gone.
+    /// The ad-free-pass queue owns these episodes' `.adDetection` references; its lack of an
+    /// active item never proves a server job is gone.
     private let cloudQueueEpisodeIDs: () -> Set<String>
     private var inFlight: Task<Void, Never>?
 
@@ -50,9 +37,7 @@ final class RemoteJobReattacher {
         self.cloudQueueEpisodeIDs = cloudQueueEpisodeIDs
     }
 
-    /// Starts one recovery pass, or returns the pass already running: a
-    /// launch and an activation callback that race each other share it, so
-    /// one reference is never started twice.
+    /// A launch and an activation that race share one pass, so a reference never starts twice.
     @discardableResult
     func reattachIfNeeded(modelContext: ModelContext) -> Task<Void, Never> {
         if let inFlight {
@@ -131,9 +116,8 @@ final class RemoteJobReattacher {
         }
     }
 
-    /// Why a plain reference does not re-attach on this trigger, or nil.
-    /// Once one reference starts, the request it owns makes every older one
-    /// wait for a later trigger.
+    /// Once one reference starts, the request it owns makes every older one wait for a later
+    /// trigger.
     private func skipReason(
         for reference: RemoteTranscriptionJobReference,
         isResolved: Bool,

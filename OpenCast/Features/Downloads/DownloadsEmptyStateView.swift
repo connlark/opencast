@@ -9,10 +9,8 @@ struct DownloadsEmptyStateView: View {
         } description: {
             Text("Download an episode from its detail screen or context menu to listen offline.")
         } actions: {
-            // Shows can download new episodes on their own, so the settings
-            // are reachable before anything is downloaded. Downloads shows
-            // this as a List row, and a NavigationLink there makes the whole
-            // row the link; a button takes only its own taps.
+            // A Button, not a NavigationLink: in the List row that hosts this view a link
+            // takes the whole row's taps.
             Button("Download Settings", action: onOpenDownloadSettings)
                 .buttonStyle(.glass)
         }

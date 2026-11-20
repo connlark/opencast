@@ -1,10 +1,7 @@
 import SwiftUI
 
-/// A collection row's or tile's size line. A smart playlist reads its
-/// evaluation here and nowhere else in the collection, so only visible rows
-/// and tiles evaluate, and the collection's body observes no smart-list
-/// dependencies. Callers set the font, style and line limit; only the smart
-/// glyph carries the playlist's tint.
+/// The only place in the collection that reads a smart playlist's evaluation, so only visible
+/// rows and tiles evaluate and the collection's body observes no smart-list dependencies.
 struct PlaylistSummaryLine: View {
     @Environment(OpenCastAppModel.self) private var appModel
 

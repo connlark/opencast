@@ -2,15 +2,10 @@ import Foundation
 import OSLog
 import UserNotifications
 
-/// Posts the plain Transcribe Remotely notification for a run ending while
-/// the scene is not active. Suppression happens at scheduling time:
-/// `willPresent` banners everything, so an active-scene ending must never
-/// reach `add`. A remote delivery owner takes the completion and the
-/// failure; the paused notification posts for either owner.
+/// `willPresent` banners everything, so a run ending while the scene is active must never
+/// reach `add`.
 struct RemoteTranscriptionNotificationScheduler {
     static let threadIdentifier = "opencast-remote-transcription"
-    /// A routing no-op for the delegate, which recognizes only "episode"
-    /// and "diagnostic".
     static let notificationKind = "remote-transcription"
 
     private static let logger = Logger(subsystem: "com.connor.opencast", category: "RemoteTranscriptionBackground")

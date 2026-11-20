@@ -1,11 +1,8 @@
 import Foundation
 import OpenCastVoiceBoostC
 
-/// Adaptation control state that survives processor recreation: gains,
-/// integrated-loudness summaries, the chain-loss EMA, and gate confidence.
-/// Everything is in the dB/LUFS or mean-square-energy domain, so a snapshot
-/// is portable across sample rates and can never replay audio; signal state
-/// (delay lines, filter state, energy rings) always starts fresh.
+/// Control state only, in the dB/LUFS or mean-square-energy domain, so it is portable across
+/// sample rates and never replays audio. Signal state always starts fresh.
 public struct VoiceBoostControlSnapshot: Sendable {
     var cSnapshot: OCVBControlSnapshot
 

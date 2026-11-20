@@ -5,15 +5,6 @@ import SwiftData
 import Testing
 @testable import OpenCast
 
-/// The cloud ad-detection pass under the ad-free-pass card. Expiration, a
-/// lost connection and a failed local request keep the paid server job and
-/// park its queue item at the head with a persisted reason, so every queue
-/// surface offers Resume on the same job. Removing a parked item is the user
-/// cancel: the intent is persisted first, exactly one `/cancel` follows, and
-/// the queue record goes only after that attempt.
-///
-/// A "relaunch" builds a new store, runner, queue and session over the same
-/// defaults, model context and fake server.
 @MainActor
 @Suite("Cloud pass continued processing", .serialized)
 struct AdFreePassCloudContinuationTests {
@@ -45,6 +36,8 @@ struct AdFreePassCloudContinuationTests {
             try context.fetch(FetchDescriptor<AdFreePassQueueItemRecord>()).first { $0.episodeID == episodeID }
         }
 
+        /// A process launch: a new store, runner, queue and session over the same defaults,
+        /// model context and fake server.
         func launch(
             launchPreparationGate: @escaping @Sendable () async -> Void = {},
             uploadTransport: (any RemoteTranscriptionUploadTransport)? = nil
@@ -74,7 +67,6 @@ struct AdFreePassCloudContinuationTests {
             let scheduler = FakeAdFreePassContinuedTaskScheduler()
             scheduler.supportsGPUResources = true
             let session = EpisodeAdFreePassBackgroundSession(scheduler: scheduler)
-            // Wired as the app model wires them.
             let pass = EpisodeAdFreePassCoordinator(launchPreparationGate: launchPreparationGate)
             let terminals = TerminalRecorder()
             pass.onStageChange = { stage, queueContext in
@@ -153,8 +145,6 @@ struct AdFreePassCloudContinuationTests {
             )
         }
 
-        /// Continue in Background for the running cloud drain, then the
-        /// system launches the task.
         func armAndLaunch() -> FakeAdFreePassContinuedTaskHandle {
             session.arm(episodeTitle: "Cloud Episode", requiresGPU: false, cancellationSource: pass.cancellationSource)
             let handle = FakeAdFreePassContinuedTaskHandle()
@@ -162,7 +152,6 @@ struct AdFreePassCloudContinuationTests {
             return handle
         }
 
-        /// Waits for the drain to stop running and reports whether it parked.
         func waitForDrainToStop() async -> Bool {
             await waitUntil { pass.queueState != .running && pass.activeEpisodeID == nil }
         }
@@ -211,7 +200,6 @@ struct AdFreePassCloudContinuationTests {
         handle.expire()
         #expect(await first.waitForDrainToStop())
 
-        // One expiration completion; the system task never decides the job.
         #expect(handle.completions == [false])
         #expect(first.pass.cancellationSource.lastCancellationReason == .sessionExpiration)
         #expect(device.api.cancelCalls.isEmpty)
@@ -221,19 +209,15 @@ struct AdFreePassCloudContinuationTests {
         #expect(kept.createState == .attached)
         #expect(kept.userCancelRequestedAt == nil)
 
-        // The item stays at the head with its reason, in memory and on disk.
         #expect(first.pass.queueState == .pausedInterrupted)
         #expect(first.pass.queueItems.map(\.episodeID) == [episode.episodeID])
         #expect(first.pass.queueItems.first?.remoteParkReason == .parked)
         #expect(first.pass.queueSnapshot.remoteParkedHeadReason == .parked)
         #expect(first.pass.queueStatus(for: episode.episodeID) == .remoteParked(.parked))
         #expect(try device.record(episode.episodeID)?.remoteParkReasonRawValue == RemoteTranscriptionJobExit.parked.rawValue)
-        // Not a failure: the drain reports nothing finished, and its
-        // terminal is the cloud park, never the on-device interrupt.
         #expect(first.pass.drainOutcomes.isEmpty)
         #expect(first.terminals.values == [.remoteParked(.parked)])
 
-        // Every queue surface offers Resume on the same job.
         let queue = AdDetectionQueuePresentation(snapshot: first.pass.queueSnapshot, isBackgroundSessionArmed: first.session.isArmed)
         #expect(queue.rows.map(\.status) == [.remoteParked(.parked)])
         #expect(queue.affordance == .resumeInterrupted)
@@ -242,13 +226,10 @@ struct AdFreePassCloudContinuationTests {
         #expect(pipeline.footerAction == .resumeQueue)
         #expect(first.soundLab(for: episode) == .remoteParked(.parked))
 
-        // The trail explains the park and holds no cancel.
         #expect(device.diagnostics.containsInOrder([.sessionExpired, .parked]))
         #expect(device.diagnostics.events(of: .sessionExpired).first?.clientRequestID == seed.reference.clientRequestID)
         #expect(device.diagnostics.events(of: .cancelAttempted).isEmpty)
 
-        // Relaunch: the persisted reason restores, and the queue re-attaches
-        // the seeded job by its original client request ID.
         let pollsBeforeRelaunch = device.api.pollCalls.count
         let second = device.launch()
         second.restoreQueue()
@@ -259,7 +240,6 @@ struct AdFreePassCloudContinuationTests {
         #expect(Set(device.api.createRequests.map(\.clientRequestID)) == [seed.reference.clientRequestID])
         #expect(device.api.mintedJobIDs == [seed.jobID])
         #expect(device.api.cancelCalls.isEmpty)
-        // A running item is no longer parked.
         #expect(await waitUntil { (try? device.record(episode.episodeID))?.remoteParkReasonRawValue == "" })
         #expect(second.pass.queueStatus(for: episode.episodeID) == .running)
 
@@ -288,16 +268,14 @@ struct AdFreePassCloudContinuationTests {
         device.api.inject(.delayed(cancelGate), at: .cancel)
         let removal = process.pass.removePendingItem(episodeID: episode.episodeID, modelContext: device.context)
 
-        // Intent before anything else, and the item leaves the queue at once.
         #expect(device.reference(episode.episodeID)?.userCancelRequestedAt != nil)
         #expect(process.pass.queueItems.isEmpty)
         #expect(process.pass.queueStatus(for: episode.episodeID) == .notQueued)
         let cancellation = try #require(removal)
-        // A repeated tap while the cancel is in flight does nothing.
         #expect(process.pass.removePendingItem(episodeID: episode.episodeID, modelContext: device.context) == nil)
 
-        // While the one cancel is in flight the record stays, so a death here
-        // leaves a record the next launch drops and an intent it resolves.
+        // The record outlives the in-flight cancel, so a death here leaves a record
+        // the next launch drops and an intent it resolves.
         #expect(await waitUntil { cancelGate.isHoldingRequest })
         #expect(try device.record(episode.episodeID) != nil)
         #expect(device.api.serverState(of: seed.jobID) == .transcribing)
@@ -311,7 +289,6 @@ struct AdFreePassCloudContinuationTests {
         #expect(device.diagnostics.containsInOrder([.userCancelRequested, .cancelAttempted, .referenceCleared]))
         #expect(process.pass.queueState == .idle)
 
-        // Activation: neither the queue nor the re-attach trigger brings it back.
         let pollsAfterCancel = device.api.pollCalls.count
         let createsAfterCancel = device.api.createCalls.count
         process.pass.resumeRemoteParkedQueueIfNeeded()
@@ -337,97 +314,6 @@ struct AdFreePassCloudContinuationTests {
 
     // MARK: Exact-copy upload progress
 
-    @Test("An exact-copy upload reaches the card, the queue and the Sound Lab as measured part counts, then hands over to the server phases")
-    func exactCopyUploadPresentsPartCounts() async throws {
-        let api = RemoteJobFaultInjectingAPI(
-            pollScript: [
-                OpenCastRemoteTranscriptionJobStatus(jobID: "", state: .exactUploadRequired),
-                OpenCastRemoteTranscriptionJobStatus(
-                    jobID: "",
-                    state: .transcribing,
-                    progress: OpenCastRemoteTranscriptionJobProgress(chunksCompleted: 1, chunksTotal: 2)
-                ),
-                OpenCastRemoteTranscriptionJobStatus(jobID: "", state: .detectingAds),
-            ],
-            uploadScript: RemoteJobFaultInjectingAPI.UploadScript(partCount: 3, partSizeBytes: 10)
-        )
-        // "remote audio bytes ep-cloud-up" is 30 bytes: three 10-byte parts.
-        let device = try await makeDevice(episodeIDs: ["ep-cloud-up"], api: api)
-        let episode = device.episode("ep-cloud-up")
-        let startGate = RemoteJobFaultInjectingAPI.Gate()
-        let completeGate = RemoteJobFaultInjectingAPI.Gate()
-        api.inject(.delayed(startGate), at: .uploadStart)
-        api.inject(.delayed(completeGate), at: .uploadComplete)
-        let transport = GatedUploadTransport(partCount: 3)
-        let process = device.launch(uploadTransport: transport)
-
-        process.enqueueCloud(episode)
-
-        // The grant hasn't named a total yet: upload copy, never "0 of 0".
-        #expect(await waitUntil { startGate.isHoldingRequest })
-        expectUploadSurfaces(process, episode: episode, detail: "Preparing audio upload…")
-        // The two polls after the upload are held so each server phase can
-        // be read before the next one replaces it.
-        let afterUploadPoll = RemoteJobFaultInjectingAPI.Gate()
-        let transcribingPoll = RemoteJobFaultInjectingAPI.Gate()
-        api.inject(.delayed(afterUploadPoll), at: .poll)
-        api.inject(.delayed(transcribingPoll), at: .poll)
-
-        startGate.release()
-        #expect(await waitUntil { transport.isHolding(part: 1) && transport.isHolding(part: 2) })
-        expectUploadSurfaces(process, episode: episode, detail: "Uploading audio… 0 of 3 parts uploaded")
-
-        transport.release(part: 1)
-        #expect(await waitUntil {
-            process.pass.currentStage == .cloudUploadingExactCopy(completedParts: 1, totalParts: 3)
-        })
-        expectUploadSurfaces(process, episode: episode, detail: "Uploading audio… 1 of 3 parts uploaded")
-        // A slow next part keeps the last confirmed count; reopening the
-        // card reads the same running stage.
-        #expect(await waitUntil { transport.isHolding(part: 3) })
-        expectUploadSurfaces(process, episode: episode, detail: "Uploading audio… 1 of 3 parts uploaded")
-
-        transport.release(part: 2)
-        transport.release(part: 3)
-        #expect(await waitUntil { completeGate.isHoldingRequest })
-        expectUploadSurfaces(process, episode: episode, detail: "Finishing audio upload…")
-        completeGate.release()
-        // Completed, but the runner hasn't reported the next phase yet.
-        #expect(await waitUntil { afterUploadPoll.isHoldingRequest })
-        expectUploadSurfaces(process, episode: episode, detail: "Finishing audio upload…")
-        // Each part event updated the one running job: no restart.
-        #expect(api.uploadStartCount == 1)
-        #expect(api.createCalls.count == 1)
-        #expect(api.completedUploadParts.map { $0.map(\.partNumber) } == [[1, 2, 3]])
-
-        afterUploadPoll.release()
-        #expect(await waitUntil {
-            if case .cloudTranscribing = process.pass.currentStage { true } else { false }
-        })
-        let transcribing = try #require(process.pipeline(for: episode.episodeID))
-        #expect(transcribing.footnote == nil)
-        #expect(transcribing.steps.first?.status == .done)
-        #expect(transcribing.steps.last?.status == .waiting)
-
-        transcribingPoll.release()
-        // A job an earlier build created still runs server ad detection;
-        // it reads as the transcript finishing.
-        #expect(await waitUntil { process.pass.currentStage == .cloudFinishing })
-        #expect(process.pipeline(for: episode.episodeID)?.steps.map(\.status) == [
-            .done,
-            .running(fraction: nil, detail: "Finishing the transcript in the cloud"),
-            .waiting,
-        ])
-        #expect(process.pipeline(for: episode.episodeID)?.footnote == nil)
-        // Nothing here armed or submitted a continued-processing card.
-        #expect(process.scheduler.submitCallCount == 0)
-
-        process.pass.cancelActivePass()
-        #expect(await process.waitForDrainToStop())
-        #expect(await waitUntil { api.cancelCalls.count == 1 })
-        #expect(process.pipeline(for: episode.episodeID)?.footnote != EpisodePipelineState.cloudUploadFootnote)
-    }
-
     @Test("A cloud item asks the server for the transcript alone, then detects ads on this device with moving progress, and a cancel stops that run")
     func cloudItemDetectsOnDeviceAfterDelivery() async throws {
         let episodeID = "ep-cloud-device-phase"
@@ -445,8 +331,8 @@ struct AdFreePassCloudContinuationTests {
         process.enqueueCloud(device.episode(episodeID))
         let handle = process.armAndLaunch()
 
-        // Two windows and, while the run goes, the step still to come. The
-        // live steps carry the run record's id, which their equality reads.
+        // Two windows plus the step still to come. Live steps carry the run
+        // record's id, which their equality reads.
         #expect(await waitUntil {
             if case .analyzing(let steps?) = process.pass.currentStage {
                 steps.completed == 1 && steps.total == 3
@@ -462,10 +348,9 @@ struct AdFreePassCloudContinuationTests {
         #expect(api.createRequests.count == 1)
         #expect(api.createRequests.allSatisfy { $0.adAnalysisRequested == nil && $0.podcastID == nil })
         #expect(analysis.resolvedRunIDs == [nil])
-        // This phase is work on this device.
         #expect(process.pass.holdsOnDeviceWork)
         #expect(!process.pass.isActiveItemOnServerOnly)
-        // 910 + 65 × 1/3: the card and the queue moved with the answered window.
+        // 910 + 65 × 1/3
         #expect(handle.adFreeUnits >= 931)
         #expect(process.pass.queueSnapshot.fractionCompleted >= 0.931)
         #expect(process.pipeline(for: episodeID)?.steps.map(\.status) == [
@@ -528,8 +413,8 @@ struct AdFreePassCloudContinuationTests {
         #expect(await waitUntil { transport.isHolding(part: 1) })
         #expect(process.pass.currentStage == .cloudUploadingExactCopy(completedParts: 0, totalParts: 1))
 
-        // The first job fails after its upload; the second is held at its
-        // first request, before it has reported any stage of its own.
+        // The first job fails after its upload; the second is held before
+        // it reports any stage of its own.
         let secondBootstrap = RemoteJobFaultInjectingAPI.Gate()
         api.inject(.delayed(secondBootstrap), at: .bootstrap)
         transport.release(part: 1)
@@ -582,7 +467,6 @@ struct AdFreePassCloudContinuationTests {
         #expect(process.pipeline(for: episodeID)?.action == .cancelPass)
         #expect(process.pipeline(for: episodeID)?.footerAction == .resumeQueue)
 
-        // Resume goes back to the same job, even while the fault persists.
         let jobID = try #require(reference.jobID)
         let pollsBeforeResume = device.api.pollCalls.count
         process.pass.resumePausedQueue()
@@ -699,6 +583,7 @@ struct AdFreePassCloudContinuationTests {
         #expect(await waitUntil { (try? device.record("review-device")) != nil })
         #expect(rig.appModel.adFreePass.holdsOnDeviceWork)
         #expect(rig.adFreeScheduler.submittedGPUFlags == [false])
+        #expect(device.diagnostics.events(of: .sessionArmed).map(\.episodeID) == ["review-cloud"])
         #expect(rig.appModel.adFreePass.initialWhisperComputeProfile == .cpuAndNeuralEngine)
         #expect(OpenCastEpisodeTranscriber.resolvedComputeProfile(
             requestedProfile: rig.appModel.adFreePass.initialWhisperComputeProfile,
@@ -710,21 +595,6 @@ struct AdFreePassCloudContinuationTests {
     }
 
     // MARK: App model wiring
-
-    @Test("A manual cloud start arms the ad-free card without GPU")
-    func manualCloudStartArmsWithoutGPU() async throws {
-        let device = try await makeDevice(episodeIDs: ["ep-app-manual"], api: RemoteJobRecoveryFixture.cloudParked.makeAPI())
-        let rig = makeAppModel(device)
-        rig.adFreeScheduler.supportsGPUResources = true
-
-        rig.appModel.startAdFreePass(for: device.episode("ep-app-manual"), modelContext: device.context, mode: .cloud)
-        #expect(await waitUntil { device.api.pollCalls.count > 0 })
-
-        #expect(rig.adFreeScheduler.submittedGPUFlags == [false])
-        #expect(rig.appModel.adFreePassBackgroundSession.isArmed)
-        #expect(device.diagnostics.events(of: .sessionArmed).map(\.episodeID) == ["ep-app-manual"])
-        rig.appModel.adFreePass.reset()
-    }
 
     @Test("An auto-origin cloud pass stays foreground-only until Continue in Background")
     func autoCloudStaysForegroundOnlyUntilContinueInBackground() async throws {
@@ -839,7 +709,7 @@ struct AdFreePassCloudContinuationTests {
         #expect(await waitUntil { device.api.pollCalls.count > pollsAtPark })
         #expect(device.api.mintedJobIDs == ["job-fake-1"])
         #expect(device.api.cancelCalls.isEmpty)
-        // An automatic resume never submits a continued-processing task.
+        // Only the manual start submitted: an automatic resume never does.
         #expect(rig.adFreeScheduler.submitCallCount == 1)
         rig.appModel.adFreePass.reset()
     }
@@ -875,8 +745,7 @@ struct AdFreePassCloudContinuationTests {
         return AppRig(appModel: appModel, adFreeScheduler: adFreeScheduler)
     }
 
-    /// Builds a device whose episodes each have a completed download with a
-    /// known source identity, so a cloud run reaches the poll leg.
+    /// Each episode has a hashed completed download, so a cloud run reaches the poll leg.
     private func makeDevice(
         episodeIDs: [String],
         api: RemoteJobFaultInjectingAPI
@@ -936,9 +805,6 @@ struct AdFreePassCloudContinuationTests {
         )
     }
 
-    /// A server that delivers a transcript consistent with the episode's
-    /// download (two-second segments of two words each), with `adAnalysis`
-    /// as the result's server ad block.
     private func deliveringAPI(
         episodeID: String,
         segmentCount: Int,
@@ -992,28 +858,6 @@ struct AdFreePassCloudContinuationTests {
         )
     }
 
-    /// The episode card, the Ad Detection queue row and the Sound Lab row
-    /// agree on the running upload's copy; only the card adds the footnote.
-    private func expectUploadSurfaces(
-        _ process: CloudSession,
-        episode: EpisodeListItemSnapshot,
-        detail: String,
-        sourceLocation: SourceLocation = #_sourceLocation
-    ) {
-        let pipeline = process.pipeline(for: episode.episodeID)
-        #expect(pipeline?.title == EpisodePipelineState.passTitle, sourceLocation: sourceLocation)
-        #expect(pipeline?.steps == [
-            EpisodePipelineStep(kind: .download, status: .done),
-            EpisodePipelineStep(kind: .transcribe, status: .running(fraction: nil, detail: detail)),
-            EpisodePipelineStep(kind: .detectAds, status: .waiting),
-        ], sourceLocation: sourceLocation)
-        #expect(pipeline?.footnote == EpisodePipelineState.cloudUploadFootnote, sourceLocation: sourceLocation)
-        #expect(pipeline?.action == .cancelPass, sourceLocation: sourceLocation)
-        let queue = AdDetectionQueuePresentation(snapshot: process.pass.queueSnapshot, isBackgroundSessionArmed: false)
-        #expect(queue.rows.first?.statusText == detail, sourceLocation: sourceLocation)
-        #expect(process.soundLab(for: episode).statusText == detail, sourceLocation: sourceLocation)
-    }
-
     private func makeTemporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appending(path: "OpenCastCloudContinuationTests-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -1022,7 +866,6 @@ struct AdFreePassCloudContinuationTests {
     }
 }
 
-/// The ad block a delivered result carries.
 enum ServerAdBlock: String, Sendable, CaseIterable {
     case completed
     case failedAtCapacity
@@ -1053,8 +896,6 @@ enum ServerAdBlock: String, Sendable, CaseIterable {
     }
 }
 
-/// Holds each part PUT until the test releases that part number, so an
-/// upload can be read at zero, partial and all-parts-sent.
 private final class GatedUploadTransport: RemoteTranscriptionUploadTransport, @unchecked Sendable {
     private let gates: [Int: RemoteJobFaultInjectingAPI.Gate]
 

@@ -1,5 +1,3 @@
-/// The stored Library layout choice. Automatic follows the window: a grid in
-/// regular width, a list in compact width.
 nonisolated enum LibraryLayoutPreference: String, CaseIterable, Identifiable, Sendable {
     case automatic
     case list

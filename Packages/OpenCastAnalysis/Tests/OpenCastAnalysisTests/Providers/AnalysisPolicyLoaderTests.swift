@@ -32,15 +32,6 @@ struct AnalysisPolicyLoaderTests {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    @Test("Before any refresh the baked copy is active with no reason")
-    func bakedBeforeRefresh() async {
-        defer { cleanUp() }
-        let snapshot = await loader(ScriptedPolicyFetcher(.offline)).snapshot()
-        #expect(snapshot.source == .baked)
-        #expect(snapshot.bundle == .baked)
-        #expect(snapshot.fallbackReason == nil)
-    }
-
     @Test("A verified newer bundle becomes active and survives a relaunch offline")
     func acceptsAndPersistsNewerBundle() async throws {
         defer { cleanUp() }
@@ -148,6 +139,7 @@ struct AnalysisPolicyLoaderTests {
         let snapshot = await loader.refresh()
         #expect(snapshot.bundle.bundleVersion == Self.nextVersion)
         #expect(snapshot.lastRefreshFailure == .rollback(accepted: Self.nextVersion, offered: Self.goodVersion))
+        #expect(await fetcher.fetchedPaths.last == "/v1/policies/analysis.sig")
 
         let relaunched = await self.loader(fetcher).refresh()
         #expect(relaunched.bundle.bundleVersion == Self.nextVersion)
@@ -255,18 +247,6 @@ struct AnalysisPolicyLoaderTests {
         let snapshot = await loader(fetcher).refresh()
         #expect(snapshot.source == .baked)
         #expect(snapshot.fallbackReason == .signatureInvalid("signature does not name its bundle"))
-    }
-
-    @Test("A rollback is refused before its bundle is fetched")
-    func rollbackRefusedEarly() async {
-        defer { cleanUp() }
-        let fetcher = ScriptedPolicyFetcher(AnalysisPolicyTestFixtures.next)
-        let loader = loader(fetcher)
-        _ = await loader.refresh()
-        await fetcher.serve(AnalysisPolicyTestFixtures.good)
-        let snapshot = await loader.refresh()
-        #expect(snapshot.lastRefreshFailure == .rollback(accepted: Self.nextVersion, offered: Self.goodVersion))
-        #expect(await fetcher.fetchedPaths.last == "/v1/policies/analysis.sig")
     }
 
     @Test("Refresh is daily after a success and hourly after a failure")

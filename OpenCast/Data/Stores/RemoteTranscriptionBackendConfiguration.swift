@@ -1,16 +1,10 @@
 import DeviceCheck
 import Foundation
 
-/// Backend selection for the remote transcription lanes. DEBUG builds use
-/// the development lane. Release builds resolve from AppTransaction before
-/// constructing a client: production StoreKit uses the production lane,
-/// Sandbox/Xcode uses prod-staging, and unknown environments fail closed.
 struct RemoteTranscriptionBackendConfiguration: Sendable {
     let workerBaseURL: URL
     let authentication: RemoteTranscriptionBackendAuthentication
     let isEnabled: Bool
-    /// Purchase-backend lanes require the verified AppTransaction JWS on
-    /// every bootstrap; the development lane ignores identity entirely.
     let requiresAppTransaction: Bool
 
     nonisolated static let current: Self = {
@@ -72,7 +66,6 @@ struct RemoteTranscriptionBackendConfiguration: Sendable {
     }
     #endif
 
-    /// Review/test lane: production App Attest + Sandbox/Xcode StoreKit.
     nonisolated static let prodStaging = Self(
         workerBaseURL: prodStagingWorkerBaseURL,
         authentication: .appAttest(
@@ -82,8 +75,6 @@ struct RemoteTranscriptionBackendConfiguration: Sendable {
         requiresAppTransaction: true
     )
 
-    /// Real-customer lane: isolated App Attest credentials and production
-    /// StoreKit state behind the custom domain.
     nonisolated static let production = Self(
         workerBaseURL: productionWorkerBaseURL,
         authentication: .appAttest(
@@ -106,7 +97,6 @@ struct RemoteTranscriptionBackendConfiguration: Sendable {
         }
     }
 
-    /// Fail-closed configuration kept for tests and kill-switch fallbacks.
     nonisolated static let disabled = Self(
         workerBaseURL: developmentWorkerBaseURL,
         authentication: .appAttest(

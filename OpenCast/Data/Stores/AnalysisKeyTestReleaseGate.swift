@@ -1,11 +1,8 @@
 import Foundation
 import Synchronization
 
-/// Under UI testing, holds each key test until the UI test releases it by
-/// posting the Darwin notification `releaseName(call:)` (call 1 is the
-/// first test of the launch), so a test decides when an older request
-/// finishes: after a newer one, or after its sheet closed. A held request
-/// ignores cancellation and still answers, late, as a slow provider would.
+/// UI testing only. A held request ignores cancellation and still answers late, as a slow provider
+/// would.
 nonisolated final class AnalysisKeyTestReleaseGate: Sendable {
     static let namePrefix = "com.connor.opencast.ui-testing.release-analysis-key-test."
 
@@ -20,8 +17,7 @@ nonisolated final class AnalysisKeyTestReleaseGate: Sendable {
 
     private let state = Mutex(State())
 
-    /// Listens for the releases of calls `1...calls`; the gate lives for the
-    /// process (the notification center holds it).
+    /// Never freed: the Darwin notification center holds a retained reference for the process.
     init(calls: Int = 8) {
         let center = CFNotificationCenterGetDarwinNotifyCenter()
         let observer = Unmanaged.passRetained(self).toOpaque()
@@ -43,7 +39,6 @@ nonisolated final class AnalysisKeyTestReleaseGate: Sendable {
         }
     }
 
-    /// Returns once `call` is released, at once if it already was.
     func wait(call: Int) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let releasedAlready = state.withLock { state -> Bool in

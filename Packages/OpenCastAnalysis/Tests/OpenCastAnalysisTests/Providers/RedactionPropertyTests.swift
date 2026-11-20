@@ -244,10 +244,6 @@ enum FragmentOracle {
         return (texts, complete)
     }
 
-    static func texts(ofArtifact bytes: String) -> [String] {
-        artifactTexts(bytes).texts
-    }
-
     /// The first fragment of a registered secret found in the artifact, if
     /// any, or `undecided` when the oracle's own bounds were reached. A
     /// secret too short for a window is looked for whole.
@@ -589,8 +585,6 @@ struct RedactionPropertyTests {
         return (secrets, text, .object(members))
     }
 
-    /// `REDACTION_PROPERTY_CASES` sets how many (default 500; the hand-back
-    /// run used 100,000).
     /// Provider bodies carrying `text` where the recorder reads strings: a
     /// Gemini and an OpenAI answer, and both providers' error envelopes.
     static func providerBodies(_ text: String) -> [(provider: AnalysisProvider, status: Int, body: String)] {
@@ -923,8 +917,6 @@ extension RedactionPropertyTests {
         let other = Data("UoeVAH22n3".utf8).base64EncodedString()
         let escapedOther = other.unicodeScalars.map { String(format: "\\u%04x", $0.value) }.joined()
         let cases = [
-            // The shape the 100,000-case run found: a padded encoding, then
-            // entities in base64 straight after it.
             ("after padding", other + entityBase64),
             ("escaped, after padding", escapedOther + entityBase64),
             ("after base64 characters", "id_" + encoded),

@@ -1,8 +1,6 @@
 import Foundation
 
-/// What Recap and Ask can do right now, resolved from model eligibility, the
-/// quota snapshot, and the last request failure. Ordered so the most
-/// permanent reason wins: hardware, then the build, then quota, then network.
+/// The most permanent reason wins: hardware, then the build, then quota, then network.
 nonisolated enum TranscriptIntelligenceAvailability: Equatable, Sendable {
     case unsupportedDevice
     case appleIntelligenceOff

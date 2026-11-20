@@ -3,9 +3,6 @@ import Foundation
 import OpenCastTranscription
 import SwiftData
 
-/// Seeds a completed transcript and ad analysis for the primary Orbit Report
-/// episode so the App Store set can show the ad-marked timeline, the badged
-/// transcript, and the completed Sound Lab state from records alone.
 enum AppStoreScreenshotSeedTranscript {
     /// All span times sit inside the 300s seed WAV: the Now Playing slider
     /// tracks the real AVPlayer item duration, not the episode metadata.
@@ -86,8 +83,7 @@ enum AppStoreScreenshotSeedTranscript {
             transcriptFingerprint: analysisFingerprint
         )
         let spans = adSpans()
-        // Marketing shots must never surface a vendor model name; an empty
-        // model string keeps the record valid while hiding that detail.
+        // Marketing shots never show a vendor model name; an empty model string is still valid.
         let analysisDocument = EpisodeAdAnalysisDocument(
             schemaVersion: 1,
             episodeID: episodeID,
@@ -124,11 +120,9 @@ enum AppStoreScreenshotSeedTranscript {
         return transcriptDocument
     }
 
-    /// Three ≥0.8-confidence spans map to solid auto-skip zones ("3 zones
-    /// marked."); the 0.62 cross-promo renders as a dimmed display-only zone.
-    /// Same-tier gaps stay over the mapper's 1s merge threshold and the
-    /// first zone past the seeded 92s playhead starts at 205s, so nothing
-    /// auto-skips while the captures run.
+    /// Spans at 0.8 or more become auto-skip zones ("3 zones marked."), the 0.62 one a dimmed zone.
+    /// Same-tier gaps stay over the mapper's 1s merge threshold, and the first zone after the
+    /// seeded 92s playhead starts at 205s, so nothing skips while the captures run.
     private static func adSpans() -> [EpisodeAdAnalysisSpan] {
         [
             EpisodeAdAnalysisSpan(
@@ -178,9 +172,8 @@ enum AppStoreScreenshotSeedTranscript {
         ]
     }
 
-    // The word "light" appears only here (segments 9 and 18), never in the
-    // episode's title, summary, or show notes, so the search shot's hit for
-    // this episode comes with a transcript snippet.
+    // "light" appears only in segments 9 and 18, never in the title, summary or show notes, so
+    // the search shot's hit for this episode shows a transcript snippet.
     private static func transcriptSegments() -> [OpenCastTranscriptSegment] {
         let lines: [(start: TimeInterval, end: TimeInterval, text: String)] = [
             (0, 7, "It's four in the morning on a mountain in the desert, the dome is open, and a mirror the size of a swimming pool is about to open its eye for the first time."),

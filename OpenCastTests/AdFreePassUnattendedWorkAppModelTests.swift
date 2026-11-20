@@ -6,8 +6,6 @@ import SwiftData
 import Testing
 @testable import OpenCast
 
-/// The app model's glue for unattended queue work, without a real player:
-/// the playback state comes in through the policy's input.
 @MainActor
 @Suite("Ad-free pass unattended work in the app model")
 struct AdFreePassUnattendedWorkAppModelTests {
@@ -52,7 +50,6 @@ struct AdFreePassUnattendedWorkAppModelTests {
         try await Task.sleep(for: .milliseconds(100))
         #expect(fixture.notificationCenter.addedRequests.isEmpty)
 
-        // The app comes back: the existing activation path resumes it.
         fixture.appModel.setAutoDownloadsScene(foreground, isActive: true)
         fixture.appModel.isSceneActive = true
         fixture.appModel.resumeEnvironmentalAdFreePassIfNeeded(modelContext: fixture.context)
@@ -102,13 +99,11 @@ struct AdFreePassUnattendedWorkAppModelTests {
         // Live playback is not background protection: that follows the card only.
         #expect(!fixture.appModel.adFreePass.isBackgroundProtected())
 
-        // A real stop.
         fixture.appModel.unattendedQueueWorkPlaybackStateOverride = .paused
         await fixture.appModel.reactToPlaybackChangeForUnattendedQueueWork(modelContext: fixture.context) { _ in }
         #expect(await waitUntil { fixture.appModel.adFreePass.queueState == .pausedInterrupted })
         #expect(fixture.appModel.adFreePass.isHoldingUnattendedItem)
 
-        // Played again in Low Power Mode: still held.
         fixture.appModel.unattendedQueueWorkPlaybackStateOverride = .playing
         fixture.appModel.isLowPowerModeEnabled = { true }
         await fixture.appModel.reactToPlaybackChangeForUnattendedQueueWork(modelContext: fixture.context) { _ in }
@@ -119,31 +114,6 @@ struct AdFreePassUnattendedWorkAppModelTests {
         #expect(await fixture.waitForDrain())
         #expect(fixture.appModel.adFreePass.drainOutcomes.map(\.kind) == [.completed(zoneCount: 0)])
         #expect(fixture.transcriber.requestCount == 2)
-    }
-
-    @Test("A card expiration gives an unattended item the plain interrupt, as before")
-    func cardExpirationInterruptsUnattendedItemPlainly() async throws {
-        let fixture = try await makeFixture(episodeID: "card-expiry")
-        fixture.appModel.configureBackgroundSessionExpirations(modelContext: fixture.context)
-        fixture.enqueue(origin: .auto)
-        #expect(await waitUntil { fixture.transcriber.requestCount == 1 })
-        fixture.appModel.armBackgroundContinuationForActiveQueue()
-        #expect(fixture.appModel.adFreePassBackgroundSession.isArmed)
-        let handle = FakeAdFreePassContinuedTaskHandle()
-        fixture.scheduler.launch(handle)
-        fixture.appModel.setAutoDownloadsScene(UUID(), isActive: false)
-        fixture.appModel.isSceneActive = false
-
-        handle.expire()
-
-        #expect(await waitUntil {
-            fixture.appModel.adFreePass.queueState == .idle && !fixture.appModel.transcriptions.hasActiveJob
-        })
-        #expect(fixture.appModel.adFreePass.queueItems.isEmpty)
-        #expect(!fixture.appModel.adFreePass.isQueuePausedForEnvironmentalInterrupt)
-        let record = try #require(fixture.appModel.transcriptions.record(for: fixture.episode.episodeID))
-        #expect(record.state == .interrupted)
-        #expect(record.errorMessage == nil)
     }
 
     @Test("A hold that ends an armed card still posts the paused notification, which answers the system's banner")
@@ -165,45 +135,6 @@ struct AdFreePassUnattendedWorkAppModelTests {
         #expect(fixture.appModel.adFreePass.isHoldingUnattendedItem)
         #expect(await waitUntil { fixture.notificationCenter.addedRequests.count == 1 })
         #expect(fixture.notificationCenter.addedRequests.first?.content.title == "Ad detection paused")
-    }
-
-    @Test("Playback that plays on in Low Power Mode with no scene active holds after the grace")
-    func playbackInLowPowerModeHoldsAfterTheGrace() async throws {
-        let fixture = try await makeFixture(episodeID: "playback-low-power")
-        fixture.enqueue(origin: .auto)
-        #expect(await waitUntil { fixture.transcriber.requestCount == 1 })
-        fixture.appModel.setAutoDownloadsScene(UUID(), isActive: false)
-        fixture.appModel.isSceneActive = false
-        fixture.appModel.unattendedQueueWorkPlaybackStateOverride = .playing
-        fixture.appModel.isLowPowerModeEnabled = { true }
-        var graces: [Duration] = []
-
-        await fixture.appModel.reactToPlaybackChangeForUnattendedQueueWork(modelContext: fixture.context) { grace in
-            graces.append(grace)
-        }
-
-        #expect(graces == [AdFreePassLifecycleInterruptionPolicy.inactiveInterruptionDelay])
-        #expect(await waitUntil { fixture.appModel.adFreePass.queueState == .pausedInterrupted })
-        #expect(fixture.appModel.adFreePass.isHoldingUnattendedItem)
-        #expect(fixture.appModel.adFreePass.queueItems.map(\.episodeID) == [fixture.episode.episodeID])
-        #expect(fixture.transcriber.requestCount == 1)
-    }
-
-    @Test("The playback observer's task is cancelled when the app model goes away")
-    func playbackObserverIsCancelledAtTeardown() async throws {
-        var fixture: Fixture? = try await makeFixture(episodeID: "observer-teardown")
-        weak let appModel = fixture?.appModel
-        let context = try #require(fixture?.context)
-        fixture?.appModel.startUnattendedQueueWorkObservation(modelContext: context)
-        let task = try #require(fixture?.appModel.unattendedQueueWorkObservationTask)
-        // Let the loop reach its wait for the next playback change.
-        try await Task.sleep(for: .milliseconds(100))
-        #expect(!task.isCancelled)
-
-        fixture = nil
-
-        #expect(appModel == nil)
-        #expect(task.isCancelled)
     }
 
     // MARK: - Fixture

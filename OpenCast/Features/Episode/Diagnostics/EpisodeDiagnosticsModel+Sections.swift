@@ -1,9 +1,8 @@
 import Foundation
 import OpenCastPlayback
 
-/// Row assembly for every diagnostics section. Values are deliberately raw
-/// and unredacted — full URLs, paths, and hashes — because the report exists
-/// to debug real incidents.
+/// Values stay raw and unredacted (full URLs, paths, hashes): the report exists to debug real
+/// incidents.
 extension EpisodeDiagnosticsModel {
     static func reportSection(generatedAt: Date) -> EpisodeDiagnosticsSection {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
@@ -413,9 +412,8 @@ extension EpisodeDiagnosticsModel {
         return description
     }
 
-    /// The publisher and show-notes rows lead, ahead of the record guard,
-    /// because most chaptered episodes were never transcribed and so have
-    /// no record.
+    /// The publisher and show-notes rows come before the record guard: most chaptered episodes
+    /// were never transcribed, so they have no record.
     func chaptersSummarySection(
         appModel: OpenCastAppModel,
         publisherEntry: PublisherChaptersCacheEntry?,

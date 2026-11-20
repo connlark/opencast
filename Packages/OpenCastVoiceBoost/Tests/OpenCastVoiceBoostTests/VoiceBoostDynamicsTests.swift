@@ -2,15 +2,11 @@ import Foundation
 import Testing
 @testable import OpenCastVoiceBoost
 
-/// Dynamics coverage: the configurable soft-knee compressor's static
-/// curve (D8) and the adaptation control snapshot that survives processor
-/// recreation (I3).
 struct VoiceBoostDynamicsTests {
     private let sampleRate = 48_000.0
 
-    /// Equal attack/release turn the envelope EMA into a plain low-pass of
-    /// the squared signal, so a steady sine settles the envelope at exactly
-    /// its mean square and the static curve can be measured tightly.
+    // Equal attack and release make the envelope a plain low-pass of the
+    // squared signal, so a steady sine settles it at exactly its mean square.
     private func curveConfiguration(
         thresholdDB: Double = -20,
         ratio: Double = 2,
@@ -31,28 +27,6 @@ struct VoiceBoostDynamicsTests {
         )
     }
 
-    private func expectedReductionDB(
-        envelopeDB: Double,
-        thresholdDB: Double,
-        ratio: Double,
-        kneeWidthDB: Double,
-        maximumReductionDB: Double
-    ) -> Double {
-        let slope = 1 - 1 / ratio
-        let overDB = envelopeDB - thresholdDB
-        let halfKnee = kneeWidthDB / 2
-        let reduction: Double = if overDB > halfKnee {
-            slope * overDB
-        } else if overDB > -halfKnee {
-            slope * (overDB + halfKnee) * (overDB + halfKnee) / (2 * kneeWidthDB)
-        } else {
-            0
-        }
-        return min(reduction, maximumReductionDB)
-    }
-
-    /// Processes a steady sine whose envelope lands at `envelopeDB` and
-    /// returns the measured steady-state gain reduction in dB.
     private func measuredReductionDB(
         envelopeDB: Double,
         configuration: VoiceBoostConfiguration
@@ -83,19 +57,14 @@ struct VoiceBoostDynamicsTests {
 
     @Test(
         "Static gain curve matches the piecewise soft-knee definition",
-        arguments: [-30.0, -24.0, -21.5, -20.0, -18.0, -16.0, -12.0, -8.0]
-    )
-    func staticCurveMatchesSoftKneeDefinition(envelopeDB: Double) {
-        let configuration = curveConfiguration()
-        let expected = expectedReductionDB(
-            envelopeDB: envelopeDB,
-            thresholdDB: configuration.compressorThresholdDB,
-            ratio: configuration.compressorRatio,
-            kneeWidthDB: configuration.compressorKneeWidthDB,
-            maximumReductionDB: configuration.compressorMaximumReductionDB
+        arguments: zip(
+            [-30.0, -24.0, -21.5, -20.0, -18.0, -16.0, -12.0, -8.0],
+            [0.0, 0.0, 0.09375, 0.375, 1.0417, 2.0, 4.0, 6.0]
         )
-        let measured = measuredReductionDB(envelopeDB: envelopeDB, configuration: configuration)
-        #expect(abs(measured - expected) < 0.15)
+    )
+    func staticCurveMatchesSoftKneeDefinition(envelopeDB: Double, expectedReductionDB: Double) {
+        let measured = measuredReductionDB(envelopeDB: envelopeDB, configuration: curveConfiguration())
+        #expect(abs(measured - expectedReductionDB) < 0.15)
     }
 
     @Test("The maximum-reduction cap is enforced")
@@ -156,9 +125,6 @@ struct VoiceBoostDynamicsTests {
         #expect(garbageBuffer == defaultBuffer)
     }
 
-    /// Pins the spec's "threshold after loudness gain" wording: a sine far
-    /// below the threshold at the input only compresses because auto gain
-    /// lifts it past the threshold first.
     @Test("The compressor envelope is measured post-auto-gain")
     func compressorEnvelopeIsPostAutoGain() {
         // Envelope -26 dB at the input, threshold -20: pre-gain metering
@@ -209,7 +175,6 @@ struct VoiceBoostDynamicsTests {
 
     // MARK: - Control snapshot (I3)
 
-    /// Converges gain on a quiet fixture and returns the processor.
     private func convergedProcessor(
         sampleRate: Double,
         seconds: Double = 20
@@ -249,9 +214,8 @@ struct VoiceBoostDynamicsTests {
         restored.apply(controlSnapshot: snapshot)
         #expect(abs(restored.metrics.currentAutoGainDB - convergedGain) < 1e-12)
 
-        // The low-confidence cap must not re-clamp: gain stays high through
-        // the first post-restore seconds where a fresh processor would sit
-        // at the +3 dB cap.
+        // The low-confidence cap must not re-clamp: a fresh processor sits at
+        // its +3 dB cap for these first seconds.
         var buffer = VoiceBoostFixtureGenerator.speechLike(
             amplitude: 0.05,
             sampleRate: 44_100,
@@ -282,7 +246,6 @@ struct VoiceBoostDynamicsTests {
         let convergedGain = processor.metrics.currentAutoGainDB
         #expect(convergedGain > 5)
 
-        // Seek policy: measurement and signal state reset, control re-seeded.
         let snapshot = processor.controlSnapshot
         processor.reset()
         processor.apply(controlSnapshot: snapshot)

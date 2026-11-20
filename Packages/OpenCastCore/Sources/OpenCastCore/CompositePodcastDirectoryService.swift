@@ -1,9 +1,5 @@
 import Foundation
 
-/// Queries Apple and Podcast Index concurrently and merges through
-/// `DirectoryResultMerger`. Apple is the ranking authority; either
-/// provider alone carries the results when the other fails, and the
-/// search errors only when both fail (Apple's error surfaces).
 public struct CompositePodcastDirectoryService: PodcastDirectoryService {
     public static let defaultProviderTimeout: Duration = .seconds(10)
 

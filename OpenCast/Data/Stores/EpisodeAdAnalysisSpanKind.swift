@@ -6,9 +6,8 @@ nonisolated enum EpisodeAdAnalysisSpanKind: String, Codable, CaseIterable, Senda
     case houseOrNetworkPromo = "house_or_network_promo"
     case unknown
 
-    /// A span kind this build doesn't know must never fail the decode deep in
-    /// Codable — it lands as `.unknown`, and policy layers treat any response
-    /// carrying one as untrustworthy (fall back, never skip on it).
+    /// An unknown kind decodes as `.unknown` rather than failing the decode; a response carrying
+    /// one is untrustworthy and is never skipped on.
     init(from decoder: any Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
         self = Self(rawValue: raw) ?? .unknown

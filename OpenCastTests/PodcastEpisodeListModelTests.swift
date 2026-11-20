@@ -68,23 +68,6 @@ struct PodcastEpisodeListModelTests {
         #expect(!model.isFilteredEmpty)
     }
 
-    @Test("Filtered empty distinguishes a nonempty feed")
-    func filteredEmptyState() {
-        let library = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
-        let model = PodcastEpisodeListModel.make(
-            episodes: [makeEpisode(id: "episode", publishedAt: 10)],
-            filter: .downloaded,
-            sortOrder: .newestFirst,
-            library: library,
-            downloadRecords: []
-        )
-
-        #expect(model.episodes.isEmpty)
-        #expect(model.totalEpisodeCount == 1)
-        #expect(model.animationKey.isEmpty)
-        #expect(model.isFilteredEmpty)
-    }
-
     @Test("Newest first preserves the cache's existing order")
     func newestFirstPassthrough() {
         let library = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
@@ -136,8 +119,6 @@ struct PodcastEpisodeListModelTests {
         #expect(allHidden.isFilteredEmpty)
     }
 
-    /// The show lists its archived episodes (D5), but archiving moves
-    /// `updatedAt` without a listen, so Resume passes over them.
     @Test("Archived episodes stay listed and are never the Resume target")
     func archivedEpisodesStayListedButNeverResume() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

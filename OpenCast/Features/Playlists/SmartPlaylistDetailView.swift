@@ -1,14 +1,8 @@
 import SwiftData
 import SwiftUI
 
-/// One smart playlist: the tinted hero with its rule chips, then the episodes
-/// the rule matches, in rule order. Tapping a row plays from there. The rule
-/// decides membership and order, so rows cannot be reordered or removed;
-/// changing a chip re-evaluates the list in place.
-///
-/// The body reads the evaluation once, through the app model's memo, which
-/// recomputes only when a token the rule depends on changes. The body never
-/// reads the playlist items, Hide Played or Up Next.
+/// The body reads the evaluation once, through the app model's memo, and never reads the
+/// playlist items, Hide Played or Up Next.
 struct SmartPlaylistDetailView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -102,9 +96,7 @@ struct SmartPlaylistDetailView: View {
         reduceMotion ? nil : .default
     }
 
-    /// The candidate rule `OpenCastAppModel` plays a smart playlist with, so
-    /// Play Next and Play Last are enabled exactly when they would queue
-    /// something.
+    /// Must match the candidate rule `OpenCastAppModel` plays a smart playlist with.
     private func isCandidate(_ episode: EpisodeListItemSnapshot) -> Bool {
         !appModel.library.progressSummary(for: episode).isCompleted
     }

@@ -1,8 +1,6 @@
 import Foundation
 
-/// Playlist durations in whole minutes: "6h 20m" on screen and
-/// "6 hours 20 minutes" for VoiceOver. A positive duration never shows as
-/// zero minutes.
+/// Whole minutes; a positive duration never shows as zero.
 nonisolated enum PlaylistDurationFormat {
     static func short(_ duration: TimeInterval) -> String {
         let (hours, minutes) = components(duration)

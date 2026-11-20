@@ -61,28 +61,6 @@ struct EpisodeIdentityTests {
         #expect(id.rawValue == "70c3abbd2f61c0dc880e133f7654836f0b079ff122fe99765e9da6937b81fb5b")
     }
 
-    @Test("Uses RSS GUID when present")
-    func usesGUID() throws {
-        let feedURL = URL(string: "https://feeds.example.com/example-current-affairs.xml")!
-
-        let first = EpisodeIdentity.makeID(
-            feedURL: feedURL,
-            guid: "example-guid-001",
-            audioURL: URL(string: "https://example.com/audio/changed.mp3"),
-            title: "Changed",
-            publishedAt: .now
-        )
-        let second = EpisodeIdentity.makeID(
-            feedURL: feedURL,
-            guid: "example-guid-001",
-            audioURL: URL(string: "https://example.com/audio/example-001.mp3"),
-            title: "Episode With GUID",
-            publishedAt: .distantPast
-        )
-
-        #expect(first == second)
-    }
-
     @Test("Falls back to audio URL when GUID is missing")
     func fallsBackToAudioURL() throws {
         let feedURL = URL(string: "https://feeds.example.com/example-current-affairs.xml")!

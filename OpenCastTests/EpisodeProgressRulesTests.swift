@@ -11,15 +11,12 @@ struct EpisodeProgressRulesTests {
         #expect(!EpisodeProgressRules.isPlayed(position: 0, duration: 1_000))
         #expect(!EpisodeProgressRules.isPlayed(position: 500, duration: 0))
 
-        // Long episode: fixed 60 s remaining threshold.
         #expect(EpisodeProgressRules.isPlayed(position: 941, duration: 1_000))
         #expect(!EpisodeProgressRules.isPlayed(position: 940, duration: 1_000))
 
-        // Short episode: the threshold halves with duration.
         #expect(EpisodeProgressRules.isPlayed(position: 51, duration: 100))
         #expect(!EpisodeProgressRules.isPlayed(position: 50, duration: 100))
 
-        // Positions past the end clamp instead of reading as unplayed.
         #expect(EpisodeProgressRules.isPlayed(position: 2_000, duration: 1_000))
     }
 
@@ -38,8 +35,7 @@ struct EpisodeProgressRulesTests {
         #expect(!EpisodeProgressRules.hasMeaningfulDurationChange(.infinity, .infinity))
         #expect(EpisodeProgressRules.hasMeaningfulDurationChange(.infinity, 100))
         #expect(EpisodeProgressRules.hasMeaningfulDurationChange(100, .infinity))
-        // NaN never equals itself, so a NaN pair always reads as changed —
-        // the write path then persists whatever the sanitizers hand it.
+        // NaN never equals itself, so a NaN pair reads as changed.
         #expect(EpisodeProgressRules.hasMeaningfulDurationChange(.nan, .nan))
     }
 

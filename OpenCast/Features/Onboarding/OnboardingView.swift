@@ -11,12 +11,6 @@ struct OnboardingView: View {
     let onCompleted: () -> Void
 
     @State private var selectedPage: OnboardingPage
-    /// Every case shows, in declaration order. The current revision
-    /// (2026-07-07): the Tiny Whisper step always shows. Whisper is
-    /// load-bearing — it's the ad-free-pass engine on devices without
-    /// background GPU and the fallback everywhere
-    /// else — so onboarding fronts its download for everyone. Apple speech
-    /// assets install lazily when a surface first needs them.
     private let pages = OnboardingPage.allCases
     @State private var selectedAddMode = AddPodcastMode.search
     @State private var feedURLString: String
@@ -339,8 +333,6 @@ struct OnboardingView: View {
 
         do {
             try await Task.sleep(for: Self.whisperModelInstallToastDuration)
-        } catch is CancellationError {
-            return
         } catch {
             return
         }

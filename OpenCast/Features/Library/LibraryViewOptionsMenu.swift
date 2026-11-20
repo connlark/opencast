@@ -1,8 +1,6 @@
 import SwiftData
 import SwiftUI
 
-/// The Library's layout and sort menu: the shared `LayoutPickerMenu` plus
-/// Sort By, bound to `LibraryDisplaySettingsStore`.
 struct LibraryViewOptionsMenu: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext

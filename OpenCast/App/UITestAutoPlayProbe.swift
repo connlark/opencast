@@ -1,8 +1,6 @@
 import Foundation
 import SwiftData
 
-/// Starts playback of a seeded episode at launch so perf harnesses can measure
-/// steady-state playback without UI automation. UI-testing mode only.
 enum UITestAutoPlayProbe {
     nonisolated static let episodeTitleEnvironmentKey = "OPENCAST_UI_TEST_AUTOPLAY_EPISODE_TITLE"
 

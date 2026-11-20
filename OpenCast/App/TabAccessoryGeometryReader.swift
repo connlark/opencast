@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// Applied inside the accessory closure, where the system reports the
-/// accessory's placement: reports the placement and the accessory's frame in
-/// the global space whenever either changes.
+/// Must sit inside the accessory closure: only there does the system report
+/// the accessory's placement.
 struct TabAccessoryGeometryReader: ViewModifier {
     @Environment(\.tabViewBottomAccessoryPlacement) private var placement
 

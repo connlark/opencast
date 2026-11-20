@@ -13,18 +13,14 @@ public final class URLSessionOpenCastHTTPClient: OpenCastHTTPClient, @unchecked 
 
     public init(session: URLSession) {
         self.session = session
-        // Preserve injected transports/protocol classes and credentials while
-        // giving RSS its own cache-free transfer deadlines in every app path.
+        // Copies the injected configuration to keep its protocol classes and credentials.
         let configuration = session.configuration
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = 20
         configuration.timeoutIntervalForResource = 300
-        // `waitsForConnectivity` stays unset on purpose: an unsatisfied path
-        // must fail at once with `.notConnectedToInternet`, which the app's
-        // refresh path classifies as unreachable (no per-feed log or hold).
-        // Enabling it would turn that into a timeout and stop the
-        // classification from ever firing.
+        // `waitsForConnectivity` stays unset: an unsatisfied path must fail at once with
+        // `.notConnectedToInternet`, which refresh classifies as unreachable, not a timeout.
         feedSession = URLSession(configuration: configuration)
     }
 

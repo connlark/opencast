@@ -1,8 +1,6 @@
 import SwiftUI
 
-/// Zero-sized view that owns the transcript screen's playback observation:
-/// only this view re-evaluates on the 1 Hz position tick, keeping the
-/// segment list's body out of the per-tick render path.
+/// Zero-sized, so only this view re-evaluates on the 1 Hz position tick, not the segment list.
 struct TranscriptPlaybackObserver: View {
     @Environment(OpenCastAppModel.self) private var appModel
 

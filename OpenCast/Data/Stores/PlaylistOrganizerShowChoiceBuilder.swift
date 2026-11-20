@@ -1,9 +1,6 @@
 import Foundation
 
-/// Builds the show picker's rows from the library's subscriptions.
 enum PlaylistOrganizerShowChoiceBuilder {
-    /// Library order, one choice per feed URL (first record wins); title and
-    /// artwork from the podcast cache first, the subscription second.
     static func make(
         subscriptions: [SubscriptionRecord],
         podcastCache: (String) -> PodcastCacheSnapshot?,

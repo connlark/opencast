@@ -1,15 +1,11 @@
 import Foundation
 
-/// A smart playlist's saved rule, stored as JSON in `PlaylistRecord.ruleJSON`.
-/// Clauses combine with AND and are evaluated over the subscribed library.
-/// Every optional defaults to nil and an absent key decodes to that nil, so
-/// only `.default` carries a limit.
+/// Persisted and synced as JSON in `PlaylistRecord.ruleJSON`.
 nonisolated struct PlaylistRule: Codable, Hashable, Sendable {
     static let currentVersion = 1
     static let statusOptions: [PodcastEpisodeFilter] = [.all, .unplayed, .inProgress, .played]
     static let agePresets: [Int?] = [nil, 7, 14, 30, 90, 365]
     static let limitPresets: [Int?] = [10, 25, 50, 100, nil]
-    /// Unplayed, all shows, newest first, 25 episodes.
     static let `default` = PlaylistRule(limit: 25)
 
     var version = PlaylistRule.currentVersion
@@ -46,11 +42,10 @@ nonisolated struct PlaylistRule: Codable, Hashable, Sendable {
     }
 }
 
-// The decoder lives in an extension so the primary declaration keeps the
-// memberwise initializer that `.default`, the rule chips and the tests use.
+// In an extension so the primary declaration keeps its memberwise initializer.
 nonisolated extension PlaylistRule {
-    /// `version` is required and must be 1; every other key falls back to
-    /// its property default, so `{"version":1}` stays readable.
+    /// Every key but `version` falls back to its property default, so `{"version":1}` stays
+    /// readable.
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let version = try container.decode(Int.self, forKey: .version)
@@ -97,10 +92,8 @@ nonisolated extension PlaylistRule {
         }
     }
 
-    /// The canonical form: show IDs deduplicated and sorted so toggle order
-    /// never changes the stored rule, priority IDs deduplicated in their rank
-    /// order and confined to the listed shows, out-of-range numbers dropped,
-    /// and the Downloaded filter moved to its own clause.
+    /// Show IDs sort so toggle order never changes the stored rule; priority IDs keep their rank
+    /// order.
     func normalized() -> PlaylistRule {
         var rule = self
         if let podcastIDs {
@@ -136,9 +129,7 @@ nonisolated extension PlaylistRule {
         return rule
     }
 
-    /// The normalized rule with every listed or prioritized show that
-    /// `isMoved` matches replaced by `newPodcastID`, for a subscription that
-    /// moved to a new feed URL; nil when the rule names none of them.
+    /// nil when the rule names none of the moved shows.
     func replacingPodcastIDs(
         where isMoved: (String) -> Bool,
         with newPodcastID: String
@@ -171,7 +162,6 @@ nonisolated extension PlaylistRule {
         downloadedOnly && status == .all ? "arrow.down.circle" : status.systemImage
     }
 
-    /// Counts only the listed shows that are still subscribed.
     func showsTitle(subscribedPodcastIDs: Set<String>) -> String {
         guard let podcastIDs else {
             return "All Shows"
@@ -183,7 +173,6 @@ nonisolated extension PlaylistRule {
         return String(AttributedString(localized: "^[\(count) Show](inflect: true)").characters)
     }
 
-    /// "No Priority", "1 Show First", "2 Shows First"; counts only subscribed shows.
     func priorityTitle(subscribedPodcastIDs: Set<String>) -> String {
         let count = priorityPodcastIDs?.count(where: { subscribedPodcastIDs.contains($0) }) ?? 0
         guard count > 0 else {
@@ -212,7 +201,6 @@ nonisolated extension PlaylistRule {
         Self.limitTitle(limit: limit)
     }
 
-    /// "Any Length", "Under 45 min", "Over 1 hr", "15–45 min".
     static func lengthTitle(minimumMinutes: Int?, maximumMinutes: Int?) -> String {
         switch (minimumMinutes, maximumMinutes) {
         case (nil, nil):
@@ -228,7 +216,6 @@ nonisolated extension PlaylistRule {
         }
     }
 
-    /// "Any Length", "Under 45 minutes", "Over 1 hour", "15 to 45 minutes".
     static func lengthAccessibilityTitle(minimumMinutes: Int?, maximumMinutes: Int?) -> String {
         switch (minimumMinutes, maximumMinutes) {
         case (nil, nil):
@@ -244,7 +231,6 @@ nonisolated extension PlaylistRule {
         }
     }
 
-    /// "Any Time", "Last 7 days", "Last Year".
     static func ageTitle(maximumAgeDays: Int?) -> String {
         guard let maximumAgeDays else {
             return "Any Time"
@@ -256,7 +242,6 @@ nonisolated extension PlaylistRule {
         return "Last \(days)"
     }
 
-    /// "No Limit", "25 episodes".
     static func limitTitle(limit: Int?) -> String {
         guard let limit else {
             return "No Limit"

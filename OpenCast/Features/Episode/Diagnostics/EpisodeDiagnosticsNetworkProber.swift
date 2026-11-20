@@ -1,9 +1,6 @@
 import Foundation
 import OpenCastCore
 
-/// Issues one HEAD request per probe: no retries, no GET or Range fallback,
-/// and an eight-second ceiling so a slow host can't pin the sheet. Redirects
-/// are followed but forced to stay HEAD.
 nonisolated final class EpisodeDiagnosticsNetworkProber: EpisodeDiagnosticsNetworkProbing {
     static let probeTimeout: TimeInterval = 8
 

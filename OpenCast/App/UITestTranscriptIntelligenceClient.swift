@@ -2,12 +2,6 @@
 import Foundation
 import FoundationModels
 
-/// UI-test stand-in for the PCC client: eligibility comes from the launch
-/// environment, and an available client answers every structured turn with
-/// canned content: a recap or an answer (with a scripted tool exchange) that
-/// cites the seeded transcript's two lines, or playlist proposals over the
-/// episodes the prompt lists, so the sheets can render on a simulator whose
-/// own eligibility follows the host Mac.
 nonisolated final class UITestTranscriptIntelligenceClient: TranscriptIntelligenceModelClient {
     static let availabilityEnvironmentKey = "OPENCAST_UI_TEST_TRANSCRIPT_INTELLIGENCE_AVAILABILITY"
     /// `answerable` (default), `unanswerable`, or `unverified`.
@@ -71,7 +65,6 @@ nonisolated final class UITestTranscriptIntelligenceSession: TranscriptIntellige
         }
     }
 
-    /// What the seeded two-line transcript's search tool would have shown.
     private static let cannedToolExchange = TranscriptIntelligenceToolExchange(
         toolName: "searchTranscript",
         argumentsJSON: #"{"query": "welcome sponsor"}"#,
@@ -139,7 +132,6 @@ nonisolated final class UITestTranscriptIntelligenceSession: TranscriptIntellige
         )
     }
 
-    /// `isIndicesOnly` is the simpler answer's turn (`PlaylistIndexSet`).
     private func playlistProposals<Content: Generable>(
         for prompt: String,
         isIndicesOnly: Bool,
@@ -177,8 +169,6 @@ nonisolated final class UITestTranscriptIntelligenceSession: TranscriptIntellige
         )
     }
 
-    /// Two proposals over every listed episode: one in the prompt's order,
-    /// one reversed.
     private static func cannedPlaylistProposalsJSON(numbers: [Int]) -> String {
         guard !numbers.isEmpty else {
             return emptyPlaylistProposalsJSON
@@ -188,8 +178,6 @@ nonisolated final class UITestTranscriptIntelligenceSession: TranscriptIntellige
         return #"{"playlists":[{"title":"First Seeded Playlist","rationale":"Every listed episode in feed order.","episodeIndices":[\#(listed)],"confidence":0.9},{"title":"Second Seeded Playlist","rationale":"The same episodes, newest last.","episodeIndices":[\#(listedBackwards)],"confidence":0.6}]}"#
     }
 
-    /// The simpler answer: one playlist of every listed episode, numbers
-    /// only, as `PlaylistIndexSet` reads it.
     private static func cannedPlaylistIndexSetJSON(numbers: [Int]) -> String {
         guard !numbers.isEmpty else {
             return emptyPlaylistProposalsJSON
@@ -198,9 +186,6 @@ nonisolated final class UITestTranscriptIntelligenceSession: TranscriptIntellige
         return #"{"playlists":[{"episodeIndices":[\#(listed)]}]}"#
     }
 
-    /// The number that opens each numbered episode line ("12. …"),
-    /// ascending. These are the prompt's line numbers, which may be gapped;
-    /// the client maps an answer's numbers back to episodes.
     private static func listedLineNumbers(in prompt: String) -> [Int] {
         var numbers = Set<Int>()
         for line in prompt.split(separator: "\n") {

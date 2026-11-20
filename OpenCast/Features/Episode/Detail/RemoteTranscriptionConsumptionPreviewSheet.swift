@@ -1,9 +1,5 @@
 import SwiftUI
 
-/// Pre-create consumption preview: the episode's
-/// estimated cost against the current balance, honest overdraft copy when
-/// the job would ride debt, a blocked state at zero headroom, and an inline
-/// top-up that resumes the flow once credits land.
 struct RemoteTranscriptionConsumptionPreviewSheet: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss

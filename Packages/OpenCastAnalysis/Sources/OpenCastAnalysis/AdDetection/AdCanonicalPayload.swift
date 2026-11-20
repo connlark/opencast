@@ -1,10 +1,5 @@
-/// The provider-neutral request for one window, in Gemini `generateContent`
-/// shape: the system instruction, one user turn holding the window as JSON
-/// with timestamps stripped, the response schema, the output cap and the
-/// thinking level. Transports map it to their provider's wire format.
 public enum AdCanonicalPayload {
-    /// The user turn: policy, titles (or ids), language and `{id, text}`
-    /// segments. Times are deliberately absent; ids have one meaning.
+    /// Segment times are left out on purpose, so the model can name a segment only by its id.
     public static func input(_ request: AdAnalysisRequest, policy: AdDetectionPolicy) -> String {
         let value = JSONValue.object([
             "policy": .string(policy.policy),
@@ -18,7 +13,6 @@ public enum AdCanonicalPayload {
         return JSONWriter.string(value.sortedKeys())
     }
 
-    /// The canonical payload for one window.
     public static func payload(
         _ request: AdAnalysisRequest,
         policy: AdDetectionPolicy,
@@ -47,7 +41,6 @@ public enum AdCanonicalPayload {
 }
 
 extension [JSONMember] {
-    /// Replaces the first member named `key`, or appends one.
     mutating func setMember(_ key: String, _ value: JSONValue) {
         if let index = firstIndex(where: { $0.key == key }) {
             self[index].value = value

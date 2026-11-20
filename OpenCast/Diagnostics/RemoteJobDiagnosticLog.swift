@@ -1,14 +1,5 @@
 import Foundation
 
-/// The Release-capable remote-job diagnostic trail: one JSON object per line
-/// in `<Documents>/remote-job-diagnostics.jsonl`, bounded by
-/// `RotatingDiagnosticFile`. It accepts only the typed event, re-checks the
-/// encoded keys against the allow-list before anything touches disk, and
-/// drops a record it cannot encode rather than asserting. It is separate
-/// from the DEBUG-only pass run log, which records titles.
-///
-/// Retrieve it from a device with
-/// `xcrun devicectl device copy from … --source Documents/remote-job-diagnostics.jsonl`.
 nonisolated final class RemoteJobDiagnosticLog: RemoteJobDiagnosticSink {
     static let fileName = "remote-job-diagnostics.jsonl"
 
@@ -37,13 +28,11 @@ nonisolated final class RemoteJobDiagnosticLog: RemoteJobDiagnosticSink {
         file.append(line)
     }
 
-    /// Waits for queued records to land on disk.
     func flush() {
         file.flush()
     }
 
-    /// The bytes one event contributes to the file, or nil when the event
-    /// cannot be encoded or its encoded keys fall outside the allow-list.
+    /// Nil when the event cannot be encoded or its keys fall outside the allow-list.
     static func encodedLine(for event: RemoteJobDiagnosticEvent) -> Data? {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -54,9 +43,6 @@ nonisolated final class RemoteJobDiagnosticLog: RemoteJobDiagnosticSink {
         return encoded + Data("\n".utf8)
     }
 
-    /// True when the encoded object carries only the event's allowed
-    /// top-level keys and its `error` object carries only the classifier's
-    /// allowed keys. Anything else is refused before it reaches disk.
     static func isWithinAllowList(_ encoded: Data) -> Bool {
         guard let object = try? JSONSerialization.jsonObject(with: encoded) as? [String: Any],
               Set(object.keys).isSubset(of: RemoteJobDiagnosticEvent.allowedFieldNames)
@@ -72,7 +58,6 @@ nonisolated final class RemoteJobDiagnosticLog: RemoteJobDiagnosticSink {
         return Set(errorObject.keys).isSubset(of: RemoteJobDiagnosticError.allowedFieldNames)
     }
 
-    /// Decodes a trail written by this log, for tests and device readbacks.
     static func decodeLines(_ data: Data) -> [RemoteJobDiagnosticEvent] {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601

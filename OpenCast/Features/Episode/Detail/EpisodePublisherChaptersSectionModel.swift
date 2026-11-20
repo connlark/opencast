@@ -2,9 +2,6 @@ import Foundation
 import Observation
 import OpenCastCore
 
-/// The episode detail's feed-declared chapters, loaded on their own key so
-/// they render whether or not anyone transcribed the episode, and served
-/// only for the episode they were loaded for.
 @Observable
 final class EpisodePublisherChaptersSectionModel {
     private var loadedEpisodeID: String?
@@ -12,8 +9,7 @@ final class EpisodePublisherChaptersSectionModel {
     private var loadedSuppressesGeneration = false
     private var finishedKey: String?
 
-    /// The `.task(id:)` key. A feed refresh that changes the episode row,
-    /// its `chapters_url` included, moves `cachedAt`.
+    /// A feed refresh that changes the episode row, `chapters_url` included, moves `cachedAt`.
     func loadKey(episode: EpisodeListItemSnapshot?) -> String {
         guard let episode else {
             return "missing"
@@ -25,27 +21,17 @@ final class EpisodePublisherChaptersSectionModel {
         loadedEpisodeID == episodeID ? loadedChapters : []
     }
 
-    /// Whether the feed's declaration keeps generated chapters and the
-    /// Generate offer away; nil only until this episode's detail read lands.
-    /// A declared document suppresses while it resolves, and after, when it
-    /// has chapters or could not be read: only a document read fine with
-    /// nothing usable in it does not.
+    /// Nil until this episode's detail read lands.
     func suppressesGeneration(for episodeID: String) -> Bool? {
         loadedEpisodeID == episodeID ? loadedSuppressesGeneration : nil
     }
 
-    /// Whether the load started under `key` has settled: no document is
-    /// declared, or the declared one has resolved, whatever it held. Keyed
-    /// like the load rather than by episode, because a feed refresh that
-    /// changes the row moves the key: the new key stays unfinished until its
-    /// own load settles, even before that load has started. Unlike
-    /// `suppressesGeneration(for:)`, which answers while a declared document
-    /// is still being read.
+    /// Keyed like the load, not by episode: after a feed refresh moves the key, the new key
+    /// stays unfinished until its own load settles, even before that load starts.
     func isFinished(forKey key: String) -> Bool {
         finishedKey == key
     }
 
-    /// `key` is the `loadKey(episode:)` this load runs under.
     func load(appModel: OpenCastAppModel, episode: EpisodeListItemSnapshot?, key: String) async {
         loadedEpisodeID = nil
         loadedChapters = []

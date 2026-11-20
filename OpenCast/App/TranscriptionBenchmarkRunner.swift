@@ -3,11 +3,8 @@ import OpenCastCore
 import OpenCastTranscription
 import UIKit
 
-/// Quiet, Release-capable transcription benchmark harness.
-///
-/// Unlike the DEBUG proof runner, this writes no files while a transcription
-/// is being timed: events are counted in memory and one report JSON is
-/// written per lifecycle transition (manifest ready, run finished, done).
+/// Writes no files while a transcription is timed: events are counted in
+/// memory and one report is written per lifecycle transition.
 nonisolated struct TranscriptionBenchmarkRunner: Sendable {
     static let requestArgument = "--opencast-run-transcription-benchmark"
     static let requestEnvironmentKey = "OPENCAST_RUN_TRANSCRIPTION_BENCHMARK"
@@ -55,8 +52,6 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
         let arguments = processInfo.arguments
         let environment = processInfo.environment
 
-        // Whisper-perf I3: opt-in decoder microbench replaces the normal
-        // benchmark for this launch (measure-only spike; no product path).
         if StatefulSpikeDecoderProbe.isRequested {
             await StatefulSpikeDecoderProbe.run(
                 runLabel: BenchmarkHarnessSupport.argumentValue(from: arguments, flag: runLabelArgument) ?? environment[runLabelEnvironmentKey],
@@ -282,7 +277,6 @@ nonisolated struct TranscriptionBenchmarkRunner: Sendable {
         return (metrics, result)
     }
 
-    /// Bit-exact canonical segment digest for exact-output A/B gates.
     private static func segmentsSHA256(for segments: [OpenCastTranscriptSegment]) -> String {
         let canonical = segments
             .map { "\($0.start.bitPattern)|\($0.end.bitPattern)|\($0.text)" }

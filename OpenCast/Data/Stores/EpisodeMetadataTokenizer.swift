@@ -1,11 +1,5 @@
 import Foundation
 
-/// The word-matching tokenizer for episode titles and descriptions:
-/// compatibility-decomposed and folded to lowercase ASCII with word boundaries
-/// preserved, possessive "'s"
-/// removed, `[a-z0-9]+` runs, a short stop list checked before stemming,
-/// then a light plural stemmer. Its behaviour is pinned by the ranking
-/// tests; changing any step changes which episodes a request sends.
 nonisolated enum EpisodeMetadataTokenizer {
     static let stopWords: Set<String> = [
         "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
@@ -34,9 +28,8 @@ nonisolated enum EpisodeMetadataTokenizer {
         return result
     }
 
-    /// Unique terms in first-occurrence order. Scores add up term by term, so
-    /// a fixed order keeps every sum, and every exact tie, the same on each run;
-    /// iterating a `Set` here would not.
+    /// First-occurrence order keeps every score sum, and every exact tie, the same on each run;
+    /// iterating a `Set` would not.
     static func queryTerms(_ query: String) -> [String] {
         var seen = Set<String>()
         return tokens(in: query).filter { seen.insert($0).inserted }
@@ -53,9 +46,6 @@ nonisolated enum EpisodeMetadataTokenizer {
         return token
     }
 
-    /// The request with stop-listed words removed (whitespace split,
-    /// punctuation-trimmed, lowercased compare); the raw query when nothing
-    /// survives. The word-vector lane embeds this.
     static func strippingStopWords(_ query: String) -> String {
         let words = query.split(whereSeparator: \.isWhitespace).filter { word in
             !stopWords.contains(word.lowercased().trimmingCharacters(in: .punctuationCharacters))

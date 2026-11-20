@@ -1,9 +1,8 @@
 import Foundation
 
 public enum VoiceBoostLoudnessAnalyzer {
-    /// Sub-blocks per momentary (400 ms) and short-term (3 s) window on the
-    /// 100 ms analysis grid. Matches the realtime engine's geometry so both
-    /// measure identical gating blocks on the same fixture.
+    /// 100 ms sub-blocks per momentary (400 ms) and short-term (3 s) window. Must match the
+    /// realtime engine's geometry.
     private static let momentarySubBlocks = 4
     private static let shortTermSubBlocks = 30
 

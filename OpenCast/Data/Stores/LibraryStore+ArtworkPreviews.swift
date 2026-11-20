@@ -1,14 +1,7 @@
 import Foundation
 import OpenCastCore
 
-/// Artwork-preview resolution and persistence: leaf presentation state over
-/// the core library surfaces. The backing stored properties (override map,
-/// pending write chain) live in the class body with the rest of the
-/// @Observable state.
 extension LibraryStore {
-    /// The row that resolved the preview shows it locally; the override box
-    /// carries it to other appearances of the episode and the cache write
-    /// persists it for the next full reload.
     func artworkPreview(for episode: EpisodeListItemSnapshot) -> ArtworkPreview? {
         if let override = episodeArtworkPreviewOverride(for: episode.episodeID).preview,
            override.matchesArtworkURLString(episode.artworkURL) {
@@ -88,7 +81,6 @@ extension LibraryStore {
         return override
     }
 
-    /// Awaits queued asynchronous cache writes (artwork previews). Test hook.
     func waitForPendingCacheWrites() async {
         await pendingCacheWriteTask?.value
     }

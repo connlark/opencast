@@ -1,18 +1,15 @@
 import Foundation
 
-/// A resolved decision for one transcription run, shared by the Ad-Free Pass
-/// and the episode transcript panel.
 struct EpisodeTranscriptionPlan: Equatable {
     var runEngine: EpisodeTranscriptionEngine
     var modelIdentity: EpisodeTranscriptionModelIdentity
-    /// Honest language recorded on the persisted document (per-podcast).
+    /// Recorded on the document.
     var languageCode: String
-    /// Language handed to the engine; diverges from `languageCode` only on
-    /// the English-only whisper tiny fallback for non-English podcasts.
+    /// Handed to the engine; differs from `languageCode` only on the English-only Whisper tiny
+    /// fallback for a non-English podcast.
     var runLanguageCode: String
-    /// True only for explicit DEBUG engine overrides: completed transcripts
-    /// then match by exact model identity instead of counting any completed
-    /// transcript as done.
+    /// Set only by a DEBUG engine override: a completed transcript then counts only when its model
+    /// identity matches exactly.
     var isEngineStrict: Bool
 
     var requiresInstalledWhisperModel: Bool {

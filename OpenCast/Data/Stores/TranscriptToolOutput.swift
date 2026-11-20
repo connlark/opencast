@@ -1,11 +1,7 @@
 import Foundation
 import OpenCastTranscription
 
-/// Renders transcript segments for the model: one `[#id m:ss–m:ss] text` line
-/// per segment, blocks separated by a blank line, prefixed by the data
-/// framing and cut at a token budget measured with the on-device tokenizer.
-/// The same `[#id` prefix is what citation validation parses back out of a
-/// tool exchange, so the two must agree.
+/// Citation validation parses the `[#id` prefix that `line(for:)` writes, so the two must agree.
 nonisolated enum TranscriptToolOutput {
     static let defaultTokenBudget = 3_000
     static let noMatchesMessage =
@@ -27,7 +23,6 @@ nonisolated enum TranscriptToolOutput {
         return "[#\(segment.id) \(start)–\(end)] \(text)"
     }
 
-    /// Ids of every segment line in a rendered output, in order.
     static func segmentIDs(in output: String) -> [Int] {
         output.split(separator: "\n").compactMap { line -> Int? in
             guard line.hasPrefix("[#") else {
@@ -41,8 +36,7 @@ nonisolated enum TranscriptToolOutput {
         }
     }
 
-    /// Adds whole blocks while they fit, then trims the block that overran
-    /// line by line so the output always carries at least one segment.
+    /// Only a first block that overruns is trimmed, so the output always carries a segment.
     static func render(
         blocks: [[OpenCastTranscriptSegment]],
         tokenBudget: Int = defaultTokenBudget,

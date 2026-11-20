@@ -1,10 +1,8 @@
 import SwiftUI
 
 struct EpisodeSearchPresentationModifier: ViewModifier {
-    /// How long `searchable` stays attached after search is hidden. What
-    /// matters is that it is not removed in the update that dismisses
-    /// search; a beat is enough for the system's dismissal to get under way,
-    /// and short enough that the inactive field never shows.
+    /// How long `searchable` stays attached after search is hidden: long enough for the system's
+    /// dismissal to get under way, short enough that the inactive field never shows.
     private static let dismissalSettle: Duration = .milliseconds(50)
 
     let isSearchVisible: Bool
@@ -14,13 +12,8 @@ struct EpisodeSearchPresentationModifier: ViewModifier {
     @Binding var searchMode: EpisodeSearchMode
     var isFullTextSearchAvailable = true
 
-    /// True from the moment search is shown until just after it is hidden.
-    /// Attaching `searchable` is a different branch of this view, so taking
-    /// it away rebuilds the content. Doing that in the same update that
-    /// dismisses search strands the system's dismissal transition about one
-    /// time in four: nothing moves on screen, but the app keeps reporting an
-    /// animation in flight for a minute or more (and UI tests wait it out,
-    /// sixty seconds per tap).
+    /// Removing `searchable` in the update that dismisses search strands the system's dismissal
+    /// about one time in four: nothing moves, but an animation stays in flight for a minute.
     @State private var staysAttached = false
 
     func body(content: Content) -> some View {

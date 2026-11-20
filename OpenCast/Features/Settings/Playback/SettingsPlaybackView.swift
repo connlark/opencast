@@ -98,7 +98,6 @@ struct SettingsPlaybackView: View {
         .settingsSubscreen(title: "Playback")
     }
 
-    /// Off, or how many shows add their new episodes.
     private var autoAddToUpNextSummary: String {
         switch appModel.library.upNextAutoAddPodcastIDs.count {
         case 0:

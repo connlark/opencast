@@ -1,8 +1,6 @@
 import Foundation
 
-/// The preset DEFLATE dictionary for share token version `1`. Part of the wire
-/// format: the worker's `src/shared/dictionary.ts` holds the same string, both
-/// test suites pin its SHA-256, and any change is a new version character.
+/// Must match the worker's `src/shared/dictionary.ts`; any change needs a new token version.
 /// zlib favours the end of a dictionary, so the most common tokens stay last.
 public enum EpisodeShareDictionary {
     public static let v1: [UInt8] = Array(v1Parts.joined().utf8)

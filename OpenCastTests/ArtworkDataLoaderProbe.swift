@@ -74,17 +74,6 @@ actor ArtworkDataLoaderProbe {
         }
     }
 
-    func cancelAll() {
-        release()
-        let continuations = requestContinuations
-        requestContinuations.removeAll()
-        for requestContinuation in continuations.values {
-            requestContinuation.timeoutTask.cancel()
-            let continuation = requestContinuation.continuation
-            continuation.resume(returning: false)
-        }
-    }
-
     private func resumeRequestContinuations() {
         let readyContinuations = requestContinuations.filter { requestCount >= $0.value.count }
         for id in readyContinuations.keys {

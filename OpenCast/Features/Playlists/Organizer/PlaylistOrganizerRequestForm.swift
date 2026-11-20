@@ -1,10 +1,7 @@
 import SwiftUI
 
-/// The request: a typed playlist idea, or suggested groups at a tap. Each
-/// path says what it will send, every time, before anything leaves the device.
 struct PlaylistOrganizerRequestForm: View {
     @Binding var requestText: String
-    /// How much of the show each path looks through; nil until it is counted.
     let promptedScope: PlaylistOrganizerScope?
     let suggestionScope: PlaylistOrganizerScope?
     let canAsk: Bool
@@ -55,7 +52,6 @@ struct PlaylistOrganizerRequestForm: View {
             }
         }
         .scrollDismissesKeyboard(.interactively)
-        // Rides above the keyboard, so Ask stays reachable while typing.
         .safeAreaInset(edge: .bottom) {
             Button(PlaylistOrganizerCopy.askButtonTitle, action: onAsk)
                 .buttonStyle(.glassProminent)

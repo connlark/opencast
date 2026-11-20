@@ -1,6 +1,4 @@
-/// The result of validating one answer: the breaks that passed, machine
-/// issues (ids only, safe to log) and notices for conservative boundary
-/// changes that are not discarded candidates.
+/// `issues` and `notices` hold codes and segment ids only, never transcript text: they get logged.
 public struct AdValidation: Sendable, Hashable {
     public var spans: [AdAnalysisSpan] = []
     public var issues: [String] = []
@@ -15,35 +13,22 @@ public struct AdValidation: Sendable, Hashable {
     }
 }
 
-/// The ad-break validator. Boundary receipts are checked at both submitted
-/// boundaries; an interior promotional quote is never permission to accept
-/// a whole span. Any issue fails the scope closed.
 public enum AdValidator {
-    /// Short mixed boundary segments are included whole up to this length;
-    /// longer ones are trimmed inward.
     static let maxMixedBoundarySeconds = 10.0
-    /// A single break may not cover more than this share of the request.
     static let maxRequestCoverage = 0.8
-    /// Receipts longer than this many UTF-8 bytes are never located.
     static let maxQuoteBytes = 2048
-    /// A declared runtime shorter than this share of the audio earns no
-    /// extra budget.
     static let declaredDurationMinimumFraction = 0.5
 
-    /// Validates an answer against the whole request, with the global
-    /// coverage and budget alarms.
     public static func validate(_ request: AdAnalysisRequest, _ output: AdModelOutput, policy: AdDetectionPolicy) -> AdValidation {
         validateScope(request, output, entireRequest: true, policy: policy)
     }
 
-    /// Validates one window's answer, without the global alarms.
     public static func validateWindow(_ request: AdAnalysisRequest, _ output: AdModelOutput, policy: AdDetectionPolicy) -> AdValidation {
         validateScope(request, output, entireRequest: false, policy: policy)
     }
 
-    /// The episode ad budget in seconds: `max(fraction × runtime, floor)`,
-    /// plus the excess of the served audio over a plausible declared runtime
-    /// (dynamically inserted advertising by construction).
+    /// Served audio beyond a plausible declared runtime is dynamically inserted advertising, so it
+    /// adds to the budget.
     public static func episodeAdBudgetSeconds(_ transcript: AdAnalysisTranscript, policy: AdDetectionPolicy) -> Double {
         let audio = transcript.audioDuration
         func base(_ runtime: Double) -> Double {
@@ -65,9 +50,8 @@ public enum AdValidator {
     ) -> AdValidation {
         var result = AdValidation()
         let segments = request.segments
-        // The configured ceiling may only tighten the services' own, which
-        // counts windows in their fixed 800/120 geometry: smaller configured
-        // windows must not buy an episode more spans.
+        // The configured cap may only tighten the service cap, which counts windows in the fixed
+        // service geometry: smaller configured windows must not buy an episode more spans.
         let configuredCap = policy.limits.spansPerWindow
             * (entireRequest ? AdWindowing.windowCount(segmentCount: segments.count, policy: policy) : 1)
         let serviceCap = AdPipelineConstants.serviceSpansPerWindow
@@ -160,9 +144,7 @@ public enum AdValidator {
             ))
         }
         result.spans = sortedByTime(result.spans)
-        // Reconcile overlapping windows only across overlapping or truly
-        // adjacent submitted segments, never across a segment of unclassified
-        // show content, and merge the two confidence tiers independently.
+        // A merge never bridges a segment no span claimed, and each confidence tier merges alone.
         var tiers: [[AdAnalysisSpan]] = [[], []]
         for span in result.spans {
             let tier = span.confidence >= 0.8 ? 1 : 0
@@ -207,9 +189,7 @@ public enum AdValidator {
         return result
     }
 
-    /// Where a receipt occurs in a segment, in normalized tokens: the start
-    /// and end offsets of its single occurrence and the segment's token
-    /// count. `nil` when it is too long, empty, absent or repeated.
+    /// In normalized tokens; `end` is exclusive and `total` is the segment's token count.
     static func receiptPosition(_ text: String, _ quote: String, policy: AdDetectionPolicy) -> (start: Int, end: Int, total: Int)? {
         if quote.utf8.count > maxQuoteBytes { return nil }
         let words = RustText.normalizedReceiptTokens(text)
@@ -220,8 +200,7 @@ public enum AdValidator {
         return (positions[0], positions[0] + quoteWords.count, words.count)
     }
 
-    /// Coarse trimming can hide the outermost original boundary. Keeps the
-    /// outermost anchor that still resolves; drops both when either cannot.
+    /// Coarse trimming can hide the outermost original boundary, so the outermost anchor wins.
     static func mergeBoundary(
         _ current: inout AdBoundary?,
         _ incoming: AdBoundary?,
@@ -259,7 +238,6 @@ public enum AdValidator {
         segments.map(\.text).joined(separator: " ")
     }
 
-    /// Stable sort by start time, then end time, in IEEE total order.
     static func sortedByTime(_ spans: [AdAnalysisSpan]) -> [AdAnalysisSpan] {
         spans.enumerated().sorted { lhs, rhs in
             if let order = totalOrder(lhs.element.startTime, rhs.element.startTime) { return order }
@@ -277,14 +255,12 @@ public enum AdValidator {
     }
 }
 
-/// Rust `f64::max`: ignores a NaN operand.
 func rustMax(_ a: Double, _ b: Double) -> Double {
     if a.isNaN { return b }
     if b.isNaN { return a }
     return a >= b ? a : b
 }
 
-/// Rust `f64::min`: ignores a NaN operand.
 func rustMin(_ a: Double, _ b: Double) -> Double {
     if a.isNaN { return b }
     if b.isNaN { return a }

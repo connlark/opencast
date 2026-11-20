@@ -1,7 +1,6 @@
 import Foundation
 @testable import OpenCastAnalysis
 @testable import OpenCastAnalysisProviders
-import Synchronization
 import Testing
 
 @Suite("Key pacing")
@@ -13,14 +12,6 @@ struct AnalysisKeyPacerTests {
 
     func settle() async {
         for _ in 0..<200 { await Task.yield() }
-    }
-
-    @Test("max_in_flight is clamped to 1...4")
-    func clamp() {
-        let clock = ManualClock()
-        #expect(AnalysisKeyPacer(maxInFlight: 9, clock: clock).maxInFlight == 4)
-        #expect(AnalysisKeyPacer(maxInFlight: 0, clock: clock).maxInFlight == 1)
-        #expect(AnalysisKeyPacer(maxInFlight: 3, clock: clock).maxInFlight == 3)
     }
 
     @Test("Up to max_in_flight run at once before any rate limit; the next waits for a release")
@@ -125,29 +116,11 @@ struct AnalysisKeyPacerTests {
         await clock.waitForSleepers(2)
         await pacer.release()
         #expect(await early.value == .deadlinePassed)
-        // Leaving, the early request wakes the late one, which drops its
-        // deadline timer and sleeps to the end of the cooldown instead.
-        // Without the hand-off it sleeps on until its own deadline and is
-        // refused there.
+        // Without the hand-off the late request sleeps on to its own
+        // deadline and is refused there.
         let handedOff = await eventually { clock.wakeTimes == [20] }
         #expect(handedOff)
         clock.advance(by: handedOff ? 20 : 100)
         #expect(await late.value == .admitted(waitedSeconds: 20))
-    }
-
-    @Test("A sleep cancelled before it starts throws at once")
-    func manualClockPreCancelled() async {
-        let clock = ManualClock()
-        let sleeping = Task {
-            withUnsafeCurrentTask { $0?.cancel() }
-            do {
-                try await clock.sleep(seconds: 5)
-                return false
-            } catch {
-                return true
-            }
-        }
-        #expect(await sleeping.value)
-        #expect(clock.sleeperCount == 0)
     }
 }

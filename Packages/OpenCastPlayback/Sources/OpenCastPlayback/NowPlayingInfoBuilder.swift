@@ -13,10 +13,8 @@ struct NowPlayingInfoBuilder {
 
         let duration = snapshot.bestFiniteDuration(preferring: resolvedDuration)
         let elapsedTime = clampPlaybackPosition(snapshot.position, to: duration)
-        // The speed the listener chose is this item's normal speed, whatever the
-        // transport is doing. Publishing it keeps a paused-at-1.5x screen —
-        // where the current rate is necessarily 0 — reporting 1.5x rather than
-        // the 1x a hardcoded default would claim.
+        // The chosen speed is the item's default rate whatever the transport does, so a
+        // screen paused at 1.5x still reports 1.5x, not 1x.
         let selectedRate = sanitizedPlaybackRate(snapshot.rate)
         let playbackRate = snapshot.state == .playing ? selectedRate : 0
 

@@ -22,9 +22,8 @@ struct NowPlayingOverlayView: View {
     @State private var isSoundLabInteractionActive = false
     @State private var isContentScrolledToTop = true
     @State private var dismissDragExcludedFrames: [CGRect] = []
-    /// Decided on a drag's first change and kept for the whole drag: a drag
-    /// that starts in the secondary pane stays the pane's even after the
-    /// content beneath it scrolls away. Reset when the drag ends or cancels.
+    /// Decided on a drag's first change and kept for the whole drag, so a pane drag stays the
+    /// pane's after the content beneath it scrolls away.
     @GestureState private var dismissDragStartedInPane: Bool?
 
     private static let accessibilityTitle = "Now Playing"
@@ -41,9 +40,6 @@ struct NowPlayingOverlayView: View {
         .allowsHitTesting(isPresented)
     }
 
-    /// The dim and the card in the whole window. The reserved regions are read
-    /// here, from the current layout, every time it changes, and the
-    /// arrangement is derived from them on every layout.
     private func windowLayer(safeAreaInsets: EdgeInsets) -> some View {
         GeometryReader { proxy in
             let pose = WindowPose(
@@ -75,8 +71,6 @@ struct NowPlayingOverlayView: View {
                     pose: pose,
                     occlusions: surface.occlusions
                 )
-            // A foldable scene's surface is the window; the player's own
-            // allocation inside it comes from the arrangement.
             let surfaceFrame = arrangement.usesWindowSizedSurface
                 ? CGRect(origin: .zero, size: proxy.size)
                 : cardGeometry.cardFrame
@@ -193,8 +187,6 @@ struct NowPlayingOverlayView: View {
         return collapsedScale + (1 - collapsedScale) * progress
     }
 
-    /// A window-sized surface rounds only while it moves, like the compact
-    /// card, with the regular card's radius.
     private func cornerRadius(progress: CGFloat, isWindowSized: Bool) -> CGFloat {
         if isWindowSized {
             return (1 - progress) * 36

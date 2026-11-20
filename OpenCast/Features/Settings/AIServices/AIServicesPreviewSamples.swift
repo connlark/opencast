@@ -2,13 +2,9 @@ import Foundation
 import OpenCastAnalysis
 import OpenCastAnalysisProviders
 
-/// App models for the AI Services `#Preview`s: the baked policy, an in-memory
-/// key store and a key test that always answers "Key works", so a preview
-/// never touches the Keychain or a provider.
+/// A preview never touches the Keychain or a provider.
 enum AIServicesPreviewSamples {
-    /// `savedProviders` maps a provider to whether its key syncs. Presences
-    /// read as "No key" until the store refreshes (the AI Services screen
-    /// does that on appear).
+    /// `savedProviders` maps a provider to whether its key syncs.
     static func appModel(savedProviders: [AnalysisProvider: Bool] = [:]) -> OpenCastAppModel {
         var seeded: [AnalysisProvider: (AnalysisProviderKey, syncs: Bool)] = [:]
         for (provider, syncs) in savedProviders {

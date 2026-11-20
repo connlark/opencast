@@ -2,8 +2,6 @@ import Foundation
 @testable import OpenCastAnalysis
 import Testing
 
-/// The gateway's shared timestamp cases: the generator's relational check and
-/// this decoder must agree on every one.
 @Suite("Analysis policy timestamps")
 struct AnalysisPolicyTimestampTests {
     private struct Cases: Decodable {

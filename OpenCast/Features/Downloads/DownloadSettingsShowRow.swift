@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// A show in Download Settings: whether it downloads new episodes, and
-/// scans them for ads, and the Keep Downloaded choice it has, or the
-/// default it follows.
 struct DownloadSettingsShowRow: View {
     @Environment(OpenCastAppModel.self) private var appModel
 

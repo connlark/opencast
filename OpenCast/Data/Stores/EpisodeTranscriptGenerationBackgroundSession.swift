@@ -2,12 +2,8 @@ import Foundation
 import Observation
 import OSLog
 
-/// System progress card for the generate-transcript flow: a
-/// `BGContinuedProcessingTask` session mirroring
-/// `EpisodeAdFreePassBackgroundSession`'s proven shape minus queue logic,
-/// reusing the identifier-parameterized scheduler layer unchanged. Progress is
-/// pulled through injected closures on a creep cadence because the phase
-/// stream only carries phase transitions, not fractions.
+/// Progress is pulled through injected closures on a creep cadence: the phase stream carries
+/// only transitions, not fractions.
 @Observable
 final class EpisodeTranscriptGenerationBackgroundSession {
     static let identifier = "com.connor.opencast.transcript-generation"
@@ -25,7 +21,6 @@ final class EpisodeTranscriptGenerationBackgroundSession {
     private static let creepInterval: Duration = .seconds(2)
 
     @ObservationIgnored private let scheduler: any AdFreePassContinuedTaskScheduling
-    @ObservationIgnored private let forceForegroundOnly: @MainActor () -> Bool
     @ObservationIgnored var installFraction: () -> Double? = { nil }
     @ObservationIgnored var transcriptionProgress: () -> EpisodeTranscriptionProgress? = { nil }
     @ObservationIgnored var onExpiration: (() -> Void)?
@@ -44,12 +39,8 @@ final class EpisodeTranscriptGenerationBackgroundSession {
     @ObservationIgnored private var completionGate = AdFreePassOnceGate()
     @ObservationIgnored private var expirationGate = AdFreePassOnceGate()
 
-    init(
-        scheduler: any AdFreePassContinuedTaskScheduling = BGTaskSchedulerAdFreePassScheduler(),
-        forceForegroundOnly: @escaping @MainActor () -> Bool = EpisodeTranscriptGenerationBackgroundSession.environmentForcesForegroundOnly
-    ) {
+    init(scheduler: any AdFreePassContinuedTaskScheduling = BGTaskSchedulerAdFreePassScheduler()) {
         self.scheduler = scheduler
-        self.forceForegroundOnly = forceForegroundOnly
     }
 
     deinit {
@@ -78,7 +69,7 @@ final class EpisodeTranscriptGenerationBackgroundSession {
         runSequence += 1
         let subtitle = Self.truncatedTitleText(episodeTitle)
         AdFreePassBackgroundRunLog.record("transcript-generation arm episodeTitle=\(episodeTitle) subtitle=\(subtitle)")
-        guard !forceForegroundOnly() else {
+        guard !Self.environmentForcesForegroundOnly() else {
             state = .foregroundOnly
             AdFreePassBackgroundRunLog.record("transcript-generation arm foregroundOnly reason=debugForced")
             return
@@ -101,9 +92,6 @@ final class EpisodeTranscriptGenerationBackgroundSession {
         }
     }
 
-    /// Same GPU retry ladder as the ad-free session: a GPU-required
-    /// submission retries once without GPU before degrading to
-    /// foreground-only.
     private func submitRequest(subtitle: String, requiresGPU: Bool) throws {
         do {
             try scheduler.submit(

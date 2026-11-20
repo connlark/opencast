@@ -1,5 +1,3 @@
-/// Body of `jobs/{id}/source`: the device's exact identity of its completed
-/// local download.
 public struct OpenCastRemoteTranscriptionSourceReportRequest: Codable, Sendable, Equatable {
     public var schemaVersion: Int
     public var sourceIdentity: OpenCastRemoteTranscriptionSourceIdentity

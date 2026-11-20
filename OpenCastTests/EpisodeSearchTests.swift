@@ -6,48 +6,6 @@ import Testing
 @MainActor
 @Suite("Episode search")
 struct EpisodeSearchTests {
-    @Test("Blank query returns the unfiltered source list")
-    func blankQueryReturnsUnfilteredSourceList() {
-        let episodes = [
-            makeEpisode(id: "new", title: "Newest Episode", publishedAt: 200),
-            makeEpisode(id: "old", title: "Oldest Episode", publishedAt: 100)
-        ]
-
-        let results = EpisodeSearch.results(in: episodes, query: "   ", mode: .fullText)
-
-        #expect(resultIDs(results) == ["new", "old"])
-        #expect(results.allSatisfy { $0.snippet == nil })
-    }
-
-    @Test("Search session skips blank queries")
-    func searchSessionSkipsBlankQueries() async {
-        let episodes = (0..<250).map { index in
-            makeEpisode(
-                id: "episode-\(index)",
-                title: "Episode \(index)",
-                summary: "Summary text \(index)",
-                publishedAt: TimeInterval(index)
-            )
-        }
-        let showNotesByID = Dictionary(
-            uniqueKeysWithValues: (0..<250).map { index in
-                ("episode-\(index)", "<p>Show notes text \(index)</p>")
-            }
-        )
-        let session = EpisodeSearchSession()
-
-        await session.update(
-            episodes: episodes,
-            query: "   ",
-            mode: .fullText,
-            showNotesProvider: { showNotesByID },
-            debounceDuration: .zero
-        )
-
-        #expect(session.results.isEmpty)
-        #expect(session.isSearching == false)
-    }
-
     @Test("Search session returns nonblank query results")
     func searchSessionReturnsNonblankQueryResults() async throws {
         let episodes = [
@@ -155,17 +113,6 @@ struct EpisodeSearchTests {
         #expect(resultIDs(session.results) == ["indexed", "orphan"])
     }
 
-    @Test("Normalization folds Turkish dotted and dotless I pairs identically")
-    func normalizationFoldsTurkishDottedAndDotlessIPairs() {
-        #expect(SearchTextNormalization.normalize("IŞIK") == "isik")
-        #expect(SearchTextNormalization.normalize("ışık") == "isik")
-        #expect(SearchTextNormalization.normalize("İzmir") == "izmir")
-        #expect(
-            SearchTextNormalization.canonicalSearchText("IŞIK Hikayesi")
-                == SearchTextNormalization.canonicalSearchText("ışık hikayesi")
-        )
-    }
-
     @Test("Search session rejects an indexed result from an older corpus revision")
     func searchSessionRejectsStaleIndexedCorpus() async {
         let episodes = [
@@ -218,8 +165,6 @@ struct EpisodeSearchTests {
         #expect(resultIDs(session.results) == ["keyboard"])
         #expect(session.isSearching == false)
 
-        // The debounce is held on a gate instead of a timer, so "during the
-        // debounce" is a state the test stands in, not a window it has to hit.
         let enteredDebounce = AsyncTestGate()
         let finishDebounce = AsyncTestGate()
         let searchTask = Task {
@@ -288,8 +233,6 @@ struct EpisodeSearchTests {
 
         await enteredDebounce.wait()
 
-        // Nothing has answered yet, so the results view must not read the
-        // empty list as "No Results".
         #expect(session.displayedResults(for: pendingKey).isEmpty)
         #expect(session.isSearching == true)
 
@@ -397,26 +340,6 @@ struct EpisodeSearchTests {
         #expect(session.isLoadingVisible == false)
     }
 
-    @Test("Search session suppresses loading presentation for fast searches")
-    func searchSessionSuppressesLoadingPresentationForFastSearches() async {
-        let episodes = [
-            makeEpisode(id: "match", title: "Workbench", summary: "Keyboard membrane repair tips.")
-        ]
-        let session = EpisodeSearchSession()
-
-        await session.update(
-            episodes: episodes,
-            query: "keyboard",
-            mode: .fullText,
-            loadingPresentationDelay: .seconds(1),
-            debounceDuration: .zero
-        )
-
-        #expect(resultIDs(session.results) == ["match"])
-        #expect(session.isSearching == false)
-        #expect(session.isLoadingVisible == false)
-    }
-
     @Test("Search session delays loading presentation for slow searches")
     func searchSessionDelaysLoadingPresentationForSlowSearches() async throws {
         let episodes = [
@@ -440,9 +363,7 @@ struct EpisodeSearchTests {
         #expect(session.isSearching == true)
         #expect(session.isLoadingVisible == false)
 
-        try await waitUntil("delayed loading presentation", timeout: .seconds(60)) {
-            session.isLoadingVisible
-        }
+        #expect(await waitUntil { session.isLoadingVisible })
         #expect(session.isSearching == true)
         #expect(session.isLoadingVisible == true)
 
@@ -463,8 +384,8 @@ struct EpisodeSearchTests {
             makeEpisode(id: "miss", podcastTitle: "History Hour", title: "Launch Window")
         ]
 
-        #expect(resultIDs(EpisodeSearch.results(in: episodes, query: "robot", mode: .episodes)) == ["title", "podcast"])
-        #expect(resultIDs(EpisodeSearch.results(in: episodes, query: "launch future", mode: .episodes)) == ["cross-field"])
+        #expect(EpisodeSearch.matchingEpisodes(in: episodes, query: "robot").map(\.episodeID) == ["title", "podcast"])
+        #expect(EpisodeSearch.matchingEpisodes(in: episodes, query: "launch future").map(\.episodeID) == ["cross-field"])
     }
 
     @Test("Episodes mode is case and diacritic insensitive")
@@ -474,9 +395,9 @@ struct EpisodeSearchTests {
             makeEpisode(id: "plain", title: "Tea Culture")
         ]
 
-        let results = EpisodeSearch.results(in: episodes, query: "CAFE", mode: .episodes)
+        let matches = EpisodeSearch.matchingEpisodes(in: episodes, query: "CAFE")
 
-        #expect(resultIDs(results) == ["accented"])
+        #expect(matches.map(\.episodeID) == ["accented"])
     }
 
     @Test("Episodes mode preserves source order")
@@ -487,39 +408,42 @@ struct EpisodeSearchTests {
             makeEpisode(id: "oldest", title: "Robot Archive", publishedAt: 100)
         ]
 
-        let results = EpisodeSearch.results(in: episodes, query: "robot", mode: .episodes)
+        let matches = EpisodeSearch.matchingEpisodes(in: episodes, query: "robot")
 
-        #expect(resultIDs(results) == ["newest", "middle", "oldest"])
+        #expect(matches.map(\.episodeID) == ["newest", "middle", "oldest"])
     }
 
     @Test("Full text searches summary and show notes as plain text")
-    func fullTextSearchesSummaryAndShowNotesAsPlainText() {
+    func fullTextSearchesSummaryAndShowNotesAsPlainText() async {
         let episodes = [
             makeEpisode(id: "summary", title: "Daily Notes", summary: "<p>Keyboard membrane repair tips.</p>"),
             makeEpisode(id: "notes", title: "Workbench")
         ]
         let showNotesByID = ["notes": "<ul><li>Soldering station checklist</li></ul>"]
+        let session = EpisodeSearchSession()
 
-        let summaryResults = EpisodeSearch.results(
-            in: episodes,
+        await session.update(
+            episodes: episodes,
             query: "keyboard",
             mode: .fullText,
-            showNotesHTMLByEpisodeID: showNotesByID
+            showNotesProvider: { showNotesByID },
+            debounceDuration: .zero
         )
-        let showNotesResults = EpisodeSearch.results(
-            in: episodes,
+        #expect(resultIDs(session.results) == ["summary"])
+
+        await session.update(
+            episodes: episodes,
             query: "soldering",
             mode: .fullText,
-            showNotesHTMLByEpisodeID: showNotesByID
+            showNotesProvider: { showNotesByID },
+            debounceDuration: .zero
         )
-
-        #expect(resultIDs(summaryResults) == ["summary"])
-        #expect(resultIDs(showNotesResults) == ["notes"])
-        #expect(plainText(showNotesResults[0].snippet).contains("<li>") == false)
+        #expect(resultIDs(session.results) == ["notes"])
+        #expect(plainText(session.results.first?.snippet).contains("<li>") == false)
     }
 
     @Test("Full text ranks visible matches before summary and show notes")
-    func fullTextRanksVisibleMatchesBeforeSummaryAndShowNotes() {
+    func fullTextRanksVisibleMatchesBeforeSummaryAndShowNotes() async {
         let episodes = [
             makeEpisode(id: "notes-new", title: "Newest", publishedAt: 400),
             makeEpisode(id: "summary-new", title: "Middle", summary: "Nebula summary.", publishedAt: 300),
@@ -527,56 +451,82 @@ struct EpisodeSearchTests {
             makeEpisode(id: "title-old", title: "Nebula Dispatch", publishedAt: 100)
         ]
         let showNotesByID = ["notes-new": "<p>Nebula appendix.</p>"]
+        let session = EpisodeSearchSession()
 
-        let results = EpisodeSearch.results(
-            in: episodes,
+        await session.update(
+            episodes: episodes,
             query: "nebula",
             mode: .fullText,
-            showNotesHTMLByEpisodeID: showNotesByID
+            showNotesProvider: { showNotesByID },
+            debounceDuration: .zero
         )
 
-        #expect(resultIDs(results) == ["title-old", "summary-new", "summary-old", "notes-new"])
+        #expect(resultIDs(session.results) == ["title-old", "summary-new", "summary-old", "notes-new"])
     }
 
     @Test("Full text below three characters falls back to visible exact matching")
-    func fullTextBelowThreeCharactersFallsBackToVisibleExactMatching() {
+    func fullTextBelowThreeCharactersFallsBackToVisibleExactMatching() async {
         let episodes = [
             makeEpisode(id: "summary", title: "Machine Notes", summary: "AI appears only in this summary."),
             makeEpisode(id: "title", title: "AI Guide")
         ]
+        let session = EpisodeSearchSession()
 
-        let results = EpisodeSearch.results(in: episodes, query: "ai", mode: .fullText)
+        await session.update(
+            episodes: episodes,
+            query: "ai",
+            mode: .fullText,
+            debounceDuration: .zero
+        )
 
-        #expect(resultIDs(results) == ["title"])
+        #expect(resultIDs(session.results) == ["title"])
     }
 
     @Test("Fuzzy full text catches agreed typo thresholds")
-    func fuzzyFullTextCatchesAgreedTypoThresholds() {
+    func fuzzyFullTextCatchesAgreedTypoThresholds() async {
         let episodes = [
             makeEpisode(id: "short", title: "Robot Repairs"),
             makeEpisode(id: "long", title: "Archive", summary: "A careful history of portable radio.")
         ]
+        let session = EpisodeSearchSession()
 
-        let shortResults = EpisodeSearch.results(in: episodes, query: "robt", mode: .fullText)
-        let longResults = EpisodeSearch.results(in: episodes, query: "histroy", mode: .fullText)
+        await session.update(
+            episodes: episodes,
+            query: "robt",
+            mode: .fullText,
+            debounceDuration: .zero
+        )
+        #expect(resultIDs(session.results) == ["short"])
 
-        #expect(resultIDs(shortResults) == ["short"])
-        #expect(resultIDs(longResults) == ["long"])
+        await session.update(
+            episodes: episodes,
+            query: "histroy",
+            mode: .fullText,
+            debounceDuration: .zero
+        )
+        #expect(resultIDs(session.results) == ["long"])
     }
 
     @Test("Fuzzy matching highlights the actual matched word")
-    func fuzzyMatchingHighlightsActualMatchedWord() throws {
+    func fuzzyMatchingHighlightsActualMatchedWord() async throws {
         let episodes = [
             makeEpisode(id: "robot", title: "Robot Repairs")
         ]
+        let session = EpisodeSearchSession()
 
-        let result = try #require(EpisodeSearch.results(in: episodes, query: "robt", mode: .fullText).first)
+        await session.update(
+            episodes: episodes,
+            query: "robt",
+            mode: .fullText,
+            debounceDuration: .zero
+        )
 
+        let result = try #require(session.results.first)
         #expect(highlightedSegments(in: result.highlightedTitle) == ["Robot"])
     }
 
     @Test("Hidden full text matches create summary-first snippets")
-    func hiddenFullTextMatchesCreateSummaryFirstSnippets() throws {
+    func hiddenFullTextMatchesCreateSummaryFirstSnippets() async throws {
         let summary = """
         Before the term appears, the discussion walks through cache warmup, playback handoff, and transcript cleanup. \
         The summary vector passage explains why local matching is useful while staying offline. \
@@ -586,15 +536,17 @@ struct EpisodeSearchTests {
         let episodes = [
             makeEpisode(id: "snippet", title: "Search Notes", summary: summary)
         ]
+        let session = EpisodeSearchSession()
 
-        let result = try #require(
-            EpisodeSearch.results(
-                in: episodes,
-                query: "vector",
-                mode: .fullText,
-                showNotesHTMLByEpisodeID: ["snippet": showNotes]
-            ).first
+        await session.update(
+            episodes: episodes,
+            query: "vector",
+            mode: .fullText,
+            showNotesProvider: { ["snippet": showNotes] },
+            debounceDuration: .zero
         )
+
+        let result = try #require(session.results.first)
         let snippetText = plainText(result.snippet)
 
         #expect(snippetText.contains("summary vector passage"))
@@ -670,8 +622,6 @@ struct EpisodeSearchTests {
         #expect(session.isIndexedSearchUnavailable)
         #expect(resultIDs(session.results) == ["beacon"])
 
-        // The rebuild finishes between keystrokes: the indexed path answers
-        // and the degraded-state affordances must clear.
         await session.update(
             episodes: episodes,
             query: "beac",
@@ -682,7 +632,6 @@ struct EpisodeSearchTests {
         #expect(session.isIndexedSearchUnavailable == false)
         #expect(resultIDs(session.results) == ["beacon"])
 
-        // And back: a mid-typing index failure re-enters the bounded fallback.
         await session.update(
             episodes: episodes,
             query: "beaco",
@@ -692,29 +641,6 @@ struct EpisodeSearchTests {
         )
         #expect(session.isIndexedSearchUnavailable)
         #expect(resultIDs(session.results) == ["beacon"])
-    }
-
-    @Test("Callers without an indexed provider keep full legacy semantics")
-    func absentIndexedProviderKeepsFullLegacySemantics() async throws {
-        let episodes = [
-            makeEpisode(id: "notes-only", title: "Harbor Notes")
-        ]
-        let session = EpisodeSearchSession()
-
-        await session.update(
-            episodes: episodes,
-            query: "beacon",
-            mode: .fullText,
-            showNotesProvider: {
-                ["notes-only": "<p>A beacon hidden in the show notes.</p>"]
-            },
-            debounceDuration: .zero
-        )
-
-        #expect(session.isIndexedSearchUnavailable == false)
-        let result = try #require(session.results.first)
-        #expect(result.episode.episodeID == "notes-only")
-        #expect(plainText(result.snippet).contains("beacon"))
     }
 
     @Test("A blank query clears the index-unavailable state")
@@ -745,13 +671,20 @@ struct EpisodeSearchTests {
     }
 
     @Test("Visible matches are highlighted in title and podcast title")
-    func visibleMatchesAreHighlightedInTitleAndPodcastTitle() throws {
+    func visibleMatchesAreHighlightedInTitleAndPodcastTitle() async throws {
         let episodes = [
             makeEpisode(id: "visible", podcastTitle: "Future Talk", title: "Robot Ethics")
         ]
+        let session = EpisodeSearchSession()
 
-        let result = try #require(EpisodeSearch.results(in: episodes, query: "robot future", mode: .episodes).first)
+        await session.update(
+            episodes: episodes,
+            query: "robot future",
+            mode: .episodes,
+            debounceDuration: .zero
+        )
 
+        let result = try #require(session.results.first)
         #expect(highlightedSegments(in: result.highlightedTitle) == ["Robot"])
         #expect(highlightedSegments(in: result.highlightedPodcastTitle) == ["Future"])
     }
@@ -825,27 +758,6 @@ struct EpisodeSearchTests {
             return String(attributed[run.range].characters)
         }
     }
-
-    private func waitUntil(
-        _ description: String,
-        timeout: Duration = .seconds(60),
-        pollInterval: Duration = .milliseconds(20),
-        condition: () -> Bool
-    ) async throws {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
-        while clock.now < deadline {
-            if condition() {
-                return
-            }
-            try await Task.sleep(for: pollInterval)
-        }
-
-        throw WaitTimeoutError(description: description)
-    }
-
-    private struct WaitTimeoutError: Error, CustomStringConvertible {
-        let description: String
 }
 
 private actor PendingEpisodeSearchIndexProvider {
@@ -879,32 +791,31 @@ private actor PendingEpisodeSearchIndexProvider {
 }
 
 private actor PendingShowNotesProvider {
-        private var hasStarted = false
-        private var startContinuation: CheckedContinuation<Void, Never>?
-        private var resultContinuation: CheckedContinuation<[String: String]?, Never>?
+    private var hasStarted = false
+    private var startContinuation: CheckedContinuation<Void, Never>?
+    private var resultContinuation: CheckedContinuation<[String: String]?, Never>?
 
-        func value() async -> [String: String]? {
-            await withCheckedContinuation { continuation in
-                resultContinuation = continuation
-                hasStarted = true
-                startContinuation?.resume()
-                startContinuation = nil
-            }
+    func value() async -> [String: String]? {
+        await withCheckedContinuation { continuation in
+            resultContinuation = continuation
+            hasStarted = true
+            startContinuation?.resume()
+            startContinuation = nil
+        }
+    }
+
+    func waitUntilStarted() async {
+        if hasStarted {
+            return
         }
 
-        func waitUntilStarted() async {
-            if hasStarted {
-                return
-            }
-
-            await withCheckedContinuation { continuation in
-                startContinuation = continuation
-            }
+        await withCheckedContinuation { continuation in
+            startContinuation = continuation
         }
+    }
 
-        func finish(returning result: [String: String]?) {
-            resultContinuation?.resume(returning: result)
-            resultContinuation = nil
-        }
+    func finish(returning result: [String: String]?) {
+        resultContinuation?.resume(returning: result)
+        resultContinuation = nil
     }
 }

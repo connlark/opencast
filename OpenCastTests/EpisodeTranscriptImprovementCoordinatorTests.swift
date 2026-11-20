@@ -132,9 +132,6 @@ struct EpisodeTranscriptImprovementCoordinatorTests {
             modelContext: harness.context
         )
 
-        // Since the work-reservation rework the refusal is an explicit
-        // conflict outcome, not a silent stay-idle; the improve run still
-        // never starts.
         #expect(harness.coordinator.phase == .failed("Another transcription is in progress."))
         #expect(harness.coordinator.episodeID == harness.episode.episodeID)
 

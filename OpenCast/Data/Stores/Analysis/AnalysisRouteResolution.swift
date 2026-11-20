@@ -1,19 +1,16 @@
 import OpenCastAnalysis
 import OpenCastAnalysisProviders
 
-/// One run's route, decided before its record is written: the route, the
-/// policy it runs under, and the key when it goes direct. The key is held
-/// only for the run that resolved it.
+/// Decided before the run's record is written; the key is held only for the run that resolved it.
 nonisolated struct AnalysisRouteResolution: Sendable {
     let feature: AnalysisFeature
     let route: AnalysisRoute
     /// `nil` only for `keyRequired`.
     let policy: AnalysisRoutePolicy?
-    /// The listener's key; set only for `direct`.
+    /// Set only for `direct`.
     let key: AnalysisProviderKey?
-    /// The run being resumed, when the route was resolved for one.
     let resumingRunID: String?
-    /// The trial service exchange; set only for `trial`.
+    /// Set only for `trial`.
     let trialExchange: (any AnalysisTrialProxyExchange)?
     /// Ad detection on a Google key inside the handover window: a free-tier
     /// answer ends the direct attempt and the trial service can take over.

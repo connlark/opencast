@@ -90,10 +90,8 @@ struct AVFoundationPlaybackControllerMediaClockTests {
         }
         try controller.load(episode)
 
-        // The prime is buffered synchronously at subscribe, but the item's
-        // media time can be momentarily invalid right after load; retry with
-        // fresh subscriptions instead of waiting on a paused player that will
-        // never produce periodic callbacks.
+        // Media time can be invalid right after load, and a paused player never
+        // fires periodic callbacks, so retry with fresh subscriptions.
         var primed: PlaybackMediaClockSample?
         let deadline = Date.now.addingTimeInterval(60)
         while primed == nil, Date.now < deadline {
@@ -129,8 +127,6 @@ struct AVFoundationPlaybackControllerMediaClockTests {
         let stream = controller.mediaClockSamples()
         #expect(controller.mediaClockClientCount == 1)
 
-        // No current item means no meaningful media time; the stream stays
-        // silent rather than yielding a non-finite position.
         let consumer = Task {
             var received: PlaybackMediaClockSample?
             for await sample in stream {
@@ -159,8 +155,6 @@ struct AVFoundationPlaybackControllerMediaClockTests {
         controller?.unload()
         controller = nil
 
-        // The deinit sweep finishes the continuation, so iteration terminates
-        // instead of hanging on a dead player.
         for await _ in stream {}
     }
 

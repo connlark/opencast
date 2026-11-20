@@ -2,10 +2,7 @@ import CryptoKit
 import Foundation
 import SQLite3
 
-/// Two disk-backed passes preserve the material-dedup and natural-ID winner
-/// rules without keeping item text or collision groups in memory. Scratch
-/// rows and the published replay database have independent workspaces so the
-/// former can disappear as soon as winner selection completes.
+/// Scratch rows have their own workspace so they can be deleted once winners are chosen.
 final class RSSItemStager {
     private let workspace: FeedWorkspace
     private var db: FeedStagingDatabase?

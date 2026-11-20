@@ -9,12 +9,6 @@ public protocol FeedService: Sendable {
         intent: FeedPreparationIntent
     ) async throws -> PreparedFeedOutcome
     func fetchFeed(at url: URL) async throws -> FeedSnapshot
-    /// The full fetch outcome: snapshot plus relocation signals (post-redirect
-    /// final URL, `itunes:new-feed-url`) and response validators. Callers that
-    /// hold validators from a prior fetch pass them in; the fetch then
-    /// short-circuits to a nil-snapshot outcome when the feed is unchanged.
-    /// Defaults to wrapping `fetchFeed` with no extra signals, so
-    /// snapshot-only conformers keep working.
     func fetchFeedOutcome(at url: URL, validators: FeedValidators?) async throws -> FeedFetchOutcome
 }
 

@@ -4,14 +4,6 @@ import OSLog
 import OpenCastTranscription
 import UIKit
 
-/// Recap and Ask evaluation on a PCC-eligible device. Reads the fixture
-/// transcripts and cases pushed into
-/// `Documents/TranscriptIntelligenceEvaluationInputs`, runs every case
-/// through the production code (real PCC, fresh cache; one Ask session per
-/// fixture so reseeding happens as it would for a listener), and writes
-/// `Documents/TranscriptIntelligenceEvaluation/report.json` after each case
-/// so a partial run is still harvestable; the external evaluation harness
-/// beside the plan scores it.
 enum TranscriptIntelligenceEvaluationRunner {
     nonisolated static let requestArgument = "--opencast-run-transcript-intelligence-evaluation"
     nonisolated static let requestEnvironmentKey = "OPENCAST_RUN_TRANSCRIPT_INTELLIGENCE_EVALUATION"
@@ -134,9 +126,8 @@ enum TranscriptIntelligenceEvaluationRunner {
         caseReport.ok = true
     }
 
-    /// One Ask session per fixture, so consecutive questions about one
-    /// episode share a conversation and the input budget reseeds it as it
-    /// would for a listener.
+    /// One Ask session per fixture, so consecutive questions about an episode
+    /// share a conversation and reseed as they would for a listener.
     private static func runAskCase(
         _ evaluationCase: EvaluationCase,
         document: EpisodeTranscriptDocument,

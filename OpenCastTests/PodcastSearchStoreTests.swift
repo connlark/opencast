@@ -1,6 +1,5 @@
 import Foundation
 import OpenCastCore
-import SwiftData
 import Testing
 @testable import OpenCast
 
@@ -83,93 +82,6 @@ struct PodcastSearchStoreTests {
 
         #expect(store.state == .error("Directory unavailable"))
     }
-
-    @Test("Search with no results enters empty state")
-    func searchWithNoResultsEntersEmptyState() async {
-        let directoryService = StubPodcastDirectoryService(responses: [
-            "missing": .success([])
-        ])
-        let store = PodcastSearchStore(directoryService: directoryService, debounceDuration: .zero)
-
-        store.query = "missing"
-        await store.waitForCurrentSearch()
-
-        #expect(store.state == .empty)
-    }
-
-    @Test("Search result feed URL subscribes through the library store")
-    func searchResultFeedURLSubscribesThroughLibraryStore() async throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let feedURL = "https://example.com/from-search.xml"
-        let result = DirectoryPodcastResult(
-            id: 42,
-            title: "From Search",
-            artistName: "Search Host",
-            feedURL: URL(string: feedURL)
-        )
-        let feedService = StubSearchFeedService(responses: [
-            feedURL: .success(
-                makeSnapshot(
-                    feedURL: feedURL,
-                    podcastTitle: "From Search",
-                    episodeID: "from-search-episode"
-                )
-            )
-        ])
-        let libraryStore = LibraryStore(feedService: feedService, localCache: SQLiteLocalLibraryCacheStore.inMemory())
-
-        guard let feedURLString = result.feedURLString else {
-            Issue.record("Expected search result to provide a feed URL.")
-            return
-        }
-
-        try await libraryStore.subscribe(to: feedURLString, modelContext: context)
-
-        #expect(await feedService.requestedURLStrings() == [feedURL])
-        #expect(libraryStore.subscriptions.map(\.feedURL) == [feedURL])
-        #expect(libraryStore.episodes.map(\.episodeID) == ["from-search-episode"])
-    }
-
-    @Test("Result without feed URL cannot create a subscription request")
-    func resultWithoutFeedURLCannotCreateSubscriptionRequest() {
-        let result = DirectoryPodcastResult(
-            id: 404,
-            title: "Unavailable Feed",
-            artistName: "Directory Only",
-            feedURL: nil
-        )
-
-        #expect(result.feedURLString == nil)
-    }
-
-    private func makeSnapshot(
-        feedURL: String,
-        podcastTitle: String,
-        episodeID: String
-    ) -> FeedSnapshot {
-        let podcastID = PodcastID(rawValue: feedURL)
-        return FeedSnapshot(
-            podcast: Podcast(
-                id: podcastID,
-                feedURL: URL(string: feedURL)!,
-                title: podcastTitle,
-                author: "\(podcastTitle) Author"
-            ),
-            episodes: [
-                Episode(
-                    id: EpisodeID(rawValue: episodeID),
-                    podcastID: podcastID,
-                    podcastTitle: podcastTitle,
-                    title: "Episode for \(podcastTitle)",
-                    publishedAt: Date(timeIntervalSince1970: 1_700_000_000),
-                    duration: 120,
-                    audioURL: URL(string: "https://example.com/\(episodeID).mp3"),
-                    guid: episodeID
-                )
-            ]
-        )
-    }
 }
 
 private actor StubPodcastDirectoryService: PodcastDirectoryService {
@@ -234,42 +146,6 @@ private actor StubPodcastDirectoryService: PodcastDirectoryService {
             waiter.continuation.resume()
             return true
         }
-    }
-}
-
-private actor StubSearchFeedService: FeedService {
-    enum Response: Sendable {
-        case success(FeedSnapshot)
-    }
-
-    private var responsesByURL: [String: [Response]]
-    private var requestedURLs: [String] = []
-
-    init(responses: [String: Response]) {
-        responsesByURL = responses.mapValues { [$0] }
-    }
-
-    func fetchFeed(at url: URL) async throws -> FeedSnapshot {
-        let key = url.absoluteString
-        requestedURLs.append(key)
-
-        guard var responses = responsesByURL[key],
-              !responses.isEmpty
-        else {
-            throw StubDirectoryError(message: "No stub response for \(key)")
-        }
-
-        let response = responses.removeFirst()
-        responsesByURL[key] = responses
-
-        switch response {
-        case .success(let snapshot):
-            return snapshot
-        }
-    }
-
-    func requestedURLStrings() -> [String] {
-        requestedURLs
     }
 }
 

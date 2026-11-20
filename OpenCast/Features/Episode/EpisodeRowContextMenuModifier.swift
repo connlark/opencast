@@ -8,7 +8,6 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
     let episode: EpisodeListItemSnapshot
     let showsGoToShow: Bool
     let onViewDetails: (EpisodeListItemSnapshot) -> Void
-    /// Archive / Unarchive, for the rows the Inbox membership applies to.
     var showsArchiveAction = false
 
     @State private var modePromptEpisode: EpisodeListItemSnapshot?
@@ -26,8 +25,6 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
             }
             Button("View Episode Details", systemImage: "info.circle", action: viewDetails)
             if showsGoToShow {
-                // In a two-pane split's sidebar (the Inbox's episode list)
-                // the show opens as the detail; elsewhere it is pushed.
                 TwoPaneRootLink(route: .podcastDetail(feedURL: episode.podcastID), selectionStyle: .menuItem) {
                     Label("Go to Show", systemImage: "rectangle.stack")
                 }

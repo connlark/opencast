@@ -1,6 +1,5 @@
-/// Body of `jobs/{id}/ack`, sent only after the transcript document is
-/// durably written locally. The normalized hash echoes what was imported so
-/// the server can record integrity evidence before deleting the result.
+/// Send only once the transcript document is durably written: the ack lets the server delete
+/// its result.
 public struct OpenCastRemoteTranscriptionAckRequest: Codable, Sendable, Equatable {
     public var schemaVersion: Int
     public var normalizedTranscriptSHA256: String?

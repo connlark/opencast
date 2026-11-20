@@ -1,9 +1,6 @@
 import OpenCastAnalysis
 import SwiftUI
 
-/// The one-time notice before the first Detect Ads or Generate tap without a
-/// key. Only its two buttons close it; both mark it seen (the presenting gate
-/// does that).
 struct AnalysisKeyNoticeSheet: View {
     @Environment(OpenCastAppModel.self) private var appModel
 

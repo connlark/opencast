@@ -5,12 +5,6 @@ import SwiftData
 import Testing
 @testable import OpenCast
 
-/// Transcribe Remotely under its own continued-processing card. Only a
-/// user's start or resume arms it, after the episode is reserved and the
-/// run exists; launch and activation re-attach stay foreground-only.
-/// Expiration parks the same job without a `/cancel`, one card serves the
-/// whole app in every ordering, and the remote card never counts as local
-/// lifecycle protection.
 @MainActor
 @Suite("Remote transcription continued processing", .serialized)
 struct RemoteTranscriptionContinuationTests {
@@ -25,7 +19,7 @@ struct RemoteTranscriptionContinuationTests {
         let context: ModelContext
         let episodes: [EpisodeListItemSnapshot]
 
-        /// Persisted state an earlier process wrote, with a throwaway sink.
+        // Its own sink keeps seeded writes out of the recorded diagnostics.
         var seedStore: RemoteTranscriptionJobStore {
             RemoteTranscriptionJobStore(defaults: defaults, diagnostics: RecordingRemoteJobDiagnosticSink())
         }
@@ -56,7 +50,7 @@ struct RemoteTranscriptionContinuationTests {
         }
     }
 
-    enum Card: String, Sendable, CaseIterable {
+    enum Card: String, Sendable {
         case remote
         case adFree
         case generate
@@ -410,9 +404,6 @@ struct RemoteTranscriptionContinuationTests {
         return minted
     }
 
-    /// Builds a device whose episodes each have a completed download with a
-    /// known source identity, so a run reaches the poll leg. With
-    /// `deliversResult`, the server finishes the first episode's job.
     private func makeDevice(
         episodeIDs: [String],
         deliversResult: Bool = false
@@ -502,8 +493,6 @@ struct RemoteTranscriptionContinuationTests {
         return url
     }
 
-    /// A result whose words and normalized hash are self-consistent, so it
-    /// passes mapper validation against the given identity.
     private static func result(
         identity: OpenCastRemoteTranscriptionSourceIdentity,
         durationSeconds: Double

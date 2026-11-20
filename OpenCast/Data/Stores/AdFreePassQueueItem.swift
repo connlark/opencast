@@ -6,8 +6,7 @@ struct AdFreePassQueueItem: Identifiable, Equatable {
     let enqueuedAt: Date
     let sequence: Int
     let mode: AdDetectionMode
-    /// Set while a cloud item waits at the head after its drain stopped
-    /// polling; the server job keeps running and Resume re-attaches it.
+    /// Set only while a parked cloud item waits at the head; its server job keeps running.
     var remoteParkReason: RemoteTranscriptionJobExit?
 
     init(

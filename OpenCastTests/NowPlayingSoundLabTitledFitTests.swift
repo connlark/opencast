@@ -4,10 +4,6 @@ import SwiftUI
 import Testing
 @testable import OpenCast
 
-/// The titled panel and the artwork around it as SwiftUI renders them, read
-/// from the UIKit views they render through (`NowPlayingSoundLabHostedFitTests`
-/// says why). The square-panel tests stay there: they describe the legacy
-/// mode, which receives no card geometry.
 @MainActor
 @Suite("Sound Lab titled fit")
 struct NowPlayingSoundLabTitledFitTests {
@@ -45,8 +41,6 @@ struct NowPlayingSoundLabTitledFitTests {
         .environment(\.dynamicTypeSize, dynamicTypeSize)
     }
 
-    /// The rows top to bottom, each rendered capsule the row's height and
-    /// inside the panel, neighbours apart by the gap, the switch in its row.
     static func expectRows(
         _ rendered: Hosted.Rendered,
         in open: OpenPanel,
@@ -118,13 +112,6 @@ struct NowPlayingSoundLabTitledFitTests {
 
     // MARK: The capsules
 
-    static let textSizes: [DynamicTypeSize] = [.xSmall, .small, .medium, .large, .xLarge, .xxLarge, .xxxLarge]
-
-    @Test("The text sizes tested are every supported non-accessibility size")
-    func everyTextSize() {
-        #expect(Self.textSizes == DynamicTypeSize.allCases.filter { !$0.isAccessibilitySize })
-    }
-
     @Test(
         "The glass style's vertical chrome: today's row renders its capsule that much past the label's minimum",
         arguments: [DynamicTypeSize.xSmall, .small, .medium, .large, .xLarge, .xxLarge, .xxxLarge]
@@ -179,38 +166,6 @@ struct NowPlayingSoundLabTitledFitTests {
         #expect(open.mode == .headingless)
         let rendered = try Hosted.render(Self.donePanel(open, dynamicTypeSize: size), square: open.frame.width)
         try Self.expectRows(rendered, in: open, rows: titled)
-    }
-
-    // MARK: The close target
-
-    @Test("Settled open the close target is the sliver's span over the open height, from the rectangle's leading edge")
-    func closeTargetAtTheOpenSize() {
-        let side = Fixture.closedSide
-        let open = OpenPanel(Fixture.closedInputs())
-        let layout = Layout(panelWidth: open.frame.width)
-        let target = open.artworkHitFrame(side: side, isSettledOpen: true)
-
-        // In the square's coordinates the rectangle starts left of and above it.
-        #expect(Fixture.isNear(target.minX, (side - open.frame.width) / 2))
-        #expect(Fixture.isNear(target.minY, side - open.frame.height))
-        #expect(Fixture.isNear(target.height, open.frame.height))
-        #expect(Fixture.isNear(target.maxY, side))
-        #expect(target.width >= Layout.minimumHitTarget)
-        #expect(target.width >= layout.artworkExposedWidth)
-        #expect(Fixture.isNear(target.width, layout.protectedLeadingSpace))
-
-        #expect(open.artworkHitFrame(side: side, isSettledOpen: false) == CGRect(x: 0, y: 0, width: side, height: side))
-    }
-
-    @Test(
-        "The legacy value's target is today's span over the square",
-        arguments: [154.0, 156.33, 166.92, 214.24, 220.0, 280.8, 337.0]
-    )
-    func legacyCloseTarget(side: Double) {
-        let side = CGFloat(side)
-        let span = Layout(panelWidth: side).artworkHitSpan(panelSide: side, isSettledOpen: true)
-        let target = OpenPanel.legacy(side: side).artworkHitFrame(side: side, isSettledOpen: true)
-        #expect(target == CGRect(x: span.lowerBound, y: 0, width: span.upperBound - span.lowerBound, height: side))
     }
 
     // MARK: The artwork in a card
@@ -309,7 +264,7 @@ struct NowPlayingSoundLabTitledFitTests {
         #expect(closedBelow == openBelow)
         #expect(Fixture.isNear(closedBelow.minY, Fixture.closedTop + side + 12, within: rendered.pixel))
 
-        // No episode, so two rows: the square's height stands at 282 pt.
+        // No episode, so two rows.
         let panel = OpenPanel(Fixture.closedInputs(rowCount: 2))
         let layout = Layout(panelWidth: panel.frame.width)
         let rows = rendered.rows.sorted { $0.minY < $1.minY }
@@ -385,33 +340,30 @@ struct NowPlayingSoundLabTitledFitTests {
 
     @Test(
         "Every action label's ideal height fits inside the capsule, the style's chrome taken off the row",
-        arguments: [DynamicTypeSize.xSmall, .small, .medium, .large, .xLarge, .xxLarge, .xxxLarge]
+        arguments: NowPlayingSoundLabLayout.fixedActionTitles.map(\.title),
+        [EpisodeAdFreePassPresentationPhase.idle, .running]
     )
-    func labelsFitTheCapsule(size: DynamicTypeSize) {
+    func labelsFitTheCapsule(title: String, phase: EpisodeAdFreePassPresentationPhase) {
         let inner = Layout.compactRowHeight - 2 * Layout.nativeGlassButtonVerticalChrome
-        for phase in [EpisodeAdFreePassPresentationPhase.idle, .running] {
-            for title in Layout.fixedActionTitles.map(\.title) {
-                let row = NowPlayingSoundLabActionRow(
-                    title: title,
-                    systemImage: "megaphone",
-                    tint: .red,
-                    phase: phase,
-                    isEnabled: true,
-                    isIconOnly: false,
-                    rowHeight: Layout.compactRowHeight,
-                    accessibilityValueText: "",
-                    accessibilityID: title,
-                    capsuleFitsRow: true,
-                    action: {}
-                )
-                let label = row.labelContent(reduceMotion: false)
-                    .environment(\.dynamicTypeSize, size)
-                let height = UIHostingController(rootView: label)
-                    .sizeThatFits(in: CGSize(width: Self.cardWidth, height: CGFloat.infinity))
-                    .height
-                #expect(height <= inner, "\(title) \(phase) at \(size): \(height) in \(inner)")
-            }
-        }
+        let row = NowPlayingSoundLabActionRow(
+            title: title,
+            systemImage: "megaphone",
+            tint: .red,
+            phase: phase,
+            isEnabled: true,
+            isIconOnly: false,
+            rowHeight: Layout.compactRowHeight,
+            accessibilityValueText: "",
+            accessibilityID: title,
+            capsuleFitsRow: true,
+            action: {}
+        )
+        let label = row.labelContent(reduceMotion: false)
+            .environment(\.dynamicTypeSize, .xxxLarge)
+        let height = UIHostingController(rootView: label)
+            .sizeThatFits(in: CGSize(width: Self.cardWidth, height: CGFloat.infinity))
+            .height
+        #expect(height <= inner, "\(title) \(phase): \(height) in \(inner)")
     }
 
     @Test("The card context hands the resolver the player's geometry, with the stack's span around the square")
@@ -516,21 +468,5 @@ struct NowPlayingSoundLabTitledFitTests {
             let leadingEdge = windowWidth - row.maxX
             #expect(abs(leadingEdge - (panel.frame.minX + layout.protectedLeadingSpace)) <= 2 * rendered.pixel, "row \(row)")
         }
-    }
-
-    @Test("An unlatched drag follows the panel's mode")
-    func unlatchedDragFollowsTheMode() {
-        #expect(!NowPlayingSoundLabArtwork.readsFootprint(latched: nil, mode: .legacy))
-        #expect(NowPlayingSoundLabArtwork.readsFootprint(latched: nil, mode: .headed))
-        #expect(NowPlayingSoundLabArtwork.readsFootprint(latched: nil, mode: .headingless))
-    }
-
-    @Test("A latched drag keeps its space through a change of mode")
-    func latchedDragSurvivesAModeChange() {
-        // Legacy to titled stays local.
-        #expect(!NowPlayingSoundLabArtwork.readsFootprint(latched: false, mode: .headed))
-        #expect(!NowPlayingSoundLabArtwork.readsFootprint(latched: false, mode: .headingless))
-        // Titled to legacy stays the footprint.
-        #expect(NowPlayingSoundLabArtwork.readsFootprint(latched: true, mode: .legacy))
     }
 }

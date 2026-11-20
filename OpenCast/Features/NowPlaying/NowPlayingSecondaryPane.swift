@@ -1,6 +1,3 @@
-/// The secondary pane's four modes. The selection lives in scene storage
-/// under `sceneStorageKey`, so it survives live pose changes and comes back
-/// with the scene's saved state.
 nonisolated enum NowPlayingSecondaryPane: String, CaseIterable, Identifiable, Sendable {
     case upNext
     case transcript
@@ -10,12 +7,10 @@ nonisolated enum NowPlayingSecondaryPane: String, CaseIterable, Identifiable, Se
     static let sceneStorageKey = "nowPlayingSecondaryPane"
     static let pickerAccessibilityIdentifier = "Now Playing Secondary Pane"
 
-    /// A missing or unrecognized stored value is Up Next.
     init(storedValue: String?) {
         self = storedValue.flatMap(Self.init(rawValue:)) ?? .upNext
     }
 
-    /// The pane mode an open utility sheet already shows, if any.
     init?(sheet: PlayerUtilitySheet) {
         switch sheet {
         case .upNext:

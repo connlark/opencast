@@ -7,10 +7,7 @@ nonisolated struct EpisodeSearchIndexRequest: Sendable {
     let allowedEpisodeIDs: Set<String>?
     let limit: Int
 
-    /// The legacy matcher returned every match, so the default limit must be
-    /// effectively unreachable for a real library; it exists as a top-K
-    /// safety bound, not a presentation cap. Benchmark callers may pass a
-    /// smaller explicit limit.
+    /// A top-K safety bound, not a presentation cap: no real library should reach it.
     static let defaultLimit = 1000
 
     init(

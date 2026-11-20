@@ -5,13 +5,10 @@ import SwiftData
 import SwiftUI
 
 struct EpisodeDetailView: View {
-    /// Between the page's sections, and above the tab accessory at the end.
     nonisolated static let contentSpacing = 24.0
 
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
-    /// Set when this page is a two-pane split's detail root, where `dismiss`
-    /// cannot remove it.
     @Environment(\.twoPaneRootClose) private var rootClose
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -24,8 +21,7 @@ struct EpisodeDetailView: View {
     @State private var adSection = EpisodeAdAnalysisSectionModel()
     @State private var chaptersSection = EpisodeChaptersSummarySectionModel()
     @State private var embeddedChapters: [EpisodeChapter] = []
-    /// The `embeddedChaptersLoadKey` whose read has landed: an empty
-    /// `embeddedChapters` alone cannot tell "none" from "not read yet".
+    /// An empty `embeddedChapters` alone cannot tell "none" from "not read yet".
     @State private var embeddedChaptersLoadedKey: String?
     @State private var publisherSection = EpisodePublisherChaptersSectionModel()
     @State private var privateNotes: [EpisodeNoteRecord] = []
@@ -43,8 +39,7 @@ struct EpisodeDetailView: View {
         appModel.episodeSnapshot(for: episodeID)
     }
 
-    /// A pushed page pops; a two-pane split's detail root clears its
-    /// section's path, since `dismiss` cannot remove a stack's root.
+    /// `dismiss` cannot remove a stack's root, so a two-pane split's detail root clears its path.
     private func goBack() {
         if let rootClose, rootClose.route == .episodeDetail(id: episodeID) {
             rootClose.close()
@@ -100,9 +95,8 @@ struct EpisodeDetailView: View {
         }
         // Outside the toolbar so its Episode Actions menu reads the gate.
         .environment(noticeGate)
-        // On the page, not the toolbar button: the toolbar does not carry
-        // every modifier of its items over (it drops `accessibilityValue`),
-        // and the page does not change with the queue.
+        // On the page, not the toolbar button: a toolbar does not carry every modifier of its
+        // items over.
         .sensoryFeedback(.success, trigger: upNextEnqueueFeedback)
         .confirmationDialog(
             "Clear progress for \(episode?.title ?? "this episode")?",
@@ -213,9 +207,8 @@ struct EpisodeDetailView: View {
         let analysis = adSection.jobState(forKey: adAnalysisKey)
         let hasCurrentAnalysis = adSection.hasCurrentAnalysis(forKey: adAnalysisKey, episodeID: episode.episodeID)
         let zoneTiers = adSection.zoneTiers(forKey: adAnalysisKey, episodeID: episode.episodeID)
-        // Coarse pipeline state (no live byte progress) drives column
-        // presence/animation; the per-tick progress reads live in the leaf
-        // sections below so ticks never re-evaluate this whole column.
+        // No live byte progress here: the leaf sections below read it, so download ticks never
+        // re-evaluate this whole column.
         let pipelineState = EpisodePipelineState.make(
             episodeID: episode.episodeID,
             queueStatus: appModel.adFreePass.queueStatus(for: episode.episodeID),
@@ -261,9 +254,6 @@ struct EpisodeDetailView: View {
                     onMakeAdFree: { noticeGate.run(appModel: appModel) { makeAdFree(episode) } }
                 )
 
-                // Remote flow surface (dev-flag gated): live phase while a
-                // request runs, and a visible terminal state with the
-                // on-device fallback when it ends — no silent endings.
                 if appModel.remoteTranscriptionPurchases.isSurfaceVisible,
                    let remoteStatus = RemoteTranscriptionStatusPresentation.make(
                        phase: appModel.remoteTranscription.store.phase(for: episode.episodeID)
@@ -301,21 +291,9 @@ struct EpisodeDetailView: View {
                     seekToTimestamp(timestamp, episode: episode)
                 }
 
-                // Chapter source priority: embedded in the audio file, then
-                // the feed's chapters document, then generated, then a
-                // timestamp list in the show notes. Creator chapters win
-                // when they exist (D3): a feed declaration hides the
-                // generated cards and the Generate offer unless its document
-                // was read and held nothing usable. Until the publisher load
-                // lands the bare declaration stands in, so Generate never
-                // flickers in ahead of a slow fetch. The rule applies at
-                // render time too: an analysis generated before the
-                // declaration reached the cache stops rendering once a feed
-                // refresh reveals it. Show-notes chapters never affect
-                // generation; they render only once every source above them
-                // has settled without chapters (`ShowNotesChaptersCardRule`),
-                // and a declared document that could not be read does not
-                // hide them.
+                // Chapter sources in priority order: embedded, the feed's document, generated, show
+                // notes. Until the publisher load lands, the bare feed declaration suppresses
+                // generation, so Generate never flickers in ahead of a slow fetch.
                 if !displayedEmbeddedChapters.isEmpty {
                     EpisodeChaptersCard(chapters: displayedEmbeddedChapters, source: .embedded) { chapter in
                         seekToTimestamp(chapter.startTime, episode: episode)
@@ -385,11 +363,8 @@ struct EpisodeDetailView: View {
                     .frame(maxWidth: .infinity)
                 }
 
-                // Generation stays below the show notes, out of the way — the
-                // app is a podcast listener first. The !showsGeneratedCards
-                // gate keeps the old if/else mutual exclusivity: the controls
-                // presentation maps a completed analysis to .ready, which
-                // must not re-offer Generate under the rendered cards.
+                // The controls map a completed analysis to .ready, so without this gate Generate
+                // would be offered again under the rendered cards.
                 if !showsGeneratedCards,
                    let controlsPresentation = chaptersSummaryControlsPresentation(
                        for: episode,
@@ -550,8 +525,6 @@ struct EpisodeDetailView: View {
         appModel.remoteTranscription.store.dismissTerminalPhase(for: episode.episodeID)
     }
 
-    /// Resume and Try Again both re-attach the persisted reference; only a
-    /// conclusively cleared reference starts a fresh job.
     private func resumeRemoteTranscript(_ episode: EpisodeListItemSnapshot) {
         switch appModel.resumeRemoteTranscription(episode: episode, modelContext: modelContext) {
         case .started:
@@ -584,9 +557,8 @@ struct EpisodeDetailView: View {
         appModel.library.isArchived(episodeID: episodeID)
     }
 
-    /// Clearing deletes the row, so an archived episode loses its archive
-    /// too; an archive-only row (no listening, not played) has nothing else
-    /// to clear, and Unarchive is its way back.
+    /// Clearing deletes the row, archive included, so an archive-only row (no position, not
+    /// played) has nothing else to clear; Unarchive is its way back.
     private func offersClearProgress(_ record: EpisodeProgressRecord?) -> Bool {
         guard let record else {
             return false
@@ -652,9 +624,8 @@ struct EpisodeDetailView: View {
     }
 
     private func updateTextContent(for episode: EpisodeListItemSnapshot?) async {
-        // The task key deliberately includes isNowPlayingPresented (defer
-        // while covered, refresh on dismissal); the identity memo makes that
-        // refresh a cache hit when the content is unchanged.
+        // The task key includes isNowPlayingPresented, so this re-runs on each dismissal; the
+        // identity memo makes that a cache hit when nothing changed.
         let identity = TextContentIdentity(
             episodeID: episode?.episodeID,
             transcriptCompletedAt: completedTranscriptUpdatedAt(for: episode?.episodeID)
@@ -707,12 +678,7 @@ struct EpisodeDetailView: View {
         loadedTextContentIdentity = identity
     }
 
-    /// Fail-open surface: failures render the ready state again (a manual tap
-    /// retries) — never an error; Episode Diagnostics shows why a run failed.
-    /// The needs-minutes state with a buy path exists only while generation
-    /// charges transcription minutes.
-    /// Offered for any episode with a completed transcript — generation is a
-    /// per-episode manual action, with no show-wide setting gating it.
+    /// Fail-open: a failed run shows the ready state again, never an error.
     private func chaptersSummaryControlsPresentation(
         for episode: EpisodeListItemSnapshot,
         key: String,
@@ -738,9 +704,8 @@ struct EpisodeDetailView: View {
         }
     }
 
-    /// Display-only estimate: the server recomputes the charge from its own
-    /// authoritative duration at reserve, so this can mis-display but never
-    /// mis-charge.
+    /// Display only: the server recomputes the charge from its own duration at reserve, so this
+    /// can mis-display but never mis-charge.
     private var transcriptAnalysisChargeSeconds: Int64? {
         guard let document = chaptersSection.transcriptDocument else {
             return nil
@@ -770,8 +735,6 @@ struct EpisodeDetailView: View {
         )
     }
 
-    /// With no way to run the analysis (no key, and no trial left) the key
-    /// screen opens instead of the disclosure.
     private func generateChaptersAndSummary(_ episode: EpisodeListItemSnapshot) {
         guard !appModel.presentChaptersSummaryKeyScreenIfNoRoute() else {
             return
@@ -799,9 +762,8 @@ struct EpisodeDetailView: View {
             return
         }
 
-        // Chapter times are exact only against the transcribed audio asset;
-        // a dynamic enclosure can be a different assembly offset by tens of
-        // seconds. Same verdict ladder as the transcript view's playFrom.
+        // Chapter times are exact only against the transcribed audio asset; a dynamic enclosure
+        // can be a different assembly offset by tens of seconds.
         if appModel.playback.currentEpisode?.id.rawValue == episode.episodeID {
             let downloadRecord = appModel.downloads.record(for: episode.episodeID)
             let alignment = TranscriptSourceAlignment.resolve(
@@ -812,8 +774,7 @@ struct EpisodeDetailView: View {
             )
             switch alignment {
             case .verified, .mismatched(canSwitchToTranscribedCopy: false):
-                // Verified: exact seek. No matched copy anywhere: explicit
-                // best-effort jump — a restart could not land closer.
+                // No matched copy anywhere: seek best-effort, as a restart could not land closer.
                 appModel.playback.seek(to: chapter.startTime, intent: .scrub)
                 if appModel.playback.state != .playing {
                     appModel.playback.play()
@@ -880,9 +841,7 @@ private struct TextContentIdentity: Equatable {
     let transcriptCompletedAt: Date?
 }
 
-/// Reads live download byte progress in its own body so per-tick progress
-/// publishes (many per download) re-evaluate this bar alone, never the
-/// detail column above it.
+/// Reads live byte progress in its own body, so download ticks re-evaluate this bar alone.
 private struct EpisodeDetailActionBarSection: View {
     @Environment(OpenCastAppModel.self) private var appModel
 
@@ -913,9 +872,7 @@ private struct EpisodeDetailActionBarSection: View {
     }
 }
 
-/// Reads live download byte progress in its own body so per-tick progress
-/// publishes re-evaluate this card alone, never the detail column above it.
-/// Presence is decided by the parent's coarse (progress-free) state.
+/// Reads live byte progress in its own body, so download ticks re-evaluate this card alone.
 private struct EpisodeDetailPipelineSection: View {
     @Environment(OpenCastAppModel.self) private var appModel
 

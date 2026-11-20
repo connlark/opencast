@@ -1,25 +1,15 @@
 import OpenCastAnalysis
 
-/// How a request left a pacer's queue.
 public enum AnalysisPacerAdmission: Sendable, Hashable {
-    /// Admitted after waiting `waitedSeconds`; the caller must call
-    /// ``AnalysisKeyPacer/release()`` when its exchange ends.
+    /// The caller must call `release` when its exchange ends.
     case admitted(waitedSeconds: Double)
-    /// The request's deadline would pass before the key could take it.
     case deadlinePassed
     case cancelled
 }
 
-/// Admission control for one provider key. Up to `maxInFlight` requests
-/// run at once until the provider first answers 429 (a rate limit, not a
-/// hard quota) on the key; from then on, for as long as the pacer lives,
-/// requests go one at a time and none starts before the latest
-/// `Retry-After` has passed. Pacing never decides an outcome: a request
-/// that cannot be admitted before its deadline fails as a timeout, and the
-/// run budget still bounds the episode.
+/// After the key's first 429 (a rate limit, not a hard quota), requests go one at a time for the
+/// pacer's life, none before the latest `Retry-After` has passed.
 public actor AnalysisKeyPacer {
-    /// The concurrent admissions allowed before the first rate limit,
-    /// clamped to 1...4.
     public nonisolated let maxInFlight: Int
     private let clock: any AnalysisClock
     private var serial = false
@@ -33,15 +23,11 @@ public actor AnalysisKeyPacer {
         self.clock = clock
     }
 
-    /// Whether the key has been rate limited and now runs serially.
     public var isSerial: Bool { serial }
 
-    /// The concurrent admissions allowed now.
     public var admissionLimit: Int { serial ? 1 : maxInFlight }
 
-    /// Waits until the key may take another request: a free slot and, once
-    /// rate limited, the end of the last `Retry-After`. `deadline` is a
-    /// time on the pacer's clock.
+    /// `deadline` is an absolute time on the pacer's clock.
     public func admit(deadline: Double) async -> AnalysisPacerAdmission {
         let start = clock.now()
         let admission = await admission(deadline: deadline)
@@ -79,10 +65,7 @@ public actor AnalysisKeyPacer {
         }
     }
 
-    /// Ends one admitted request's hold on the key. A request the provider
-    /// rate-limited passes `rateLimited`, which takes effect before any
-    /// waiter can be admitted: serial from now on, and no admission before
-    /// `retryAfterSeconds` (already capped by the classifier) passes.
+    /// `rateLimited` takes effect before any waiter is woken.
     public func release(rateLimited: Bool = false, retryAfterSeconds: Int? = nil) {
         if rateLimited {
             serial = true
@@ -102,8 +85,7 @@ public actor AnalysisKeyPacer {
         }
     }
 
-    /// Suspends until a release wakes this waiter (`true`) or the deadline
-    /// passes or the task is cancelled first (`false`).
+    /// `true` when a release wakes this waiter; `false` on deadline or cancellation.
     private func waitForSlot(until deadline: Double) async -> Bool {
         let id = nextWaiterID
         nextWaiterID += 1

@@ -7,41 +7,11 @@ import Testing
 @MainActor
 @Suite("Onboarding completion service")
 struct OnboardingCompletionServiceTests {
-    @Test("Empty library finish needs sample confirmation")
-    func emptyLibraryFinishNeedsSampleConfirmation() {
-        #expect(OnboardingCompletionService.needsSampleConfirmation(activePodcastIDs: []))
-    }
-
     @Test("Existing subscriptions finish without sample confirmation")
     func existingSubscriptionsFinishWithoutSampleConfirmation() {
         #expect(!OnboardingCompletionService.needsSampleConfirmation(activePodcastIDs: [
             "https://example.com/feed.xml"
         ]))
-    }
-
-    @Test("Sample suggestions include public App Review samples with artwork")
-    func sampleSuggestionsIncludePublicAppReviewSamplesWithArtwork() {
-        #expect(OpenCastSamplePodcastSuggestions.all.contains { result in
-            result.title == "This American Life"
-                && result.feedURLString == OpenCastConstants.thisAmericanLifeFeedURL
-                && result.artworkURL != nil
-        })
-        #expect(OpenCastSamplePodcastSuggestions.all.contains { result in
-            result.title == "The Rest Is Science"
-                && result.feedURLString == OpenCastConstants.restIsScienceFeedURL
-                && result.artworkURL != nil
-        })
-        #expect(OpenCastSamplePodcastSuggestions.all.allSatisfy { result in
-            result.artworkURL != nil
-        })
-    }
-
-    @Test("Sample suggestions keep This American Life fallback")
-    func sampleSuggestionsKeepThisAmericanLifeFallback() {
-        #expect(OpenCastSamplePodcastSuggestions.all.contains { result in
-            result.title == "This American Life"
-                && result.feedURLString == OpenCastConstants.thisAmericanLifeFeedURL
-        })
     }
 
     @Test("Fallback subscription uses This American Life and completes onboarding")

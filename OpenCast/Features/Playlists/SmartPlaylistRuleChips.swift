@@ -1,10 +1,5 @@
 import SwiftUI
 
-/// A smart playlist's rule as seven glass chips that edit it in place:
-/// Episodes, Shows, Priority, Sort, Length, Age and Limit. Each chip reads
-/// as its current value; Shows and Priority open sheets, the others a menu. The chips only
-/// report a changed rule through `onChange`; the caller saves it. At
-/// accessibility sizes they stack one per line.
 struct SmartPlaylistRuleChips: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
@@ -66,10 +61,8 @@ struct SmartPlaylistRuleChips: View {
             }
         }
         .font(.subheadline)
-        // A menu label in a list row resolves the automatic label style to
-        // icon-only, and a chip must read as its value. Set here, not on each
-        // chip's Label: applied inside a menu's label closure it crashed
-        // SwiftUI (EXC_BAD_ACCESS in a chip menu's label) on iOS 27.
+        // A menu label in a list row resolves the automatic label style to icon-only. Set here,
+        // not on each chip's Label: inside a menu's label closure it crashes SwiftUI on iOS 27.
         .labelStyle(.titleAndIcon)
     }
 

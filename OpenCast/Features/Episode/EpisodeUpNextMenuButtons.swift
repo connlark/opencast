@@ -1,8 +1,6 @@
 import SwiftUI
 
-/// Play Next and Play Last, the same pair wherever an episode offers them. It
-/// reads no environment, so it behaves alike in a row's context menu and in a
-/// toolbar menu.
+/// Reads no environment, so it behaves alike in a row's context menu and in a toolbar menu.
 struct EpisodeUpNextMenuButtons: View {
     let state: EpisodeUpNextMenuState
     let onPlayNext: () -> Void

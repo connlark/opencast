@@ -42,14 +42,11 @@ struct InboxView: View {
                 visibleEpisodeCount: groupsByPodcast ? nil : visibleEpisodeCount
             )
             : InboxEpisodeListModel(episodes: [], totalEpisodeCount: 0, hasMore: false)
-        // Nil while the Inbox lists episodes.
         let groups = groupsByPodcast
             ? InboxPodcastGroup.make(episodes: model.episodes, subscriptions: appModel.library.subscriptions)
             : nil
         let visibleEpisodes = groups == nil ? Array(model.episodes.prefix(visibleEpisodeCount)) : []
         let rowIDs = groups?.map(\.id) ?? visibleEpisodes.map(\.episodeID)
-        // The filter applies only to a hydrated, populated Inbox, as the list
-        // branches below; a persisted filter never labels the loading state.
         let showsFilter = appModel.coreStoresHydrated && !inboxEpisodes.isEmpty
         let layout = groupedLayout
 
@@ -225,9 +222,8 @@ struct InboxView: View {
     }
 }
 
-/// Reads the ad-detection queue snapshot in its own body so per-stage queue
-/// churn (transcription progress publishes many stage updates per episode)
-/// re-evaluates this indicator alone, never the inbox List above it.
+/// Reads the ad-detection queue snapshot in its own body, so per-stage queue churn re-evaluates
+/// this indicator alone, never the Inbox List.
 private struct InboxAdDetectionToolbarStatus: View {
     @Environment(OpenCastAppModel.self) private var appModel
 

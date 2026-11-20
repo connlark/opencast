@@ -2,8 +2,6 @@ import SwiftUI
 import Testing
 @testable import OpenCast
 
-/// The artwork below the floor renders no inline panel, even with the
-/// reveal pinned open (the App Store screenshot lane's environment).
 @MainActor
 @Suite("Sound Lab artwork below the floor")
 struct NowPlayingSoundLabArtworkFloorTests {
@@ -38,8 +36,6 @@ struct NowPlayingSoundLabArtworkFloorTests {
         let rendered = try NowPlayingSoundLabHostedFitTests.render(artwork, square: side)
         #expect(rendered.switches.isEmpty == !renders, "switches \(rendered.switches)")
         #expect(rendered.rows.isEmpty == !renders, "rows \(rendered.rows)")
-        // The pinned reveal never asks for the sheet; only a tap, a drag or
-        // the accessibility action does.
         #expect(requests == 0)
     }
 }

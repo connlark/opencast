@@ -1,29 +1,8 @@
 import Foundation
 import OpenCastAnalysis
 
-/// What a recorder keeps of one provider exchange: structured fields only,
-/// never a provider string it has not read into a closed vocabulary, a
-/// number or the answer itself.
-///
-/// - Response, every status: the status code, the content type (a closed
-///   set), the parsed `Retry-After` seconds.
-/// - 2xx `generate`: the answer text only (Gemini: each candidate's
-///   non-thought text parts and its finish reason; OpenAI: the
-///   `output_text` parts and the mapped finish reason), each text verified
-///   with the full contract or replaced by a placeholder; the usage
-///   numbers the pipeline and the ledger read.
-/// - 2xx `count`: the token count. 2xx `key_test`: nothing more.
-/// - Non-2xx: the classification (transport error and listener failure,
-///   closed vocabularies); the error `status`, detail reasons (Gemini) or
-///   `type`, `code` and `param` (OpenAI) when in the known set per provider,
-///   otherwise `unknown`; the quota ids that matched the per-minute or
-///   per-day rule and the parsed retry delay. Never the message.
-/// - Request: the kind, the body size and the body the transport built
-///   (the pipeline's canonical payload in the provider's shape), verified
-///   whole or replaced by a placeholder; never the URL or a header.
-///
-/// Everything else in a body is dropped. The record is then verified as a
-/// whole artifact before it is written.
+/// Structured fields only: never a provider string not read into a closed vocabulary, a number
+/// or the answer text, and never an error message, the URL or a header.
 public enum AnalysisExchangeRecord {
     public enum Kind: String, Sendable {
         case generate
@@ -95,9 +74,6 @@ public enum AnalysisExchangeRecord {
         return .object(members)
     }
 
-    /// Each candidate's non-thought text parts and finish reason, and the
-    /// `usageMetadata` counts. A body that is not a Gemini answer records
-    /// only that.
     static func geminiAnswer(_ text: String, verifier: SecretVerifier) -> [JSONMember] {
         guard !ProviderJSON.refusesBody(text), let root = ProviderJSON.parse(text), case .object = root else {
             return [JSONMember("body", .string("not_an_answer"))]
@@ -127,8 +103,6 @@ public enum AnalysisExchangeRecord {
         return members
     }
 
-    /// The `output_text` parts, the mapped finish reason and the billed
-    /// usage, as the transport reads them.
     static func openAIAnswer(_ text: String, verifier: SecretVerifier) -> [JSONMember] {
         let (answer, billed) = OpenAIResponsesMapping.answer(fromBody: text)
         var members = [
@@ -185,8 +159,6 @@ public enum AnalysisExchangeRecord {
         return members
     }
 
-    /// A quota id the per-minute or per-day rule reads: it names exactly one
-    /// of the two intervals and is made of letters, digits, `-` and `_`.
     static func isRuleQuotaID(_ id: String) -> Bool {
         (id.contains("PerMinute") != id.contains("PerDay")) && (1...128).contains(id.utf8.count)
             && id.utf8.allSatisfy { (0x30...0x39).contains($0) || (0x41...0x5A).contains($0) || (0x61...0x7A).contains($0) || $0 == 0x2D || $0 == 0x5F }
@@ -233,8 +205,7 @@ public enum AnalysisExchangeRecord {
         "ABORTED", "ALREADY_EXISTS", "RESOURCE_EXHAUSTED", "CANCELLED", "DATA_LOSS", "UNKNOWN", "INTERNAL",
         "NOT_IMPLEMENTED", "UNAVAILABLE", "DEADLINE_EXCEEDED",
     ]
-    /// `google.rpc.ErrorInfo` reasons the classifiers read or Google
-    /// documents for API keys, billing and quota.
+    /// `google.rpc.ErrorInfo` reasons Google documents for API keys, billing and quota.
     static let geminiReasons: Set<String> = [
         "API_KEY_INVALID", "API_KEY_EXPIRED", "API_KEY_SERVICE_BLOCKED", "API_KEY_HTTP_REFERRER_BLOCKED",
         "API_KEY_IP_ADDRESS_BLOCKED", "API_KEY_ANDROID_APP_BLOCKED", "API_KEY_IOS_APP_BLOCKED", "BILLING_DISABLED",

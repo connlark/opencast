@@ -1,7 +1,4 @@
-/// The replay oracle's Swift side: builds, validates and runs exactly what
-/// the pipeline would for recorded answers, and reports it in the JSON
-/// shapes the services' eval bridges print, so the two compare field by
-/// field. Used by `OpenCastAnalysisReplay` and the parity tests.
+/// Output shapes must match what the services' eval bridges print, field by field.
 public enum AnalysisReplay {
     public struct InputError: Error, Sendable, CustomStringConvertible {
         public let description: String
@@ -11,7 +8,6 @@ public enum AnalysisReplay {
         }
     }
 
-    /// `{"texts": [...], "finish_reason": ..., "usage": {...}}`
     public static func providerAnswer(_ value: JSONValue) throws(InputError) -> AnalysisProviderAnswer {
         var texts: [String] = []
         for element in value["texts"]?.arrayValue ?? [] {
@@ -34,7 +30,6 @@ public enum AnalysisReplay {
         return AnalysisProviderAnswer(texts: texts, finishReason: value["finish_reason"]?.stringValue, usage: usage)
     }
 
-    /// `{"body": "..."}`, `{"answer": {...}}`, or `null` for not recorded.
     public static func reply(_ value: JSONValue) throws(InputError) -> AnalysisProviderReply? {
         if value == .null { return nil }
         if let body = value["body"]?.stringValue { return .geminiBody(body) }
@@ -42,7 +37,6 @@ public enum AnalysisReplay {
         throw InputError(description: "a reply is {\"body\": ...} or {\"answer\": ...}")
     }
 
-    /// Replies keyed `window-N`, `repair-N` or `attempt-N`.
     public static func replies(_ value: JSONValue) throws(InputError) -> [AnalysisProviderRequest.Purpose: AnalysisProviderReply] {
         guard let members = value.objectMembers else { throw InputError(description: "replies must be an object") }
         var result: [AnalysisProviderRequest.Purpose: AnalysisProviderReply] = [:]
@@ -63,9 +57,6 @@ public enum AnalysisReplay {
         return result
     }
 
-    /// The pipeline's view of every scalar in the shape of the ad bridge's
-    /// `char_classes` op: alphanumeric and whitespace ranges, and the
-    /// scalars whose receipt token differs from themselves.
     public static func characterClasses() -> JSONValue {
         func appendRange(_ ranges: inout [[UInt32]], _ value: UInt32) {
             if let last = ranges.last, last[1] + 1 == value {
@@ -211,9 +202,6 @@ public enum AnalysisReplay {
         }
     }
 
-    /// Every window's trace, the run result and the exact response text.
-    /// The trace analyzes every window; the result comes from
-    /// ``AnalysisRunner/detectAds(_:model:)``.
     public static func runAds(
         _ request: AdAnalysisRequest,
         replies: [AnalysisProviderRequest.Purpose: AnalysisProviderReply],
@@ -232,7 +220,6 @@ public enum AnalysisReplay {
         ])
     }
 
-    /// Each attempt that got a reply, the result and the exact response text.
     public static func runChapters(
         _ request: TranscriptAnalysisRequest,
         replies: [AnalysisProviderRequest.Purpose: AnalysisProviderReply],

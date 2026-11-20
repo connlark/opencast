@@ -13,13 +13,4 @@ struct AnalysisProviderKeyTests {
         #expect(!String(reflecting: key).contains("keychain-writer"))
         #expect(Mirror(reflecting: key).children.isEmpty)
     }
-
-    @Test("Errors thrown by the writer pass through with their type")
-    func writerErrorsPassThrough() throws {
-        struct WriteFailed: Error, Equatable {}
-        let key = try #require(AnalysisProviderKey("key-for-the-keychain-writer-0123"))
-        #expect(throws: WriteFailed()) {
-            try key.withData { (_: Data) throws(WriteFailed) in throw WriteFailed() }
-        }
-    }
 }

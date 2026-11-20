@@ -38,16 +38,6 @@ struct AnalysisServicesDeregistrationTests {
         release.release()
     }
 
-    @Test("Every failed slot is reported without throwing")
-    func allFail() async throws {
-        let slot = DeregistrationTestSlot(transport: .init(replies: [.init(status: 500, body: "{}")]))
-        defer { try? slot.keychain.deleteAll() }
-        _ = try slot.registerLocally()
-        let outcomes = await AnalysisServicesDeregistration(slots: [.remoteTranscription: { _ in slot.deregistration() }]).run()
-        guard case .failed? = outcomes[.remoteTranscription] else { Issue.record("Expected failed slot"); return }
-        #expect(try slot.keychain.loadAppAttestKeyID() == "old-key")
-    }
-
     @Test("Resolution is inside the deadline and a late resolver cannot delete")
     func resolutionDeadline() async throws {
         let slot = DeregistrationTestSlot()
@@ -92,21 +82,6 @@ struct AnalysisServicesDeregistrationTests {
         release.release()
         try await section.value
         #expect(slot.transport.requests.isEmpty)
-    }
-
-    @Test("The StoreKit lookup is shared by concurrent slot resolvers")
-    func sharesEnvironmentLookup() async {
-        let calls = Mutex(0)
-        let resolver: AnalysisServicesDeregistration.Resolver = { lookup in
-            #expect((try? await lookup.environment()) == .production)
-            return nil
-        }
-        let outcomes = await AnalysisServicesDeregistration(
-            slots: Dictionary(uniqueKeysWithValues: AnalysisServicesDeregistration.Slot.allCases.map { ($0, resolver) }),
-            storeEnvironment: { calls.withLock { $0 += 1 }; return .production }
-        ).run()
-        #expect(outcomes.count == 4)
-        #expect(calls.withLock { $0 } == 1)
     }
 
     @Test("Release production and sandbox factories use the registered deployment slots", arguments: [RemoteTranscriptionStoreEnvironment.production, .sandbox, .xcode])

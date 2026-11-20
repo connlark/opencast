@@ -1,9 +1,6 @@
 import Foundation
 import Observation
 
-/// The episode detail's ad-analysis surface: the transcript and analysis
-/// documents behind the pipeline card and span timeline, loaded once per
-/// `loadKey` and served only while that key is still the current one.
 @Observable
 final class EpisodeAdAnalysisSectionModel {
     private static let placeholderState: EpisodeAdAnalysisJobState = .unavailable("Transcript unavailable.")
@@ -12,22 +9,15 @@ final class EpisodeAdAnalysisSectionModel {
     private(set) var analysisDocument: EpisodeAdAnalysisDocument?
     private(set) var jobState: EpisodeAdAnalysisJobState = placeholderState
     private(set) var hasCurrentCompletedAnalysis = false
-    /// The display form: the download record's state and stored hash, no
-    /// file I/O, so a file lost mid-session still reads attached here until
-    /// the next launch's reconciliation.
+    /// From the download record's state and stored hash, with no file I/O: a file lost
+    /// mid-session still reads attached until the next launch reconciles it.
     private(set) var isAnalysisAttached = false
     private(set) var zoneTiers: EpisodeAdAnalysisZoneTiers = .empty
     private(set) var loadedKey: String?
 
-    /// The `.task(id:)` key: per-episode transcript, analysis and download
-    /// record stamps plus the store's tracked running flag. isRunning is the
-    /// only Observation-tracked analysis store read here (record lookups go
-    /// through the store's index), so run start/end are what invalidate the
-    /// view; the store-global changeSequence stays out because it would
-    /// re-run this load — a document read plus an off-main SHA-256 — on
-    /// every OTHER episode's analysis events. The download stamp re-keys a
-    /// deletion, a repair or a completion, which attach or detach the
-    /// analysis.
+    /// Record lookups here are not Observation-tracked; isRunning is. The store-global
+    /// changeSequence stays out: it would re-run this load (a document read and an off-main
+    /// SHA-256) on every other episode's analysis events.
     func loadKey(appModel: OpenCastAppModel, episodeID: String?) -> String {
         guard let episodeID else {
             return "missing"
@@ -49,8 +39,7 @@ final class EpisodeAdAnalysisSectionModel {
         return "\(episodeID)|\(transcriptStamp)|\(analysisStamp)|\(runningStamp)|\(downloadStamp)"
     }
 
-    /// The loaded job state while it still belongs to `key`; a re-keyed task
-    /// must never render a stale episode's state before its load lands.
+    /// A re-keyed task must never render the previous episode's state before its own load lands.
     func jobState(forKey key: String) -> EpisodeAdAnalysisJobState {
         loadedKey == key ? jobState : Self.placeholderState
     }
@@ -83,8 +72,6 @@ final class EpisodeAdAnalysisSectionModel {
         return (tiers.autoSkip + tiers.displayOnly).map(\.endTime).max() ?? 0
     }
 
-    /// The transcript a manual Detect Ads run submits, only while it is the
-    /// one this key loaded.
     func transcriptDocument(forKey key: String, episodeID: String) -> EpisodeTranscriptDocument? {
         guard loadedKey == key, let transcriptDocument, transcriptDocument.episodeID == episodeID else {
             return nil

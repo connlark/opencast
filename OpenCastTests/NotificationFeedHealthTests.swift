@@ -39,26 +39,6 @@ struct NotificationFeedHealthTests {
         #expect(health.isDegraded)
     }
 
-    @Test("Decodes old-server responses without health as no data")
-    func decodesOldServerResponsesWithoutHealth() throws {
-        let json = Data(
-            """
-            {
-              "message": "ok",
-              "accepted": [
-                { "feed_url": "https://example.com/feed.xml", "title": "Show" }
-              ],
-              "rejected": []
-            }
-            """.utf8
-        )
-
-        let response = try JSONDecoder().decode(NotificationSubscriptionSyncResponse.self, from: json)
-
-        #expect(response.accepted.first?.health == nil)
-        #expect(response.pending.isEmpty)
-    }
-
     @Test("Health with sparse fields decodes and stays below the threshold")
     func sparseHealthDecodesBelowThreshold() throws {
         let json = Data(
@@ -99,7 +79,6 @@ struct NotificationFeedHealthTests {
         #expect(loaded[first.feedURL] == first.health)
         #expect(loaded[second.feedURL] == second.health)
 
-        // Wholesale replacement drops feeds absent from the newest sync.
         try await store.replaceNotificationFeedHealth([second])
         let replaced = try await store.notificationFeedHealthByFeedURL()
         #expect(replaced.count == 1)

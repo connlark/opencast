@@ -1,7 +1,5 @@
 import OpenCastTranscription
 
-/// Converts wire status into one atomic processing snapshot and retains the
-/// largest determinate fraction each job has displayed.
 final class RemoteTranscriptionProgressTracker {
     private var maximumFractionsByJobID: [String: Double] = [:]
 

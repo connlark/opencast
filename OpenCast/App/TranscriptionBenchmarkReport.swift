@@ -1,7 +1,6 @@
 import Foundation
 import OpenCastTranscription
 
-/// Single-file result artifact for quiet Release benchmark runs.
 /// Written once per lifecycle transition, never during a timed transcription.
 nonisolated struct TranscriptionBenchmarkReport: Codable, Sendable {
     var schemaVersion: Int

@@ -4,10 +4,7 @@ public struct FeedSnapshot: Codable, Hashable, Sendable {
     public var podcast: Podcast
     public var episodes: [Episode]
     public var fetchedAt: Date
-    /// True when the parser salvaged the fully-parsed episodes from a document
-    /// that failed to parse completely (truncation or a work-budget abort).
     public var isSalvaged: Bool
-    /// The channel's `itunes:new-feed-url` declaration, when present.
     public var newFeedURL: URL?
 
     public init(

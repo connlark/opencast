@@ -13,8 +13,6 @@ enum EpisodeSearch {
         !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// Whether a search with this query and mode reads summary/show-notes text.
-    /// List snapshots omit show notes, so callers fetch them only when needed.
     static func usesShowNotes(query: String, mode: EpisodeSearchMode) -> Bool {
         mode == .fullText && query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 3
     }

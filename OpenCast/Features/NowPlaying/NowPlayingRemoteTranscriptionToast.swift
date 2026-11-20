@@ -1,9 +1,5 @@
 import SwiftUI
 
-/// Compact active remote-transcription surface for the currently playing
-/// episode. It shares stage, ETA, and determinate progress with the episode
-/// status card, shows Resume while the job is parked on the server, and
-/// keeps Cancel as the user cancel in both states.
 struct NowPlayingRemoteTranscriptionToast: View {
     let presentation: RemoteTranscriptionStatusPresentation
     let canOpenEpisode: Bool

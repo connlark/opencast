@@ -44,6 +44,7 @@ struct NotificationSubscriptionSyncResponseDecodeTests {
         let response = try JSONDecoder().decode(NotificationSubscriptionSyncResponse.self, from: body)
 
         #expect(response.accepted.count == 1)
+        #expect(response.accepted.first?.health == nil)
         #expect(response.pending.isEmpty)
         #expect(response.registrationReady == nil)
     }

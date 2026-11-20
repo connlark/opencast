@@ -1,13 +1,9 @@
 import Foundation
 import SwiftData
 
-/// One episode reference in a manual playlist, synced through the private
-/// CloudKit database. CloudKit allows no unique constraints, relationships or
-/// required fields, so membership is deduplicated logically on
-/// `(playlistID, episodeID)` by the store and duplicate repair, the playlist
-/// is referenced by `playlistID`, every field is defaulted or optional, and
-/// the immutable `itemID` keeps a row's identity through a merge. A
-/// `PlaylistSortKey` lets a move rewrite one row.
+/// CloudKit allows no unique constraints, relationships or required fields, so membership is
+/// deduplicated on `(playlistID, episodeID)`, the playlist is referenced by `playlistID`,
+/// every field is defaulted or optional, and the immutable `itemID` survives a merge.
 @Model
 final class PlaylistItemRecord {
     var itemID: String = ""
@@ -25,8 +21,7 @@ final class PlaylistItemRecord {
     var audioURL: String?
     var duration: TimeInterval?
     var publishedAt: Date?
-    /// Stable per-record identity so duplicate repair picks the same winner on
-    /// every device (smallest UUID wins).
+    /// Never reassigned: duplicate repair keeps the smallest non-empty UUID on every device.
     var dedupeUUID: String = ""
 
     init(

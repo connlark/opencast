@@ -58,8 +58,6 @@ struct PodcastPrimaryActionTests {
         #expect(action == .playLatest(next))
     }
 
-    /// Archiving moves `updatedAt`, which would otherwise make the archived
-    /// episode the most recently heard one.
     @Test("Resume passes over an archived in-progress episode")
     func resumeSkipsArchivedEpisodes() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

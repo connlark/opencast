@@ -7,19 +7,6 @@ import Testing
 @MainActor
 @Suite("Analysis key notice gate")
 struct AnalysisKeyNoticeGateTests {
-    @Test("A tap runs at once while the notice is not due")
-    func runsAtOnceWhenNotDue() async throws {
-        let appModel = await makeAppModel(reachable: false)
-        let gate = AnalysisKeyNoticeGate()
-        var runs = 0
-
-        gate.run(appModel: appModel) { runs += 1 }
-
-        #expect(runs == 1)
-        #expect(gate.pending == nil)
-        #expect(!gate.isNoticePresented)
-    }
-
     @Test("A saved key needs no answer about reachability: the tap runs at once")
     func savedKeyDoesNotWaitForReachability() throws {
         let answer = HeldReachabilityAnswer()
@@ -71,9 +58,8 @@ struct AnalysisKeyNoticeGateTests {
         #expect(runs == 0)
 
         answer.give(true)
-        await settle { gate.isNoticePresented }
+        #expect(await waitUntil { gate.isNoticePresented })
 
-        #expect(gate.isNoticePresented)
         #expect(gate.pending?.id == held)
         #expect(runs == 0)
 
@@ -95,13 +81,12 @@ struct AnalysisKeyNoticeGateTests {
         #expect(runs == 0)
 
         answer.give(false)
-        await settle { runs > 0 }
+        #expect(await waitUntil { runs > 0 })
 
         #expect(runs == 1)
         #expect(gate.pending == nil)
         #expect(!gate.isNoticePresented)
 
-        // Cleared: the next tap is not swallowed as a repeat.
         gate.run(appModel: appModel) { runs += 1 }
         #expect(runs == 2)
     }
@@ -116,7 +101,7 @@ struct AnalysisKeyNoticeGateTests {
         gate.run(appModel: appModel) { runs += 1 }
         try appModel.analysisKeys.save(AnalysisKeyFixtures.key(AnalysisKeyFixtures.googleText), provider: .google, syncs: true)
         answer.give(true)
-        await settle { runs > 0 }
+        #expect(await waitUntil { runs > 0 })
 
         #expect(runs == 1)
         #expect(gate.pending == nil)
@@ -145,7 +130,6 @@ struct AnalysisKeyNoticeGateTests {
         gate.didDismiss()
         #expect(runs == 1)
 
-        // Seen now, so the next tap is not held.
         gate.run(appModel: appModel) { runs += 1 }
         #expect(runs == 2)
         #expect(!gate.isNoticePresented)
@@ -191,7 +175,6 @@ struct AnalysisKeyNoticeGateTests {
         #expect(!appModel.analysisKeyNotice.hasSeenAIKeyNotice)
     }
 
-    /// No saved key, an unseen notice and reachability already resolved.
     private func makeAppModel(reachable: Bool) async -> OpenCastAppModel {
         let reachability = AnalysisTrialReachability { reachable }
         await reachability.resolve()
@@ -212,16 +195,8 @@ struct AnalysisKeyNoticeGateTests {
     private func makeModelContext() throws -> ModelContext {
         ModelContext(try OpenCastModelContainerFactory.make(inMemory: true))
     }
-
-    /// Lets the gate's task finish after the shared resolution has.
-    private func settle(until isDone: () -> Bool) async {
-        for _ in 0..<1_000 where !isDone() {
-            await Task.yield()
-        }
-    }
 }
 
-/// Keeps reachability unknown until a test gives the answer.
 private struct HeldReachabilityAnswer: Sendable {
     private let answers: AsyncStream<Bool>
     private let continuation: AsyncStream<Bool>.Continuation

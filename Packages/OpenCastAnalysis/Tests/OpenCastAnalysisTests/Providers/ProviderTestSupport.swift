@@ -105,13 +105,6 @@ enum ProviderTestSupport {
         try TestSupport.fixture("providers/\(name)")
     }
 
-    static func providerFixtureText(_ name: String) throws -> String {
-        try String(
-            contentsOf: TestSupport.packageRoot.appending(path: "Tests/OpenCastAnalysisTests/Fixtures/providers/\(name)"),
-            encoding: .utf8
-        )
-    }
-
     static func sendResult(_ transport: some AnalysisProviderTransport, _ request: AnalysisProviderRequest) async -> Result<AnalysisProviderReply, AnalysisTransportError> {
         do {
             return .success(try await transport.send(request))

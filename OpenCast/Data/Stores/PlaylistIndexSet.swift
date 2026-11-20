@@ -1,9 +1,8 @@
 import FoundationModels
 
-/// The structured answer to a simpler Make a Playlist request: the model
-/// writes no words, so Apple's output check has none to decline. The schema
-/// carries no descriptions because the instructions already spell out every
-/// field; adding them changes the prompt the model sees.
+/// The model writes no words here, so Apple's output check has none to decline. No `@Guide`
+/// descriptions: the instructions already spell out every field, and adding them changes the
+/// prompt the model sees.
 @Generable
 nonisolated struct PlaylistIndexSet: Equatable, Sendable {
     @Guide(.maximumCount(12))

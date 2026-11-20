@@ -3,39 +3,19 @@ import Observation
 import OpenCastCore
 import SwiftData
 
-/// The synced progress table's writer and published projection: every
-/// progress save (through the self-save ledger), the store-ordered record
-/// array with its latest-per-episode index, the revision that rows observe
-/// for index membership changes, and the archived set the Inbox reads.
-/// Store-level presentation — the failed state and the error banner —
-/// stays with LibraryStore: every method here throws and the store records
-/// the failure.
 @Observable
 final class EpisodeProgressWriter {
-    /// Existing rows observe their SwiftData model directly. This revision
-    /// is reserved for index membership changes and out-of-band reloads.
+    /// Moves only on index membership changes and reloads; rows observe their SwiftData model.
     private(set) var revision = 0
-    /// Advances after every write here that can change what a played-state
-    /// filter reads (completed, has a position, or a duration that falls
-    /// back to the episode's), including an in-place edit `revision`
-    /// ignores, for derived readers that cannot observe each record (smart
-    /// playlist evaluations). A playback flush that only moves the position
-    /// leaves it alone, so listening does not re-evaluate every list. It
-    /// also advances when the save of an in-place edit fails, because the
-    /// live row keeps the edit. A save with `refreshObservableProgress:
-    /// false` leaves its status change pending instead, and the next
-    /// observable write or refetch publishes it: that write compares against
-    /// the already-updated row, so it cannot see the change on its own.
+    /// Moves on any write that can change a played-state filter's input, in-place edits included,
+    /// but not on a position-only flush, so listening does not re-evaluate every list. A failed
+    /// save still moves it: the live row keeps the edit.
     private(set) var statusRevision = 0
-    /// The episodes whose latest row carries an archive: the Inbox's
-    /// membership signal. Archiving edits a row in place, which moves
-    /// neither revision, so readers observe this set instead. Every reload
-    /// rebuilds it from the fetched rows, changed or not, because a refetch
-    /// that imports another context's edit refreshes the live rows without
-    /// an Observation notification; it is assigned only when it differs.
+    /// Archiving edits a row in place, which moves neither revision. Every reload rebuilds this
+    /// set, changed rows or not: an import refreshes live rows without an Observation notification.
     private(set) var archivedEpisodeIDs: Set<String> = []
-    /// Set by a suppressed save that changed a status; drained into
-    /// `statusRevision` when suppression ends.
+    /// A suppressed save's status change: the next write compares against the already-updated
+    /// row, so it cannot see the change on its own.
     @ObservationIgnored private var hasPendingStatusChange = false
     @ObservationIgnored private var index = EpisodeProgressIndex()
     @ObservationIgnored private let ledger: SyncedStoreSelfSaveLedger
@@ -57,7 +37,6 @@ final class EpisodeProgressWriter {
 
     // MARK: - Projection
 
-    /// Refetches the whole table; store reloads that follow other writes.
     func reload(modelContext: ModelContext) throws {
         let fetchedRecords = try modelContext.fetch(EpisodeProgressIndex.allRecordsDescriptor())
         replaceAll(fetchedRecords)
@@ -65,13 +44,8 @@ final class EpisodeProgressWriter {
         publishStatusChange(false)
     }
 
-    /// Refetches and republishes only when the stored rows, or the copy an
-    /// episode's latest row comes from, differ from the projection; returns
-    /// whether they did. The archived set is rebuilt either way.
-    ///
-    /// An import edits the live rows in place, so they can compare unchanged
-    /// while the edit makes another copy of an episode its latest (an older
-    /// copy archived on another device): the latest rows are compared too.
+    /// Compares the latest rows too: an import edits live rows in place, so they can compare
+    /// unchanged while the edit makes another copy of an episode its latest.
     @discardableResult
     func reloadIfChanged(modelContext: ModelContext) throws -> Bool {
         let fetchedRecords = try modelContext.fetch(EpisodeProgressIndex.allRecordsDescriptor())
@@ -101,12 +75,8 @@ final class EpisodeProgressWriter {
 
     // MARK: - Writes
 
-    /// Returns false when nothing meaningful changed: no save, no credit.
-    /// `refreshObservableProgress: false` saves without touching the
-    /// projection (flushes from a scene that is not on screen, or with Now
-    /// Playing presented); the next `reloadIfChanged` publishes the row, and
-    /// a status change it carried waits for that or the next observable
-    /// write.
+    /// Returns false, without saving, when nothing meaningful changed. With
+    /// `refreshObservableProgress: false` the projection waits for the next `reloadIfChanged`.
     func update(
         episodeID: String,
         podcastID: String,
@@ -176,7 +146,6 @@ final class EpisodeProgressWriter {
         return true
     }
 
-    /// Archives or unarchives one episode; see the batch form.
     func setArchived(
         _ isArchived: Bool,
         episodeID: String,
@@ -186,24 +155,9 @@ final class EpisodeProgressWriter {
         try setArchived(isArchived, episodeIDs: [episodeID], podcastID: podcastID, modelContext: modelContext)
     }
 
-    /// Archives or unarchives the listed episodes in one save. Each
-    /// episode's latest row is edited in place, chosen as the index chooses
-    /// it among every copy of the episode (the episode ID already names the
-    /// show, so a copy under a raw feed-URL variant counts), so later
-    /// listening keeps the archive; archiving an episode with no row inserts
-    /// one under `podcastID` with no listening. `updatedAt` moves with the
-    /// archive so duplicate repair and tombstones order it like any other
-    /// write. Every listed episode's fetched latest row is then indexed and
-    /// its membership re-read from it, changed or not, so an import the
-    /// projection has not reloaded yet (another copy archived and now the
-    /// latest) reaches both the index and the set. Returns false, with no
-    /// save, when no row would change.
-    ///
-    /// A failed save puts the edited fields back and deletes the inserted
-    /// rows before rethrowing: the context is shared, so a row left dirty
-    /// would make a retry a no-op and ride out with another writer's save,
-    /// uncredited. Rolling the whole context back would discard those other
-    /// writers' pending changes too.
+    /// Edits the row the index would choose among every copy of the episode, raw feed-URL variants
+    /// included, so later listening keeps the archive. `updatedAt` moves so duplicate repair and
+    /// tombstones order the archive like any other write.
     func setArchived(
         _ isArchived: Bool,
         episodeIDs: Set<String>,
@@ -245,6 +199,7 @@ final class EpisodeProgressWriter {
         }
 
         guard !edits.isEmpty || !insertedRecords.isEmpty else {
+            // An import not yet reloaded can have made another, archived copy the latest.
             publishLatestRecords(of: episodeIDs, in: latestRecordByEpisodeID)
             return false
         }
@@ -253,6 +208,8 @@ final class EpisodeProgressWriter {
         do {
             try ledger.save(modelContext)
         } catch {
+            // The context is shared: a row left dirty would ride out uncredited with another
+            // writer's save, and a context-wide rollback would discard that writer's changes.
             for edit in edits {
                 edit.record.archivedAt = edit.archivedAt
                 edit.record.updatedAt = edit.updatedAt
@@ -266,8 +223,6 @@ final class EpisodeProgressWriter {
         return true
     }
 
-    /// Marks every listed episode played in one save; returns false when
-    /// each record already carried that state.
     func markAllPlayed(
         _ episodes: [EpisodeListItemSnapshot],
         podcastID: String,
@@ -326,10 +281,7 @@ final class EpisodeProgressWriter {
         return true
     }
 
-    /// Deletes the matching progress rows of shows with no subscription
-    /// record at all (archived subscriptions still mark a show as
-    /// deliberately kept), writing one feed-progress tombstone per cleared
-    /// feed when a date is given. Returns how many rows went.
+    /// An archived subscription still marks its show as kept.
     func deleteUnsubscribedRecords(
         modelContext: ModelContext,
         writingTombstonesAt tombstoneDate: Date?,
@@ -367,11 +319,8 @@ final class EpisodeProgressWriter {
         return prunableRecords.count
     }
 
-    /// Deletes every progress row of one episode and tombstones the episode;
-    /// returns false when there was nothing to clear. The tombstone shadows
-    /// by episode ID alone, so a copy under a raw feed-URL variant goes too:
-    /// left behind, it would become the episode's latest row and bring back
-    /// its archive or its listening until repair deleted it.
+    /// Deletes copies under every feed-URL variant: the tombstone shadows by episode ID alone, and
+    /// a copy left behind would become the latest row and bring back its archive or listening.
     func clear(episodeID: String, podcastID: String, modelContext: ModelContext) throws -> Bool {
         let records = try modelContext.fetch(
             FetchDescriptor<EpisodeProgressRecord>(
@@ -401,8 +350,6 @@ final class EpisodeProgressWriter {
         return true
     }
 
-    /// Advances `statusRevision` for a change that can move a played-state
-    /// answer, folding in any change a suppressed save left pending.
     private func publishStatusChange(_ changesStatus: Bool = true) {
         guard changesStatus || hasPendingStatusChange else {
             return
@@ -417,11 +364,6 @@ final class EpisodeProgressWriter {
         }
     }
 
-    /// Indexes each listed episode's fetched latest row, then re-reads the
-    /// episodes' archives from those rows. The same bump condition as
-    /// `update`: `revision` moves only when an episode's indexed row changes
-    /// (an inserted row, or a copy an import made the latest), not for an
-    /// in-place edit of the row the index already holds.
     private func publishLatestRecords(
         of episodeIDs: Set<String>,
         in latestRecordByEpisodeID: [String: EpisodeProgressRecord]
@@ -438,8 +380,6 @@ final class EpisodeProgressWriter {
         publishArchivedMembership(of: episodeIDs, in: latestRecordByEpisodeID)
     }
 
-    /// Re-reads each listed episode's archive from the row that is now its
-    /// latest; an episode with no row is not archived.
     private func publishArchivedMembership(
         of episodeIDs: some Sequence<String>,
         in latestRecordByEpisodeID: [String: EpisodeProgressRecord]
@@ -473,10 +413,8 @@ final class EpisodeProgressWriter {
         return previous != updated
     }
 
-    /// What `LibraryStore.progressSummary` feeds the played-state filters
-    /// from a row: completed, and a position of at least a second. Nil when
-    /// the row has no duration, because the summary then falls back to the
-    /// episode's own duration, which this writer cannot see.
+    /// Must match what `LibraryStore.progressSummary` feeds the played-state filters. Nil without
+    /// a duration: the summary then uses the episode's own, which this writer cannot see.
     private static func statusInputs(
         position: TimeInterval,
         duration: TimeInterval?,
@@ -517,8 +455,6 @@ final class EpisodeProgressWriter {
         )
     }
 
-    /// The order that makes an episode's first fetched row the one `update`
-    /// edits.
     private static var latestFirstSortDescriptors: [SortDescriptor<EpisodeProgressRecord>] {
         [
             SortDescriptor(\.updatedAt, order: .reverse),

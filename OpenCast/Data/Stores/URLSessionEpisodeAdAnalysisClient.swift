@@ -1,8 +1,6 @@
 import DeviceCheck
 import Foundation
 
-/// Polls a job an earlier build started, through the build's bearer token
-/// (Debug) or App Attest.
 nonisolated struct URLSessionEpisodeAdAnalysisClient: EpisodeAdAnalysisClient {
     static let pollTimeout: TimeInterval = 30
 

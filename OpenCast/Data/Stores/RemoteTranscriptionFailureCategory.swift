@@ -1,12 +1,7 @@
 import OpenCastTranscription
 
-/// Category-level classification of how a remote transcription request ends
-/// without a transcript. Stable wire error codes and client-side transport
-/// shapes map to fixed user copy here — raw server strings never render.
-/// Built for the dev-flag flow, but shaped by the wire schema so the
-/// purchase pass reuses it verbatim.
+/// Wire error codes and transport failures map to fixed copy; raw server strings never render.
 nonisolated enum RemoteTranscriptionFailureCategory: Equatable {
-    /// The server ended the job with a stable wire error code.
     case serverRejected(OpenCastRemoteTranscriptionErrorCode)
     /// The backend could not be reached before any create attempt was
     /// marked, or an unclassifiable client-side error ended the request.
@@ -17,14 +12,11 @@ nonisolated enum RemoteTranscriptionFailureCategory: Equatable {
     /// A local request leg (App Attest, keychain, decode) gave up; Try Again
     /// re-runs against the same job.
     case localRequestFailed
-    /// The explicit local download the flow relies on never completed.
     case downloadFailed
-    /// The delivered result failed client-side validation.
     case resultInvalid
     /// The server finished and deleted its result, but no transcript with
     /// that job's provenance exists on this device.
     case acknowledgedWithoutLocalImport
-    /// The episode carries no audio URL to transcribe.
     case missingAudio
 
     var message: String {
@@ -71,9 +63,7 @@ nonisolated enum RemoteTranscriptionFailureCategory: Equatable {
         }
     }
 
-    /// Whether Try Again is honest for this outcome: the same reference (or
-    /// a fresh one, once the server result is gone) can be run again without
-    /// paying for a second job.
+    /// True only when running again cannot pay for a second job.
     var offersRetry: Bool {
         switch self {
         case .serviceUnavailable, .localRequestFailed, .downloadFailed, .acknowledgedWithoutLocalImport:

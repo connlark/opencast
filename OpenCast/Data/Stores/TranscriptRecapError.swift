@@ -1,8 +1,6 @@
 import Foundation
 
-/// Recap outcomes that are not model failures.
 nonisolated enum TranscriptRecapError: LocalizedError, Equatable {
-    /// The playhead is too early for the requested window.
     case nothingToRecap(TranscriptRecapWindowKind)
 
     var errorDescription: String? {

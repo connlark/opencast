@@ -9,7 +9,6 @@ protocol OpenCastTranscriptionRuntime: Sendable {
         segmentCallback: SegmentDiscoveryCallback?
     ) async throws -> [TranscriptionResult]
 
-    /// Whisper-perf G2: bounded-memory long-form decode from a sample source.
     func transcribe(
         audioSource: any AudioSampleSource,
         decodeOptions: DecodingOptions,

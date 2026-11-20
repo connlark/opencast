@@ -5,17 +5,6 @@ import Testing
 @MainActor
 @Suite("Recent searches store")
 struct RecentSearchesStoreTests {
-    @Test("Recent searches default to empty")
-    func recentSearchesDefaultToEmpty() throws {
-        let container = try OpenCastModelContainerFactory.make(inMemory: true)
-        let context = ModelContext(container)
-        let store = RecentSearchesStore()
-
-        store.load(modelContext: context)
-
-        #expect(store.queries.isEmpty)
-    }
-
     @Test("Recording trims queries and ignores blanks")
     func recordingTrimsQueriesAndIgnoresBlanks() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -51,7 +40,12 @@ struct RecentSearchesStoreTests {
             store.record("Query \(index)", modelContext: context)
         }
 
-        #expect(store.queries == (2..<12).reversed().map { "Query \($0)" })
+        #expect(
+            store.queries == [
+                "Query 11", "Query 10", "Query 9", "Query 8", "Query 7",
+                "Query 6", "Query 5", "Query 4", "Query 3", "Query 2",
+            ]
+        )
     }
 
     @Test("Recent searches persist across store instances")

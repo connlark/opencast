@@ -1,8 +1,6 @@
 import SwiftUI
 
-/// A smart playlist's cover, drawn from the shows its rule matches. Like the
-/// collection's summary line, it reads the evaluation itself through the app
-/// model's memo, so only visible covers evaluate and the screens around them
+/// Reads the evaluation itself, so only visible covers evaluate and the screens around them
 /// observe no smart-list dependencies.
 struct SmartPlaylistCover: View {
     @Environment(OpenCastAppModel.self) private var appModel

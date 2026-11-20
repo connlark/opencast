@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// One manual playlist in the Add to Playlist picker. The whole row is a
-/// single toggle: a filled check when the playlist holds the episode, an
-/// empty ring when it does not.
 struct AddToPlaylistRow: View {
     let summary: PlaylistSummary
     let sources: PlaylistCoverSources

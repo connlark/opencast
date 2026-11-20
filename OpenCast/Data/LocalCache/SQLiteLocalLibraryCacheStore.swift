@@ -2,16 +2,11 @@ import Foundation
 import OpenCastCore
 import SQLite3
 
-/// SQLite-backed local cache store.
-///
-/// Owns a single serialized connection. List loads project every column except
-/// `show_notes_html`; episode detail fetches the full row lazily by ID.
 actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
     private nonisolated static let legacyImportCompleteKey = "legacy_swiftdata_import_complete"
     private nonisolated static let canonicalSchemaVersionKey = "canonical_schema_version"
-    /// Version of the canonical (non-derived) tables, counted in
-    /// local_cache_meta; bump alongside each new gated migration in
-    /// `database()`. PRAGMA user_version belongs to the derived search index.
+    /// Counted in local_cache_meta, not PRAGMA user_version, which the search index owns. Bump
+    /// it with each new gated migration in `database()`.
     nonisolated static let canonicalSchemaVersion = 3
     private nonisolated static let maximumRetryAttemptCount = 6
 
@@ -37,7 +32,7 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         case unavailable
     }
 
-    /// - Parameter databaseURL: `nil` opens a private in-memory database.
+    /// A nil `databaseURL` opens a private in-memory database.
     init(
         databaseURL: URL?,
         episodeSearchRebuildBatchSize: Int =
@@ -119,13 +114,8 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             episodes.sort(by: EpisodeListItemSnapshot.newestFirst)
         }
 
-        // Per-feed projection: routine reloads only feed recency lookups
-        // (latest log, latest success), so loading every retained log row
-        // (50 x feed count) here paid for history nobody read. The full
-        // history stays behind allRefreshLogs() for diagnostics.
-        // The UNION sits inside a subquery because a compound SELECT's ORDER
-        // BY may only name result columns; the expression ordering lives on
-        // the plain outer SELECT.
+        // Only each feed's latest log and latest success load here. The UNION sits in a subquery
+        // because a compound SELECT's ORDER BY may only name result columns.
         var refreshLogs: [RefreshLogSnapshot] = []
         try query(
             """
@@ -384,10 +374,9 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 await Task.yield()
             }
 
-            // An interleaved maintain write that failed during the batch
-            // loop's awaits demoted the state to .needsRebuild; the content
-            // just built may be missing that write, so it must not be
-            // blessed .ready on the count-only consistency check.
+            // A maintain write that failed during the loop's awaits set .needsRebuild, and the
+            // content just built may lack that write, so it must not become .ready on a
+            // count-only check.
             guard episodeSearchIndexState == .rebuilding else {
                 throw EpisodeSearchIndexError.notReady("needsRebuild")
             }
@@ -413,9 +402,6 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         episodeSearchIndexRebuildHandler = handler
     }
 
-    /// The rebuild paths clear the transcript FTS and segment tables but can
-    /// repopulate only canonical `episode_cache` metadata. Notify the
-    /// transcript owner so its documents converge without a relaunch.
     private func notifyEpisodeSearchIndexRebuilt() {
         guard let handler = episodeSearchIndexRebuildHandler else {
             return
@@ -516,11 +502,9 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             let feedURL = podcast.id.rawValue
             let podcastArtworkURL = podcast.artworkURL?.absoluteString
 
-            // The DO UPDATE WHERE clauses compare content only (never the
-            // refresh timestamp), so a refresh that returns identical data
-            // writes nothing: no WAL churn, and the timestamps keep meaning
-            // "content last changed" — which is what the search-corpus cache
-            // key needs to stop flushing on every refresh.
+            // The DO UPDATE WHERE clauses compare content only, never the refresh timestamp,
+            // so an identical refresh writes nothing and `updated_at` keeps meaning "content
+            // last changed".
             try run(
                 """
                 INSERT INTO podcast_cache (feed_url, title, author, summary, website_url, artwork_url, updated_at, language)
@@ -753,9 +737,8 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                         try reset(episodePreviewClear, operation: operation, db: db)
                     }
 
-                    // A failed index write must roll back the catalog too. The
-                    // normal repair path remains available for an index that
-                    // was already unavailable before this import started.
+                    // A failed index write must roll back the catalog too. An index already
+                    // unavailable before this import is left to the normal repair path.
                     if episodeSearchIndexState == .ready || episodeSearchIndexState == .rebuilding {
                         do {
                             try SQLiteEpisodeSearchIndex.replace(changedSearchDocuments, in: db)
@@ -1118,14 +1101,11 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         }
     }
 
-    /// Cumulative SQLite row changes on this connection. Test hook for
-    /// asserting the change-detecting upsert skips unchanged rows.
     func totalRowChangeCount() throws -> Int {
         Int(sqlite3_total_changes64(try database()))
     }
 
-    /// Runs fault injection and resource inspection on the owning actor;
-    /// the connection must never escape the synchronous test closure.
+    /// The connection must never escape the synchronous closure.
     func inspectConnectionForTesting<T: Sendable>(
         _ inspect: @Sendable (OpaquePointer) throws -> T
     ) throws -> T {
@@ -1140,20 +1120,14 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         )
     }
 
-    /// Current PRAGMA user_version — owned by the derived search index
-    /// (`SQLiteEpisodeSearchIndex.schemaVersion`). Test hook.
     func currentSchemaVersion() throws -> Int {
         try schemaVersion(db: try database())
     }
 
-    /// Current canonical schema version from local_cache_meta. Test hook for
-    /// the versioned canonical migrations.
     func currentCanonicalSchemaVersion() throws -> Int {
         try canonicalSchemaVersion(db: try database())
     }
 
-    /// Current derived-search lifecycle state. Test hook for rebuild/fallback
-    /// transition assertions.
     func episodeSearchIndexStateDescription() throws -> String {
         _ = try database()
         return switch episodeSearchIndexState {
@@ -1387,21 +1361,11 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
             // existing schema untouched, so add the column when missing.
             try? exec("ALTER TABLE podcast_cache ADD COLUMN language TEXT", operation: "schema migration", db: handle)
             try? exec("ALTER TABLE episode_cache ADD COLUMN chapters_url TEXT", operation: "schema migration", db: handle)
-            // Installed caches created the index before it was removed from
-            // schemaSQL; no query shape ever chooses it.
+            // Older caches still carry this index, which no query uses.
             try? exec("DROP INDEX IF EXISTS episode_cache_published_idx", operation: "schema migration", db: handle)
-            // Versioned canonical migrations start here, counted in
-            // local_cache_meta (absent predates versioning). PRAGMA
-            // user_version belongs to the derived search index alone: one
-            // shared ladder let its stamp skip any later canonical step on
-            // already-stamped databases. The try?-ALTER pattern keeps version
-            // 1 idempotent for fresh databases whose CREATE TABLE already has
-            // the columns; the stamp is gated on the columns actually being
-            // present so a transiently failed ALTER (I/O error, disk full)
-            // retries on the next open instead of being versioned over.
-            // Every later step gates on `==` the version just below it, so an
-            // unstamped step holds back the steps above it instead of being
-            // stamped past by them.
+            // Each canonical step gates on `==` the version below it, so a step that failed
+            // to stamp holds back the later ones. Version 1 stamps only once its columns
+            // exist, so a failed ALTER (I/O error, disk full) retries on the next open.
             if try canonicalSchemaVersion(db: handle) < 1 {
                 try? exec("ALTER TABLE podcast_cache ADD COLUMN etag TEXT", operation: "schema migration", db: handle)
                 try? exec("ALTER TABLE podcast_cache ADD COLUMN last_modified TEXT", operation: "schema migration", db: handle)
@@ -1437,8 +1401,8 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 }
             }
 
-            // Local processing epoch: one atomic invalidation, with durable
-            // foreground-refresh requests that survive an interrupted launch.
+            // A processing-version change clears validators and marks every feed for refresh
+            // in one transaction, so an interrupted launch still refreshes.
             let processingVersion = String(FeedResourcePolicy.processingVersion)
             var storedProcessingVersion: String?
             try query("SELECT value FROM local_cache_meta WHERE key='feed_processing_version'",
@@ -1468,9 +1432,8 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 }
             }
 
-            // Earlier builds counted transport/write failures as partial
-            // imports. Their persisted streak cannot be reconstructed, so
-            // reset scheduling once without clearing recovery or validators.
+            // Older stores counted transport and write failures as partial imports, so the
+            // retry streaks reset once; recovery state and validators stay.
             var storedRetryPolicyVersion: String?
             try query("SELECT value FROM local_cache_meta WHERE key='feed_retry_policy_version'",
                       operation: "feed retry policy", db: handle) { statement in
@@ -1495,9 +1458,8 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
                 }
             }
 
-            // The search index is rebuildable derived data. An unavailable
-            // FTS module must not prevent the canonical cache from opening;
-            // search will use the legacy fallback and retry on next launch.
+            // The search index is rebuildable derived data: an unavailable FTS module must
+            // not stop the canonical cache from opening.
             do {
                 try SQLiteEpisodeSearchIndex.ensureSchema(in: handle)
                 let storedVersion = try SQLiteEpisodeSearchIndex.storedContentVersion(
@@ -1732,11 +1694,9 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         guard episodeSearchIndexState != .unavailable else {
             return false
         }
-        // `.ready` applies writes even before this session's validation:
-        // schema and contentVersion already match, and a dropped
-        // content-only write would survive the count-only validation as
-        // permanently stale search text. If the index is truly broken the
-        // write throws into the needsRebuild path below.
+        // `.ready` applies writes before this session's validation: a dropped content-only write
+        // would pass the count-only validation and stay stale for good. A broken index throws
+        // into the needsRebuild path below.
         guard allowWhenNotReady
                 || episodeSearchIndexState == .ready
                 || episodeSearchIndexState == .rebuilding
@@ -1784,9 +1744,6 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
     ) throws {
         try LocalCacheSQLite.query(sql, operation: operation, db: db, bindings: bindings, row: row)
     }
-
-    /// The four columns the search index derives its documents from.
-
 
     private func columnNames(of table: String, db: OpaquePointer) throws -> Set<String> {
         var names: Set<String> = []
@@ -1876,7 +1833,6 @@ actor SQLiteLocalLibraryCacheStore: LocalLibraryCacheStore {
         try bind(Optional(preview), startingAt: 1, statement: statement, db: db, operation: operation)
     }
 
-    /// Binds the six artwork preview columns starting at the given index.
     private func bind(
         _ preview: ArtworkPreview?,
         startingAt index: Int32,

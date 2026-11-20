@@ -1,7 +1,5 @@
 import Foundation
 
-/// The Length chip's choices. A stored rule whose bounds match none of them
-/// still evaluates and titles itself through `PlaylistRule.lengthTitle`.
 nonisolated enum PlaylistRuleLengthPreset: CaseIterable, Identifiable, Sendable {
     case any
     case under15

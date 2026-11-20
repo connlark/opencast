@@ -38,8 +38,6 @@ public final class DefaultNowPlayingArtworkLoader: NowPlayingArtworkLoading {
         let data = try await artworkData(from: url)
         try Task.checkCancellation()
 
-        // Downsampled ImageIO decode to the largest rendered edge — never a
-        // full-size image construction (security triage P1 #4).
         guard let image = NowPlayingArtworkDecoding.downsampledImage(from: data) else {
             throw NowPlayingArtworkError.invalidImageData
         }

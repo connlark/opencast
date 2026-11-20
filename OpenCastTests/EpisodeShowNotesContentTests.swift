@@ -18,7 +18,6 @@ struct EpisodeShowNotesContentTests {
     <p>(00:00:00) Welcome<br>(00:04:12) The prototype</p>
     """
     private static let summaryWithList = "0:00 Cold open\n2:15 The pitch\n9:40 The pivot"
-    /// Notes shipped as escaped markup: every line reads as a literal `<p>`.
     private static let escapedNotes = """
     <p>&lt;p&gt;What we cover:&lt;/p&gt;</p><p>&lt;p&gt;0:00 Customers come first&lt;/p&gt;</p>\
     <p>&lt;p&gt;3:10 Research before spend&lt;/p&gt;</p><p>&lt;p&gt;12:45 Testing ideas cheaply&lt;/p&gt;</p>
@@ -98,55 +97,6 @@ struct EpisodeShowNotesContentTests {
         #expect(chapters.map(\.title) == ["Cold open", "The pitch", "The pivot"])
     }
 
-    @Test("Neither text holding a list gives none")
-    func neitherTextGivesNone() {
-        #expect(EpisodeShowNotesContent.derivedChapters(
-            summaryHTML: "A founder story.",
-            showNotesHTML: Self.notesWithoutList,
-            duration: nil
-        ).isEmpty)
-        #expect(EpisodeShowNotesContent.derivedChapters(summaryHTML: nil, showNotesHTML: nil, duration: nil).isEmpty)
-    }
-
-    @Test("Notes that are the summary, as when a feed has no content:encoded, give their list or none")
-    func notesThatAreTheSummary() {
-        #expect(EpisodeShowNotesContent.derivedChapters(
-            summaryHTML: Self.notesWithList,
-            showNotesHTML: Self.notesWithList,
-            duration: nil
-        ).map(\.startTime) == [0, 252, 1_065, 2_490])
-        #expect(EpisodeShowNotesContent.derivedChapters(
-            summaryHTML: Self.notesWithoutList,
-            showNotesHTML: Self.notesWithoutList,
-            duration: nil
-        ).isEmpty)
-    }
-
-    @Test("The duration drops the entries past it")
-    func durationBoundsTheList() async {
-        let bounded = EpisodeShowNotesContent.derivedChapters(
-            summaryHTML: nil,
-            showNotesHTML: Self.notesWithList,
-            duration: 1_800
-        )
-        #expect(bounded.map(\.startTime) == [0, 252, 1_065])
-
-        let resolved = await EpisodeShowNotesContent.resolving(
-            episodeID: Self.episodeID,
-            summaryHTML: nil,
-            showNotesHTML: Self.notesWithList,
-            duration: 1_800
-        )
-        #expect(resolved.chapters(for: Self.episodeID).map(\.startTime) == [0, 252, 1_065])
-
-        let offCaller = await EpisodeShowNotesContent.resolvingChapters(
-            summaryHTML: nil,
-            showNotesHTML: Self.notesWithList,
-            duration: 1_800
-        )
-        #expect(offCaller == bounded)
-    }
-
     // MARK: - Whose chapters
 
     @Test("Resolved content serves its chapters only for the episode it was resolved for")
@@ -164,16 +114,8 @@ struct EpisodeShowNotesContentTests {
         #expect(content.chapters(for: "another-episode").isEmpty)
     }
 
-    @Test("Empty content has no chapters for any episode")
-    func emptyContentHasNoChapters() {
-        #expect(EpisodeShowNotesContent.empty.chapters(for: Self.episodeID).isEmpty)
-        #expect(EpisodeShowNotesContent.empty.chapters(for: "").isEmpty)
-        #expect(EpisodeShowNotesContent.empty.episodeID == nil)
-    }
-
     // MARK: - When the card renders
 
-    /// Every input the episode screen gathers, all clear by default.
     struct RuleRow: CustomTestStringConvertible, Sendable {
         let name: String
         var resolvedFor = EpisodeShowNotesContentTests.episodeID

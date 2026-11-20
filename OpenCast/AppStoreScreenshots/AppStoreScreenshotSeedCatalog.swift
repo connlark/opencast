@@ -1,14 +1,11 @@
 #if DEBUG
 import Foundation
 
-/// Twelve synthetic shows for the App Store set. The Library sorts by title,
-/// so the six new covers carry titles that sort ahead of the six older ones:
-/// the iPhone list shows only the new art and the iPad grid puts the older
-/// covers on its last rows.
+/// The Library sorts by title, so the six new covers need titles that sort ahead of the six
+/// older ones: the iPhone list then shows only new art.
 enum AppStoreScreenshotSeedCatalog {
     static let primaryFeedURL = "https://screenshots.opencast.example/orbit-report.xml"
     static let primaryEpisodeID = "app-store-orbit-report-episode-1"
-    /// The episode shown mid-pass on the pipeline card.
     static let pipelineEpisodeID = "app-store-orbit-report-episode-3"
     static let primaryPodcastTitle = "Orbit Report"
     static let primaryEpisodeTitle = "What the New Telescope Saw First"

@@ -42,10 +42,8 @@ extension OpenCastTranscriptionService {
         let clock = ContinuousClock()
         let pipelineStart = clock.now
 
-        // Whisper-perf G2: the episode's canonical PCM spills to a temp file
-        // and windows are served from it, so peak memory no longer scales
-        // with episode length. The file is removed on completion,
-        // cancellation, and error alike.
+        // The PCM spills to a temp file and windows are read from it, so peak memory
+        // does not scale with episode length.
         let audioLoadStart = clock.now
         let spillURL = Self.makeAudioSpillFileURL()
         defer { try? FileManager.default.removeItem(at: spillURL) }
@@ -60,9 +58,8 @@ extension OpenCastTranscriptionService {
         guard sampleCount > 0 else {
             throw OpenCastTranscriptionError.emptyAudioClip(clipStart: 0, clipDuration: 0)
         }
-        // Open the reader immediately: the held descriptor keeps the samples
-        // readable even if the caches directory is purged during the model
-        // load (unlink-with-open-fd), closing the skeptic-found gap.
+        // Open the reader now: the held descriptor keeps the samples readable if Caches
+        // is purged during the model load.
         let audioSource = try PCMFileAudioSampleSource(fileURL: spillURL, expectedSampleCount: sampleCount)
 
         let audioDuration = Double(sampleCount) / Double(WhisperKit.sampleRate)
@@ -98,9 +95,8 @@ extension OpenCastTranscriptionService {
         emitter.yieldInitialProgress()
 
         let transcriptionStart = clock.now
-        // Production passes no per-token hypothesis callback: the once-per-window
-        // signal supplies currentWindowIndex and cancellation propagates through
-        // task cancellation inside the decode loop.
+        // No per-token callback: the once-per-window signal supplies currentWindowIndex,
+        // and cancellation propagates through task cancellation in the decode loop.
         let transcriptions = try await runtime.transcribe(
             audioSource: audioSource,
             decodeOptions: decodeOptions,
@@ -144,11 +140,8 @@ extension OpenCastTranscriptionService {
         continuation.yield(.finished(result))
     }
 
-    /// Whisper-perf G2: spill files live under Caches (purgeable, never
-    /// backed up), one per in-flight long-form run. Normal removal happens in
-    /// `performLongFormTranscribe`'s defer; files orphaned by a process kill
-    /// are swept here once they are a day old (concurrent service instances
-    /// may hold younger live spills, so age-gate rather than clearing).
+    /// Spill files orphaned by a process kill are swept once a day old: a concurrent service
+    /// instance may hold a younger live spill, so the sweep is age-gated.
     static func makeAudioSpillFileURL() -> URL {
         let directory = audioSpillDirectory()
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -180,8 +173,6 @@ extension OpenCastTranscriptionService {
         }
     }
 
-    /// Run-manifest snapshot of the actual long-form decode options, so
-    /// benchmark artifacts pin the decode configuration they measured.
     public static func longFormDecodeOptionsSummary(
         languageCode: String,
         audioDuration: TimeInterval,
@@ -243,8 +234,7 @@ extension OpenCastTranscriptionService {
         .withClipTimestamps(start: resumeStart, end: min(clipEnd ?? audioDuration, audioDuration))
     }
 
-    /// Whisper-perf F: base seed from the leading 16 hex digits of the
-    /// source audio SHA-256 — stable across runs and cancel/resume.
+    /// From the leading 16 hex digits of the audio SHA-256: stable across runs and resumes.
     static func deterministicFallbackBaseSeed(from sourceFileSHA256: String) -> UInt64? {
         let prefix = sourceFileSHA256.prefix(16)
         guard prefix.count == 16 else {

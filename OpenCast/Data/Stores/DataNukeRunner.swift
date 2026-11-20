@@ -2,11 +2,6 @@ import Foundation
 import Observation
 import SwiftData
 
-/// The data nuke: every store's destructive reset in a fixed order, the
-/// SwiftData row wipe, and the local-cache clears. The app model hands in
-/// its runtime steps — pre-nuke teardown, service deregistration before the
-/// row wipe, and the post-wipe runtime reset that runs before any later
-/// suspension so the UI never renders deleted-and-saved records.
 @Observable
 final class DataNukeRunner {
     private(set) var isNukingData = false
@@ -24,12 +19,9 @@ final class DataNukeRunner {
     @ObservationIgnored private let siriMediaDiscovery: SiriMediaDiscovery
     @ObservationIgnored private let transcriptRecaps: TranscriptRecapCache
     @ObservationIgnored private let customSkipSoundFiles: CustomSkipSoundFiles
-    /// Runs after the iCloud check and before any store is nuked.
     @ObservationIgnored var prepareRuntime: () async -> Void = {}
-    /// Runs after the store nukes and before the row wipe.
     @ObservationIgnored var deregisterServices: () async -> Void = {}
     @ObservationIgnored private let appAttestSuspension: AppAttestSuspension
-    /// Runs after the row wipe and before the cache clears.
     @ObservationIgnored var resetRuntime: (ModelContext) async -> Void = { _ in }
 
     init(
@@ -89,13 +81,9 @@ final class DataNukeRunner {
             try deleteAllModelRows(modelContext: modelContext)
             siriMediaDiscovery.deleteDonations(forPodcastIDs: siriPodcastIDs)
             siriMediaDiscovery.deleteDonations(forPlaylistIDs: siriPlaylistIDs)
-            // Nothing that suspends may sit between the row wipe above and
-            // the playback unload at the top of resetRuntime: playback keeps
-            // flushing progress through every earlier await, and a flush that
-            // landed here would re-insert a row the wipe just deleted.
-            // Progress writes carry no write-generation token, so this
-            // ordering is their only guard (LibraryStoreNukeRaceProbeTests
-            // pins it).
+            // Nothing that suspends may sit between the row wipe and resetRuntime's playback
+            // unload: playback flushes progress at every await, and a flush here would re-insert
+            // a wiped row. Progress writes carry no write-generation token; this order guards them.
             await resetRuntime(modelContext)
             try await library.deleteAllLocalCache()
             try await cacheController.clearCachesNow()
@@ -113,13 +101,9 @@ final class DataNukeRunner {
         lastErrorMessage = nil
     }
 
-    /// Every model type in both containers; a new @Model must be added here
-    /// or the nuke leaves its rows behind. The wipe is the app's own synced
-    /// write, so it deposits a self-save credit like every other — but only
-    /// when it deleted a synced row: a save that touches the local store
-    /// alone posts no synced-store notification for the credit to swallow.
-    /// It writes no tombstone, playlist tombstones included: Delete Data
-    /// removes the synced rows on every device signed in to the account.
+    /// A new @Model must be added here or the nuke leaves its rows behind. Only a wipe that deleted
+    /// a synced row saves through `saveSyncedStore`: a local-only save posts no synced-store
+    /// notification for its self-save credit to swallow.
     private func deleteAllModelRows(modelContext: ModelContext) throws {
         var deletedSyncedRowCount = 0
         deletedSyncedRowCount += try Self.deleteAll(SubscriptionRecord.self, modelContext: modelContext)

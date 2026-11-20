@@ -2,14 +2,6 @@ import Foundation
 import OpenCastAnalysis
 import OpenCastAnalysisProviders
 
-/// Decides each run's route before its record is written: the listener's
-/// key when one is saved for the feature's provider, else the trial while
-/// it has room (or the run is a resume the trial already admitted), else
-/// the key screen. A Keychain read that fails is never "no key", and the
-/// trial is never a fallback for it; nothing here ever routes to
-/// opencast's older analysis services. A saved key's run reaches the trial
-/// in one case only: a Google key that Google itself names free tier, which
-/// the ad-detection store asks for through `resolveHandover`.
 final class AnalysisRouteResolver {
     private let keys: AnalysisProviderKeyStore
     private let policy: AnalysisPolicySnapshotStore
@@ -20,7 +12,6 @@ final class AnalysisRouteResolver {
     private let runs: AnalysisRunRecordStore
     private let now: () -> Date
 
-    /// `now` is the test seam for the handover window's clock.
     init(
         keys: AnalysisProviderKeyStore,
         policy: AnalysisPolicySnapshotStore,
@@ -41,16 +32,11 @@ final class AnalysisRouteResolver {
         self.now = now
     }
 
-    /// Whether this build and device can use a trial route at all; no
-    /// request is made.
     var isTrialRouteConfigured: Bool {
         trial.isConfigured
     }
 
-    /// The route for one run of `feature`. `resumingRunID` names a run
-    /// record to resume under the same id: it keeps its route when the run
-    /// is still open (`dispatched` or `expired`) and its route still applies
-    /// under the same policy, and a trial resume needs no unit.
+    /// A trial resume needs no unit: the trial already admitted the run.
     func resolve(feature: AnalysisFeature, resumingRunID: String? = nil) async -> AnalysisRouteResolution {
         trialReachability.start()
         let snapshot = policy.snapshot
@@ -62,8 +48,6 @@ final class AnalysisRouteResolver {
         return await withHandoverWindow(await resolveNew(feature: feature, snapshot: snapshot))
     }
 
-    /// Marks an ad-detection run on a Google key inside the window. Chapters
-    /// and OpenAI never wait for the fact and pace as they always have.
     private func withHandoverWindow(_ resolution: AnalysisRouteResolution) async -> AnalysisRouteResolution {
         guard resolution.feature == .adDetection, resolution.route == .direct(provider: .google) else {
             return resolution
@@ -80,20 +64,14 @@ final class AnalysisRouteResolver {
         return trialReachability.isHandoverWindowOpen(trialStartsAt: policy.snapshot.bundle.trial.startsAt, now: now())
     }
 
-    /// Whether the trial date has passed, the one fact that ends a handover
-    /// for good. A service out of reach is apart from it: that can change, so
-    /// a run waiting on it stays open.
+    /// The only fact that ends a handover for good; an unreachable service may come back.
     var isPastTrialDate: Bool {
         !(now() < policy.snapshot.bundle.trial.startsAt)
     }
 
-    /// Whether a run on a key Google named free tier can move to the trial
-    /// service now. Reads the status afresh: the answer must be the
-    /// service's, not an hour-old copy. Not open means the date or the
-    /// service's own mode; a service out of reach is unavailable. The date is
-    /// read again after the waits: a reply that lands past it must not start
-    /// a new trial record then, and it outranks a service that did not
-    /// answer, because trying again later would not help.
+    /// Refreshes the status: the answer must be the service's, not an hour-old copy. The date is
+    /// read again after each wait, so a reply landing past it starts no trial record, and a passed
+    /// date outranks an unanswered service because retrying would not help.
     func resolveHandover(feature: AnalysisFeature) async -> AnalysisHandoverResolution {
         let reachability = await trialReachability.resolve()
         guard !isPastTrialDate else {
@@ -157,13 +135,9 @@ final class AnalysisRouteResolver {
         )
     }
 
-    /// The direct route when the Keychain holds a key for a provider with an
-    /// entry for `feature`. Every such provider's key is read from the
-    /// Keychain itself (a presence cache that has not been read yet never
-    /// reads as "no key"), then the listener's provider rule picks among the
-    /// providers that hold one: the stored choice, else the only one, else
-    /// Google. A read that fails is `keychainUnreadable` unless the stored
-    /// choice itself read a key; `nil` means none holds a key.
+    /// Reads each key from the Keychain itself, never a presence cache that may be unread. A failed
+    /// read is `keychainUnreadable`, never "no key", unless the stored choice read a key; `nil`
+    /// means no provider holds one.
     private func directResolution(feature: AnalysisFeature, snapshot: AnalysisPolicySnapshot) -> AnalysisRouteResolution? {
         let stored = storedProvider(feature)
         var eligible: [(provider: AnalysisProvider, key: AnalysisProviderKey, policy: AnalysisRoutePolicy)] = []
@@ -198,8 +172,7 @@ final class AnalysisRouteResolver {
         )
     }
 
-    /// The resumed run's route, when its route and policy still apply;
-    /// `nil` to resolve it as a new run.
+    /// `nil` resolves the run as a new one.
     private func resume(_ record: AnalysisRunRecord, snapshot: AnalysisPolicySnapshot) async -> AnalysisRouteResolution? {
         switch record.route {
         case .direct:
@@ -249,8 +222,6 @@ final class AnalysisRouteResolver {
             && record.policyRevision == policy.revision
     }
 
-    /// The listener's provider entry for the feature; `nil` when the bundle
-    /// has none.
     nonisolated static func directPolicy(feature: AnalysisFeature, provider: AnalysisProvider, snapshot: AnalysisPolicySnapshot) -> AnalysisRoutePolicy? {
         switch feature {
         case .adDetection: snapshot.adDetection(provider: provider).map(AnalysisRoutePolicy.adDetection)
@@ -258,10 +229,7 @@ final class AnalysisRouteResolver {
         }
     }
 
-    /// The trial's entry: the Google entry with the trial's model id. Ad
-    /// detection runs one window at a time, because the trial service
-    /// admits one open request per install, under the trial's serial
-    /// execution budget.
+    /// Ad detection runs one window at a time: the trial admits one open request per install.
     nonisolated static func trialPolicy(feature: AnalysisFeature, snapshot: AnalysisPolicySnapshot) -> AnalysisRoutePolicy? {
         switch feature {
         case .adDetection:

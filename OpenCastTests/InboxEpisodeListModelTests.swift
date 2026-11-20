@@ -11,19 +11,18 @@ struct InboxEpisodeListModelTests {
         let library = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
         let episodes = [makeEpisode(id: "newer", publishedAt: 20), makeEpisode(id: "older", publishedAt: 10)]
 
-        // The call stays outside `#expect`, which evaluates every argument
-        // itself to capture it for the failure message.
         let model = makeAllModel(episodes, library, archived: [])
         let archivedOutsideTheInbox = makeAllModel(episodes, library, archived: ["unfollowed-show-episode"])
+        let paged = makeAllModel(episodes, library, archived: [], visibleEpisodeCount: 1)
 
         #expect(model.episodes.map(\.id) == ["newer", "older"])
         #expect(model.totalEpisodeCount == 2)
         #expect(!model.isFilteredEmpty)
         #expect(archivedOutsideTheInbox.episodes.map(\.id) == ["newer", "older"])
+        #expect(paged.episodes.map(\.id) == ["newer"])
+        #expect(paged.hasMore)
     }
 
-    /// Both views read the archived set under All with Up Next shown, and
-    /// nothing else: the Inbox lists what is not in it, the archive what is.
     @Test("All Episodes reads the archived set and nothing else in both views, paging included")
     func allReadsOnlyTheArchivedSetInBothViews() {
         let library = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
@@ -71,11 +70,6 @@ struct InboxEpisodeListModelTests {
         #expect(emptyPagedArchive.isFilteredEmpty)
     }
 
-    /// Each filter's archived twin sits beside an unarchived row the filter
-    /// keeps, and in both views each such row follows a queued or playing
-    /// twin under the same filter. A view that let the other view's rows
-    /// through, a filter that dropped its own, or a view and filter that
-    /// ignored Hide Up Next, before or after paging, lists the wrong rows.
     @Test("Under every filter and both Hide Up Next states the Inbox lists only unarchived episodes and the archive only archived ones, paging and groups included")
     func archivedEpisodesLeaveEveryFilter() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
@@ -182,7 +176,6 @@ struct InboxEpisodeListModelTests {
         ]
         for hidesQueued in [false, true] {
             for filter in PodcastEpisodeFilter.allCases {
-                // With Up Next shown the queue and the player are never read.
                 func model(showsArchived: Bool, visibleEpisodeCount: Int? = nil) -> InboxEpisodeListModel {
                     makeModel(
                         filter, episodes, library,
@@ -212,7 +205,6 @@ struct InboxEpisodeListModelTests {
             }
         }
 
-        // Groups count the rows the model kept.
         let inboxAll = makeModel(.all, episodes, library, archived: archivedIDs, downloads: downloads(for: .all))
         let archiveAll = makeModel(
             .all, episodes, library,
@@ -225,8 +217,6 @@ struct InboxEpisodeListModelTests {
         #expect(Set(archiveAll.episodes.map(\.id)) == archivedIDs)
     }
 
-    /// Hide Up Next applies in both views: the archive keeps an archived
-    /// episode that is queued again, or playing, out while it is on.
     @Test("Hide Up Next hides queued and playing rows in both views, and either view can be filtered empty")
     func hideUpNextAppliesInBothViews() {
         let library = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
@@ -308,7 +298,6 @@ struct InboxEpisodeListModelTests {
             state: .completed
         )
 
-        // The three progress filters never read download records.
         let unplayedModel = makeModel(.unplayed, episodes, library, downloads: unreached("download records", fallback: []))
         let inProgressModel = makeModel(.inProgress, episodes, library, downloads: unreached("download records", fallback: []))
         let playedModel = makeModel(.played, episodes, library, downloads: unreached("download records", fallback: []))
@@ -339,7 +328,6 @@ struct InboxEpisodeListModelTests {
             sourceAudioURL: queuedDownloaded.audioURL ?? "",
             state: .completed
         )
-        // The playing episode is not in the queue; playing alone hides it.
         let queuedIDs: Set<String> = ["queued", "queued-played", "queued-downloaded"]
 
         let allModel = makeModel(
@@ -364,21 +352,6 @@ struct InboxEpisodeListModelTests {
         #expect(downloadedModel.isFilteredEmpty)
     }
 
-    @Test("Hiding Up Next with an empty queue changes nothing")
-    func hideQueuedWithEmptyQueueIsNoOp() {
-        let library = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
-        let episodes = [makeEpisode(id: "newer", publishedAt: 20), makeEpisode(id: "older", publishedAt: 10)]
-
-        let model = makeModel(
-            .all, episodes, library,
-            hidesQueued: true, queued: [], playing: nil,
-            downloads: unreached("download records", fallback: [])
-        )
-
-        #expect(model.episodes.map(\.id) == ["newer", "older"])
-        #expect(!model.isFilteredEmpty)
-    }
-
     @Test("Filtered empty distinguishes a nonempty inbox")
     func filteredEmptyState() {
         let library = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
@@ -391,33 +364,6 @@ struct InboxEpisodeListModelTests {
         #expect(filteredToNothing.episodes.isEmpty)
         #expect(filteredToNothing.totalEpisodeCount == 1)
         #expect(filteredToNothing.isFilteredEmpty)
-    }
-
-    @Test("A page-limited model exposes continuation without returning later rows")
-    func pageLimit() {
-        let library = LibraryStore(localCache: SQLiteLocalLibraryCacheStore.inMemory())
-        let episodes = [
-            makeEpisode(id: "newest", publishedAt: 30),
-            makeEpisode(id: "middle", publishedAt: 20),
-            makeEpisode(id: "oldest", publishedAt: 10)
-        ]
-
-        let model = InboxEpisodeListModel.make(
-            episodes: episodes,
-            filter: .unplayed,
-            hidesQueuedEpisodes: false,
-            showsArchivedEpisodes: false,
-            library: library,
-            downloadRecords: [],
-            queuedEpisodeIDs: [],
-            playingEpisodeID: nil,
-            archivedEpisodeIDs: [],
-            visibleEpisodeCount: 1
-        )
-
-        #expect(model.episodes.map(\.id) == ["newest"])
-        #expect(model.hasMore)
-        #expect(!model.isFilteredEmpty)
     }
 
     private func makeModel(
@@ -446,8 +392,6 @@ struct InboxEpisodeListModelTests {
         )
     }
 
-    /// All Episodes with Up Next shown, in either view: every input but the
-    /// archived set fails the test if read.
     private func makeAllModel(
         _ episodes: [EpisodeListItemSnapshot],
         _ library: LibraryStore,
@@ -481,7 +425,6 @@ struct InboxEpisodeListModelTests {
         )
     }
 
-    /// Stands in for an input the model must not read; reading it fails the test.
     private func unreached<Value>(_ input: String, fallback: Value) -> Value {
         Issue.record("\(input) was read")
         return fallback

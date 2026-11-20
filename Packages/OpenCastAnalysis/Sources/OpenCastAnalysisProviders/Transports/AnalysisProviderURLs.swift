@@ -1,8 +1,7 @@
 import Foundation
 import OpenCastAnalysis
 
-/// Builds request URLs from a bundle endpoint, refusing anything that would
-/// send the key off the provider's pinned host.
+/// Refuses anything that would send the key off the provider's pinned host.
 struct AnalysisProviderURLs: Sendable {
     let provider: AnalysisProvider
     let endpoint: AnalysisProviderEndpoint
@@ -19,8 +18,6 @@ struct AnalysisProviderURLs: Sendable {
         self.endpoint = endpoint
     }
 
-    /// `baseURL + path` with `{model}` replaced, or `nil` when the model id
-    /// is not 1-128 of `[A-Za-z0-9._-]` or the result leaves the pinned host.
     func url(path: String, modelID: String?) -> URL? {
         var resolved = path
         if path.contains("{model}") {
@@ -38,8 +35,7 @@ struct AnalysisProviderURLs: Sendable {
         return url
     }
 
-    /// The constant headers the bundle adds, minus any that would replace
-    /// the credential or the content type.
+    /// A bundle header never replaces the credential or the content type.
     var versionHeaders: [AnalysisHTTPHeader] {
         let reserved: Set<String> = ["authorization", "x-goog-api-key", "x-api-key", "content-type", "cookie", "host"]
         return endpoint.versionHeaders
@@ -55,7 +51,6 @@ struct AnalysisProviderURLs: Sendable {
         }
     }
 
-    /// The host of an `https` URL with no user info, port, query or fragment.
     static func pinnedHost(_ url: URL) -> String? {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               components.scheme == "https",
