@@ -5,7 +5,7 @@ import OpenCastAnalysisProviders
 final class AnalysisRouteResolver {
     private let keys: AnalysisProviderKeyStore
     private let policy: AnalysisPolicySnapshotStore
-    private let storedProvider: (AnalysisFeature) -> AnalysisProvider?
+    private let storedChoice: (AnalysisFeature) -> AnalysisProviderSelectionStore.StoredChoice?
     private let trialStatus: AnalysisTrialStatusCache
     private let trial: any AnalysisTrialConnecting
     private let trialReachability: AnalysisTrialReachability
@@ -15,7 +15,7 @@ final class AnalysisRouteResolver {
     init(
         keys: AnalysisProviderKeyStore,
         policy: AnalysisPolicySnapshotStore,
-        storedProvider: @escaping (AnalysisFeature) -> AnalysisProvider?,
+        storedChoice: @escaping (AnalysisFeature) -> AnalysisProviderSelectionStore.StoredChoice?,
         trialStatus: AnalysisTrialStatusCache,
         trial: any AnalysisTrialConnecting,
         trialReachability: AnalysisTrialReachability,
@@ -24,7 +24,7 @@ final class AnalysisRouteResolver {
     ) {
         self.keys = keys
         self.policy = policy
-        self.storedProvider = storedProvider
+        self.storedChoice = storedChoice
         self.trialStatus = trialStatus
         self.trial = trial
         self.trialReachability = trialReachability
@@ -139,11 +139,14 @@ final class AnalysisRouteResolver {
     /// read is `keychainUnreadable`, never "no key", unless the stored choice read a key; `nil`
     /// means no provider holds one.
     private func directResolution(feature: AnalysisFeature, snapshot: AnalysisPolicySnapshot) -> AnalysisRouteResolution? {
-        let stored = storedProvider(feature)
+        let choice = storedChoice(feature)
+        let stored = choice?.provider
         var eligible: [(provider: AnalysisProvider, key: AnalysisProviderKey, policy: AnalysisRoutePolicy)] = []
         var unreadable = false
         for provider in AnalysisProvider.allCases {
-            guard let routePolicy = Self.directPolicy(feature: feature, provider: provider, snapshot: snapshot) else { continue }
+            guard let routePolicy = Self.directPolicy(feature: feature, provider: provider, stored: choice, snapshot: snapshot) else {
+                continue
+            }
             do {
                 if let key = try keys.key(for: provider) {
                     eligible.append((provider, key, routePolicy))
@@ -176,7 +179,8 @@ final class AnalysisRouteResolver {
     private func resume(_ record: AnalysisRunRecord, snapshot: AnalysisPolicySnapshot) async -> AnalysisRouteResolution? {
         switch record.route {
         case .direct:
-            guard let routePolicy = Self.directPolicy(feature: record.feature, provider: record.provider, snapshot: snapshot),
+            let model = AnalysisModelIdentity(provider: record.provider, modelID: record.modelID)
+            guard let routePolicy = Self.directPolicy(feature: record.feature, model: model, snapshot: snapshot),
                   Self.matches(record, routePolicy)
             else {
                 return nil
@@ -222,10 +226,24 @@ final class AnalysisRouteResolver {
             && record.policyRevision == policy.revision
     }
 
-    nonisolated static func directPolicy(feature: AnalysisFeature, provider: AnalysisProvider, snapshot: AnalysisPolicySnapshot) -> AnalysisRoutePolicy? {
+    nonisolated static func directPolicy(
+        feature: AnalysisFeature,
+        provider: AnalysisProvider,
+        stored: AnalysisProviderSelectionStore.StoredChoice? = nil,
+        snapshot: AnalysisPolicySnapshot
+    ) -> AnalysisRoutePolicy? {
+        AnalysisProviderSelectionStore.effectiveModel(for: feature, provider: provider, stored: stored, snapshot: snapshot)
+            .flatMap { directPolicy(feature: feature, model: $0.identity, snapshot: snapshot) }
+    }
+
+    nonisolated static func directPolicy(
+        feature: AnalysisFeature,
+        model: AnalysisModelIdentity,
+        snapshot: AnalysisPolicySnapshot
+    ) -> AnalysisRoutePolicy? {
         switch feature {
-        case .adDetection: snapshot.adDetection(provider: provider).map(AnalysisRoutePolicy.adDetection)
-        case .chaptersSummary: snapshot.chaptersSummary(provider: provider).map(AnalysisRoutePolicy.chaptersSummary)
+        case .adDetection: snapshot.adDetection(model: model).map(AnalysisRoutePolicy.adDetection)
+        case .chaptersSummary: snapshot.chaptersSummary(model: model).map(AnalysisRoutePolicy.chaptersSummary)
         }
     }
 

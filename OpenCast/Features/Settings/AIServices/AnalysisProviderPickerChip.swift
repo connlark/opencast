@@ -3,28 +3,28 @@ import SwiftUI
 
 struct AnalysisProviderPickerChip: View {
     let feature: AnalysisFeature
-    /// Eligible providers in display order, each with its model label.
-    let options: [(provider: AnalysisProvider, title: String)]
-    let selection: AnalysisProvider?
-    let onSelect: (AnalysisProvider) -> Void
+    /// The entries of providers with a saved key, in display order.
+    let options: [AnalysisModelEntry]
+    let selection: AnalysisModelEntry?
+    let onSelect: (AnalysisModelIdentity) -> Void
 
     var body: some View {
-        if let selection, let selectedTitle = title(for: selection) {
+        if let selection {
             Menu {
-                Picker(AIServicesCopy.pickerLabel(feature), selection: binding(selected: selection)) {
-                    ForEach(options, id: \.provider) { option in
-                        Text(option.title)
-                            .tag(option.provider)
+                Picker(AIServicesCopy.pickerLabel(feature), selection: binding(selected: selection.identity)) {
+                    ForEach(options, id: \.identity) { option in
+                        Text(option.label)
+                            .tag(option.identity)
                     }
                 }
             } label: {
-                AnalysisProviderChipLabel(title: selectedTitle, isInteractive: true)
+                AnalysisProviderChipLabel(title: selection.label, isInteractive: true)
             }
             .menuStyle(.button)
             .buttonStyle(.plain)
             .accessibilityLabel(AIServicesCopy.pickerLabel(feature))
-            .accessibilityValue(selectedTitle)
-            .accessibilityInputLabels([AIServicesCopy.pickerLabel(feature), selectedTitle])
+            .accessibilityValue(selection.label)
+            .accessibilityInputLabels([AIServicesCopy.pickerLabel(feature), selection.label])
             .accessibilityIdentifier("AI Services Picker \(feature.rawValue)")
         } else {
             AnalysisProviderChipLabel(title: AIServicesCopy.noKey, isInteractive: false)
@@ -35,17 +35,13 @@ struct AnalysisProviderPickerChip: View {
         }
     }
 
-    private func title(for provider: AnalysisProvider) -> String? {
-        options.first { $0.provider == provider }?.title
-    }
-
-    /// Re-picking the checked provider calls `onSelect` too, which makes the
-    /// effective provider the stored choice.
-    private func binding(selected: AnalysisProvider) -> Binding<AnalysisProvider> {
+    /// Re-picking the checked model calls `onSelect` too, which makes the
+    /// effective model the stored choice.
+    private func binding(selected: AnalysisModelIdentity) -> Binding<AnalysisModelIdentity> {
         Binding {
             selected
-        } set: { provider in
-            onSelect(provider)
+        } set: { model in
+            onSelect(model)
         }
     }
 }

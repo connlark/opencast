@@ -19,6 +19,10 @@ from .workers_ai import WorkersAIAdapter
 _ADAPTERS = [
     GeminiAdapter("gemini-3.5-flash"),
     GeminiAdapter("gemini-3.8-flash"),
+    GeminiAdapter("gemini-4-hydrogen"),
+    GeminiAdapter("gemini-4-neon"),
+    GeminiAdapter("gemini-4-argon"),
+    GeminiAdapter("gemini-4-carbon"),
     GeminiAdapter("gemini-3.1-flash-lite", thinking_budget=True),
     GeminiAdapter("gemini-2.5-flash-lite", thinking_budget=True),
     OpenAIResponsesAdapter("gpt-6-astra"),
@@ -27,6 +31,14 @@ _ADAPTERS = [
     OpenAIResponsesAdapter(
         "gpt-6.1-sol", thinking=("default", "low", "medium", "high"), context_limit=1_050_000
     ),
+    # Like 6.1 Sol, 6.2 Sol and 6.2 Astra have no `none` effort.
+    OpenAIResponsesAdapter(
+        "gpt-6.2-sol", thinking=("default", "low", "medium", "high"), context_limit=1_050_000
+    ),
+    OpenAIResponsesAdapter(
+        "gpt-6.2-astra", thinking=("default", "low", "medium", "high"), context_limit=1_050_000
+    ),
+    OpenAIResponsesAdapter("gpt-6.1-terra", context_limit=1_050_000),
     OpenAIResponsesAdapter("gpt-5.6-sol"),
     OpenAIResponsesAdapter("gpt-5.6-terra"),
     OpenAIResponsesAdapter("gpt-5.6-luna"),

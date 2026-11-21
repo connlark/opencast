@@ -18,11 +18,8 @@ struct LiveRun {
     func entry(feature: AnalysisFeature) throws(AnalysisReplay.InputError) -> AnalysisModelEntry {
         let provider = try provider
         let modelID = try arguments.required("model")
-        let bundle = AnalysisPolicyBundle.baked
-        let listed = feature == .adDetection
-            ? bundle.features.adDetection.qualifiedModels
-            : bundle.features.chaptersSummary.allowedModels
-        var entry = listed.first { $0.provider == provider && $0.modelID == modelID }
+        let snapshot = AnalysisPolicySnapshot(bundle: .baked, source: .baked, fallbackReason: nil, lastRefreshFailure: nil)
+        var entry = snapshot.modelEntries(for: feature, provider: provider).first { $0.modelID == modelID }
             ?? (feature == .adDetection ? AnalysisModelEntry.serviceAdDetection : AnalysisModelEntry.serviceChaptersSummary)
         entry.provider = provider
         if entry.modelID != modelID {

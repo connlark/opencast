@@ -5,14 +5,14 @@
 /// The analysis policy bundle this build ships with, used until a newer
 /// signed bundle is downloaded and accepted.
 enum BakedAnalysisPolicy {
-    static let bundleVersion = 3
+    static let bundleVersion = 4
     /// SHA-256 of `json`'s UTF-8 bytes.
-    static let sha256 = "c3af12e4f3ee8458f57678672196a8e405fa1404f32cfd917a98cfc59f12d4a6"
+    static let sha256 = "131f6a2d28c923cade5540cd28f6126dd41d5512ec9b0d950b9ece30d0ca195b"
     static let json = ##"""
 {
   "schema_version": 1,
-  "bundle_version": 3,
-  "generated_at": "2026-10-25T01:10:00Z",
+  "bundle_version": 4,
+  "generated_at": "2026-11-21T02:31:39Z",
   "min_app_build": 301,
   "features": {
     "ad_detection": {
@@ -106,6 +106,17 @@ enum BakedAnalysisPolicy {
           "provider": "openai",
           "model_id": "gpt-6.1-sol",
           "label": "GPT-6.1 Sol",
+          "thinking": "medium",
+          "max_output_tokens": 16384,
+          "per_call_timeout_seconds": 120,
+          "run_budget_seconds": 570
+        }
+      ],
+      "additional_models": [
+        {
+          "provider": "google",
+          "model_id": "gemini-4-hydrogen",
+          "label": "Gemini 4 Hydrogen",
           "thinking": "medium",
           "max_output_tokens": 16384,
           "per_call_timeout_seconds": 120,
@@ -216,6 +227,17 @@ enum BakedAnalysisPolicy {
           "per_call_timeout_seconds": 120,
           "run_budget_seconds": 540
         }
+      ],
+      "additional_models": [
+        {
+          "provider": "google",
+          "model_id": "gemini-4-hydrogen",
+          "label": "Gemini 4 Hydrogen",
+          "thinking": "medium",
+          "max_output_tokens": 32768,
+          "per_call_timeout_seconds": 120,
+          "run_budget_seconds": 540
+        }
       ]
     }
   },
@@ -245,7 +267,47 @@ enum BakedAnalysisPolicy {
   },
   "notice": {
     "starts_at": "2026-10-25T01:10:00Z"
-  }
+  },
+  "model_cards": [
+    {
+      "provider": "google",
+      "model_id": "gemini-3.8-flash",
+      "price": "About 6¢ an episode. About 12¢ from 1 January 2027.",
+      "strengths": [
+        "Lowest cost today.",
+        "The model opencast has used longest."
+      ],
+      "weaknesses": [
+        "Slowest: an episode can take a few minutes.",
+        "Its price doubles in January."
+      ]
+    },
+    {
+      "provider": "google",
+      "model_id": "gemini-4-hydrogen",
+      "price": "About 9¢ an episode.",
+      "strengths": [
+        "About three times faster than 3.8 Flash.",
+        "Caught every ad in testing."
+      ],
+      "weaknesses": [
+        "Costs more than 3.8 Flash until January.",
+        "Can run a little past the end of a host-read ad."
+      ]
+    },
+    {
+      "provider": "openai",
+      "model_id": "gpt-6.1-sol",
+      "price": "About 6¢ an episode.",
+      "strengths": [
+        "Fast.",
+        "Caught every ad in testing."
+      ],
+      "weaknesses": [
+        "Also skips plugs for a show's own products."
+      ]
+    }
+  ]
 }
 """##
 }

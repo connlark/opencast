@@ -4,8 +4,9 @@
 //! Host-only. Every number, prompt and schema is imported from the analysis
 //! workers' own source (the code the qualified results came from), so a
 //! bundle cannot drift from what was qualified by retyping. The few facts the
-//! workers do not hold (the OpenAI golden model, provider wire facts, the
-//! trial and notice blocks, the key pages) are the named constants below.
+//! workers do not hold (the OpenAI golden model, the additional models, the
+//! model cards, provider wire facts, the trial and notice blocks, the key
+//! pages) are the named constants below.
 
 use std::collections::BTreeMap;
 
@@ -38,9 +39,58 @@ pub const PINNED_PUBLIC_KEY_HEX: &str =
 pub const OPENAI_GOLDEN_MODEL: &str = "gpt-6.1-sol";
 pub const OPENAI_GOLDEN_LABEL: &str = "GPT-6.1 Sol";
 pub const OPENAI_GOLDEN_THINKING: &str = "medium";
-/// Picker labels for the Gemini ids the ad worker can name. A new model id in
+/// Picker labels for the Gemini ids the bundle can name. A new model id in
 /// `policy::V3_MODEL` fails generation until it has a label here.
-const GOOGLE_LABELS: &[(&str, &str)] = &[("gemini-3.8-flash", "Gemini 3.8 Flash")];
+const GOOGLE_LABELS: &[(&str, &str)] = &[
+    ("gemini-3.8-flash", "Gemini 3.8 Flash"),
+    ("gemini-4-hydrogen", "Gemini 4 Hydrogen"),
+];
+/// Gemini models offered beside the default Gemini entry in both features, with
+/// their qualified thinking level and the default entry's output cap, timeouts
+/// and run budget. An empty list offers only the default entries.
+pub const GOOGLE_ADDITIONAL_MODELS: &[(&str, &str)] = &[("gemini-4-hydrogen", "medium")];
+
+/// Display order. Only the cards of offered models are emitted.
+const MODEL_CARDS: &[CardCopy] = &[
+    CardCopy {
+        provider: "google",
+        model_id: "gemini-3.8-flash",
+        price: "About 6¢ an episode. About 12¢ from 1 January 2027.",
+        strengths: &["Lowest cost today.", "The model opencast has used longest."],
+        weaknesses: &[
+            "Slowest: an episode can take a few minutes.",
+            "Its price doubles in January.",
+        ],
+    },
+    CardCopy {
+        provider: "google",
+        model_id: "gemini-4-hydrogen",
+        price: "About 9¢ an episode.",
+        strengths: &[
+            "About three times faster than 3.8 Flash.",
+            "Caught every ad in testing.",
+        ],
+        weaknesses: &[
+            "Costs more than 3.8 Flash until January.",
+            "Can run a little past the end of a host-read ad.",
+        ],
+    },
+    CardCopy {
+        provider: "openai",
+        model_id: OPENAI_GOLDEN_MODEL,
+        price: "About 6¢ an episode.",
+        strengths: &["Fast.", "Caught every ad in testing."],
+        weaknesses: &["Also skips plugs for a show's own products."],
+    },
+];
+
+struct CardCopy {
+    provider: &'static str,
+    model_id: &'static str,
+    price: &'static str,
+    strengths: &'static [&'static str],
+    weaknesses: &'static [&'static str],
+}
 /// The Gemini model qualified for Chapters & Summary on device (2026-10-24,
 /// a 15- and a 59-minute episode, two replicates each, no chapter starting
 /// inside a known ad). Named on its own: the ad worker's model may move
@@ -72,12 +122,14 @@ pub const GOOGLE_KEY_URL: &str = "https://aistudio.google.com/app/apikey";
 pub const OPENAI_KEY_URL: &str = "https://platform.openai.com/settings/organization/api-keys";
 
 /// What the app pins per provider: the only host its key may be sent to,
-/// how the key is sent, and the thinking levels its golden models accept.
+/// how the key is sent, the thinking levels its golden models accept, and
+/// whether both request paths must name the model as `{model}`.
 pub struct ProviderRules {
     pub provider: &'static str,
     pub host: &'static str,
     pub auth: &'static str,
     pub thinking: &'static [&'static str],
+    pub model_in_path: bool,
 }
 
 pub const PROVIDER_RULES: &[ProviderRules] = &[
@@ -86,17 +138,25 @@ pub const PROVIDER_RULES: &[ProviderRules] = &[
         host: "generativelanguage.googleapis.com",
         auth: "x-goog-api-key",
         thinking: &["low", "medium", "high"],
+        model_in_path: true,
     },
     ProviderRules {
         provider: "openai",
         host: "api.openai.com",
         auth: "bearer",
         thinking: &["none", "low", "medium", "high"],
+        model_in_path: false,
     },
 ];
 
 /// Longest prompt and largest compact response schema, in UTF-8 bytes.
 pub const MAX_TEXT_FIELD_BYTES: usize = 65_536;
+/// Entries per feature across both lists, counted on the wire.
+pub const MAX_FEATURE_ENTRIES: usize = 8;
+/// Card text bounds, in Unicode scalars.
+pub const MAX_CARD_PRICE_CHARS: usize = 120;
+pub const MAX_CARD_LINE_CHARS: usize = 90;
+pub const MAX_CARD_LINES: usize = 3;
 const MAX_VERSION_HEADERS: usize = 8;
 /// Longest key page URL, in bytes (the app's limit).
 const MAX_KEY_URL_BYTES: usize = 256;
@@ -120,6 +180,8 @@ pub struct AnalysisPolicyBundle {
     pub trial: Trial,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notice: Option<Notice>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_cards: Vec<ModelCard>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -140,6 +202,8 @@ pub struct AdDetection {
     pub limits: Limits,
     pub repair: Repair,
     pub qualified_models: Vec<ModelEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_models: Vec<ModelEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,6 +241,8 @@ pub struct ChaptersSummary {
     pub coalescing: Coalescing,
     pub chapter_cap: ChapterCap,
     pub allowed_models: Vec<ModelEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_models: Vec<ModelEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -237,6 +303,16 @@ pub struct Notice {
     pub starts_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelCard {
+    pub provider: String,
+    pub model_id: String,
+    pub price: String,
+    pub strengths: Vec<String>,
+    pub weaknesses: Vec<String>,
+}
+
 /// The release facts a bundle carries that are not analysis settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenerationInputs {
@@ -288,8 +364,23 @@ pub fn generate(inputs: &GenerationInputs) -> Result<AnalysisPolicyBundle, Strin
         label: OPENAI_GOLDEN_LABEL.to_string(),
         ..chapters_gemini.clone()
     };
+    let additional_google = |default: &ModelEntry| -> Result<Vec<ModelEntry>, String> {
+        GOOGLE_ADDITIONAL_MODELS
+            .iter()
+            .map(|(model_id, thinking)| {
+                Ok(ModelEntry {
+                    model_id: (*model_id).to_string(),
+                    label: google_label(model_id)?.to_string(),
+                    thinking: (*thinking).to_string(),
+                    ..default.clone()
+                })
+            })
+            .collect()
+    };
+    let ad_additional = additional_google(&gemini)?;
+    let chapters_additional = additional_google(&chapters_gemini)?;
 
-    let bundle = AnalysisPolicyBundle {
+    let mut bundle = AnalysisPolicyBundle {
         schema_version: SCHEMA_VERSION,
         bundle_version: inputs.bundle_version,
         generated_at: inputs.generated_at.clone(),
@@ -317,6 +408,7 @@ pub fn generate(inputs: &GenerationInputs) -> Result<AnalysisPolicyBundle, Strin
                     feedback_bytes: promo_v3::MAX_REPAIR_FEEDBACK_BYTES,
                 },
                 qualified_models: vec![gemini.clone(), sol],
+                additional_models: ad_additional,
             },
             chapters_summary: ChaptersSummary {
                 policy: chapters_types::POLICY_NAME.to_string(),
@@ -336,6 +428,7 @@ pub fn generate(inputs: &GenerationInputs) -> Result<AnalysisPolicyBundle, Strin
                     seconds_per_chapter: chapters_validation::CHAPTER_SECONDS_PER_CHAPTER,
                 },
                 allowed_models: vec![chapters_gemini, chapters_sol],
+                additional_models: chapters_additional,
             },
         },
         providers: providers()?,
@@ -348,9 +441,48 @@ pub fn generate(inputs: &GenerationInputs) -> Result<AnalysisPolicyBundle, Strin
         notice: Some(Notice {
             starts_at: NOTICE_STARTS_AT.to_string(),
         }),
+        model_cards: Vec::new(),
     };
+    let offered = listed_models(&bundle.features);
+    bundle.model_cards = MODEL_CARDS
+        .iter()
+        .filter(|card| offered.contains(&(card.provider, card.model_id)))
+        .map(|card| ModelCard {
+            provider: card.provider.to_string(),
+            model_id: card.model_id.to_string(),
+            price: card.price.to_string(),
+            strengths: card.strengths.iter().map(ToString::to_string).collect(),
+            weaknesses: card.weaknesses.iter().map(ToString::to_string).collect(),
+        })
+        .collect();
+    if let Some((provider, model_id)) = offered.iter().find(|(provider, model_id)| {
+        !MODEL_CARDS
+            .iter()
+            .any(|card| card.provider == *provider && card.model_id == *model_id)
+    }) {
+        return Err(format!("no model card for {provider} {model_id}"));
+    }
     check_bundle(&bundle)?;
     Ok(bundle)
+}
+
+/// Every `(provider, model_id)` either feature lists, defaults first, once each.
+fn listed_models(features: &Features) -> Vec<(&str, &str)> {
+    let mut listed = Vec::new();
+    for entry in features
+        .ad_detection
+        .qualified_models
+        .iter()
+        .chain(&features.chapters_summary.allowed_models)
+        .chain(&features.ad_detection.additional_models)
+        .chain(&features.chapters_summary.additional_models)
+    {
+        let pair = (entry.provider.as_str(), entry.model_id.as_str());
+        if !listed.contains(&pair) {
+            listed.push(pair);
+        }
+    }
+    listed
 }
 
 /// Pretty JSON, the exact bytes that are signed, served and baked.
@@ -457,8 +589,18 @@ pub fn check_bundle(bundle: &AnalysisPolicyBundle) -> Result<(), String> {
         &chapters.prompt,
         &chapters.response_schema,
     )?;
-    check_entries("ad_detection.qualified_models", &ad.qualified_models)?;
-    check_entries("chapters_summary.allowed_models", &chapters.allowed_models)?;
+    check_feature_entries(
+        "ad_detection",
+        "qualified_models",
+        &ad.qualified_models,
+        &ad.additional_models,
+    )?;
+    check_feature_entries(
+        "chapters_summary",
+        "allowed_models",
+        &chapters.allowed_models,
+        &chapters.additional_models,
+    )?;
     for rules in PROVIDER_RULES {
         let provider = rules.provider;
         let Some(endpoint) = bundle.providers.get(provider) else {
@@ -476,6 +618,11 @@ pub fn check_bundle(bundle: &AnalysisPolicyBundle) -> Result<(), String> {
         for path in [&endpoint.generate_path, &endpoint.count_tokens_path] {
             if !safe_path(path) {
                 return Err(format!("providers.{provider} has an unsafe path {path}"));
+            }
+            if rules.model_in_path && !names_model_exactly(path) {
+                return Err(format!(
+                    "providers.{provider} path {path} must name the model as /{{model}}:<verb>"
+                ));
             }
         }
         if endpoint
@@ -498,13 +645,19 @@ pub fn check_bundle(bundle: &AnalysisPolicyBundle) -> Result<(), String> {
             ));
         }
     }
-    let trial_model_is_google_ad_entry = ad
-        .qualified_models
-        .iter()
-        .any(|entry| entry.provider == "google" && entry.model_id == bundle.trial.model);
-    if !trial_model_is_google_ad_entry {
-        return Err("trial.model must name a google ad_detection entry".to_string());
+    for (feature, defaults) in [
+        ("ad_detection", &ad.qualified_models),
+        ("chapters_summary", &chapters.allowed_models),
+    ] {
+        let google_default = defaults.iter().find(|entry| entry.provider == "google");
+        if google_default.map(|entry| entry.model_id.as_str()) != Some(bundle.trial.model.as_str())
+        {
+            return Err(format!(
+                "trial.model must be the google default entry of {feature}"
+            ));
+        }
     }
+    check_cards(bundle)?;
     let trial_host_is_opencast = https_host(&bundle.trial.endpoint)
         .is_some_and(|host| host == "opencast.mobile" || host.ends_with(".opencast.mobile"));
     if !trial_host_is_opencast {
@@ -596,6 +749,18 @@ fn safe_path(path: &str) -> bool {
         && !path.contains(['?', '#', '\\', '@', '%', ' '])
 }
 
+/// The model-name component is exactly `{model}`: `/{model}:<verb>`, so no other model can be
+/// written around the placeholder.
+fn names_model_exactly(path: &str) -> bool {
+    let Some((before, after)) = path.split_once("{model}") else {
+        return false;
+    };
+    before.ends_with('/')
+        && after
+            .strip_prefix(':')
+            .is_some_and(|verb| !verb.is_empty() && !verb.contains(['/', '{', '}']))
+}
+
 fn check_text(field: &str, prompt: &str, schema: &Value) -> Result<(), String> {
     if prompt.is_empty() || prompt.len() > MAX_TEXT_FIELD_BYTES {
         return Err(format!(
@@ -622,33 +787,116 @@ fn safe_version_header(name: &str, value: &str) -> bool {
         && value.bytes().all(|byte| (0x20..0x7f).contains(&byte))
 }
 
-fn check_entries(field: &str, entries: &[ModelEntry]) -> Result<(), String> {
+fn check_feature_entries(
+    feature: &str,
+    defaults_name: &str,
+    defaults: &[ModelEntry],
+    additional: &[ModelEntry],
+) -> Result<(), String> {
+    let defaults_field = format!("{feature}.{defaults_name}");
+    let additional_field = format!("{feature}.additional_models");
     let mut providers = Vec::new();
-    for entry in entries {
+    for entry in defaults {
         if providers.contains(&entry.provider.as_str()) {
-            return Err(format!("{field} lists {} twice", entry.provider));
+            return Err(format!("{defaults_field} lists {} twice", entry.provider));
         }
         providers.push(entry.provider.as_str());
-        let Some(rules) = PROVIDER_RULES
-            .iter()
-            .find(|rules| rules.provider == entry.provider)
-        else {
-            return Err(format!("{field} names an unknown provider"));
-        };
-        if !rules.thinking.contains(&entry.thinking.as_str()) {
+        check_entry(&defaults_field, entry)?;
+    }
+    for entry in additional {
+        check_entry(&additional_field, entry)?;
+        if !providers.contains(&entry.provider.as_str()) {
             return Err(format!(
-                "{field} thinking {} is not a {} level",
-                entry.thinking, entry.provider
+                "{additional_field} lists {} without a default entry",
+                entry.provider
             ));
         }
-        if !valid_model_id(&entry.model_id) {
-            return Err(format!("{field} has an invalid model id"));
+    }
+    if defaults.len() + additional.len() > MAX_FEATURE_ENTRIES {
+        return Err(format!(
+            "{feature} lists more than {MAX_FEATURE_ENTRIES} models"
+        ));
+    }
+    let mut pairs = Vec::new();
+    for entry in defaults.iter().chain(additional) {
+        let pair = (entry.provider.as_str(), entry.model_id.as_str());
+        if pairs.contains(&pair) {
+            return Err(format!(
+                "{feature} lists {} {} twice",
+                entry.provider, entry.model_id
+            ));
         }
-        if entry.run_budget_seconds < entry.per_call_timeout_seconds {
-            return Err(format!("{field} run budget is shorter than one call"));
+        pairs.push(pair);
+    }
+    Ok(())
+}
+
+fn check_entry(field: &str, entry: &ModelEntry) -> Result<(), String> {
+    let Some(rules) = PROVIDER_RULES
+        .iter()
+        .find(|rules| rules.provider == entry.provider)
+    else {
+        return Err(format!("{field} names an unknown provider"));
+    };
+    if !rules.thinking.contains(&entry.thinking.as_str()) {
+        return Err(format!(
+            "{field} thinking {} is not a {} level",
+            entry.thinking, entry.provider
+        ));
+    }
+    if !valid_model_id(&entry.model_id) {
+        return Err(format!("{field} has an invalid model id"));
+    }
+    if entry.run_budget_seconds < entry.per_call_timeout_seconds {
+        return Err(format!("{field} run budget is shorter than one call"));
+    }
+    Ok(())
+}
+
+fn check_cards(bundle: &AnalysisPolicyBundle) -> Result<(), String> {
+    let listed = listed_models(&bundle.features);
+    let mut seen = Vec::new();
+    for card in &bundle.model_cards {
+        let pair = (card.provider.as_str(), card.model_id.as_str());
+        if !listed.contains(&pair) {
+            return Err(format!(
+                "model_cards names {} {}, which no feature lists",
+                card.provider, card.model_id
+            ));
+        }
+        if seen.contains(&pair) {
+            return Err(format!(
+                "model_cards lists {} {} twice",
+                card.provider, card.model_id
+            ));
+        }
+        seen.push(pair);
+        let lines_ok = |lines: &[String]| {
+            (1..=MAX_CARD_LINES).contains(&lines.len())
+                && lines
+                    .iter()
+                    .all(|line| valid_card_text(line, MAX_CARD_LINE_CHARS))
+        };
+        if !valid_card_text(&card.price, MAX_CARD_PRICE_CHARS)
+            || !lines_ok(&card.strengths)
+            || !lines_ok(&card.weaknesses)
+        {
+            return Err(format!(
+                "model_cards text for {} {} is out of bounds",
+                card.provider, card.model_id
+            ));
         }
     }
     Ok(())
+}
+
+fn valid_card_text(text: &str, max: usize) -> bool {
+    (1..=max).contains(&text.chars().count()) && !text.chars().any(is_card_control_char)
+}
+
+/// C0, DEL, C1 and the line and paragraph separators; the app refuses the same set.
+fn is_card_control_char(scalar: char) -> bool {
+    matches!(scalar, '\u{0}'..='\u{1f}' | '\u{7f}'..='\u{9f}' | '\u{2028}' | '\u{2029}')
 }
 
 /// Model ids are interpolated into request paths: 1-128 of `[A-Za-z0-9._-]`.

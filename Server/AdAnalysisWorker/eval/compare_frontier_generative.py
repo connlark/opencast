@@ -39,7 +39,7 @@ synthetics are excluded), measured and no-cache (repeats minutes apart hit
 the vendors' implicit prompt caches, which one production analysis per
 episode would not, so every cached token is also priced at the input rate);
 `$/day` multiplies the no-cache mean by `--episodes-per-day` (50), and `$/day from 2027-01-01` doubles every Gemini 3.x row (promotional
-prices expire 2026-12-31; other vendors unchanged). Latency is the
+prices expire 2026-12-31) and Gemini 4 Argon and Carbon (launch prices expire 2026-11-30); other rows unchanged. Latency is the
 provider-call wall time only (`latency_ms`, no countTokens round trip),
 nearest-rank p95 over every call.
 
@@ -527,8 +527,8 @@ def mean(values):
     return statistics.fmean(values) if values else None
 
 
-def gemini3(model):
-    return "gemini-3." in (model or "")
+def doubles_by_2027(model):
+    return "gemini-3." in (model or "") or model in budget.GEMINI_4_LAUNCH_PRICED
 
 
 def planned_windows(all_runs):
@@ -597,7 +597,7 @@ def aggregate(label, runs, reference=False, episodes_per_day=50, planned=None):
         "schema_key_leak": sum(bool(r["disqualifiers"]["schema_key_leak"]) for r in scored),
     }
     tiny = jitter(by_fixture.get(JITTER_FIXTURE, []))
-    multiplier_2027 = 2.0 if gemini3(model) else 1.0
+    multiplier_2027 = 2.0 if doubles_by_2027(model) else 1.0
     row = {
         "label": label,
         "reference": reference,
@@ -1214,7 +1214,7 @@ def render_frontier(rows, generated_at, episodes_per_day):
                 "ones) and a full-pass projection (a refused run stops at its failing window, so its "
                 "spend is scaled by planned / called windows; windows planned = a complete run's "
                 "count on that fixture). `$/day` = all-run no-cache mean x"
-                f"{episodes_per_day} episodes; from 2027-01-01 Gemini 3.x prices double, others "
+                f"{episodes_per_day} episodes; by 2027-01-01 Gemini 3.x, Gemini 4 Argon and Gemini 4 Carbon prices double, others "
                 "unchanged. p95 = provider-call wall time, nearest rank over every call. "
                 "Coverage, whole-pod misses (< 0.5) and jitter count complete runs only; "
                 "negative hits = runs with > 1 s on labelled negatives.",

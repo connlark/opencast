@@ -76,6 +76,7 @@ class RegistryTests(unittest.TestCase):
             "claude-haiku-5-5": ("none", "low", "medium", "high"),
             "claude-opus-5-5": ("low", "medium", "high"),
             "gpt-6.1-sol": ("default", "low", "medium", "high"),
+            "gpt-6.2-sol": ("default", "low", "medium", "high"),
             "@cf/google/gemma-4-26b-a4b-it": ("default", "none", "low", "medium", "high"),
             "@cf/qwen/qwen3-30b-a3b-fp8": ("default", "none", "low", "medium", "high"),
             "@cf/openai/gpt-oss-120b": ("default", "low", "medium", "high"),

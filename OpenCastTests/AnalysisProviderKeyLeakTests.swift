@@ -152,7 +152,7 @@ struct AnalysisProviderKeyLeakTests {
         appModel.analysisUsage.load(modelContext: context)
         await appModel.analysisKeys.refreshPresences()
         #expect(appModel.analysisKeys.hasSavedKey)
-        #expect(appModel.analysisProviderSelection.setProvider(.openai, for: .chaptersSummary, modelContext: context))
+        #expect(appModel.analysisProviderSelection.select(.init(provider: .openai, modelID: "gpt-6.1-sol"), for: .chaptersSummary, modelContext: context))
         #expect(appModel.analysisUsage.record(
             provider: .google,
             feature: .adDetection,

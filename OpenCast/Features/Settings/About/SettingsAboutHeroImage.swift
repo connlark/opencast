@@ -6,7 +6,7 @@ struct SettingsAboutHeroImage: View {
         Image(AppIconOption.primary.previewImage)
             .resizable()
             .scaledToFit()
-            .scaleEffect(0.75)
+            .scaleEffect(0.874)
             .accessibilityHidden(true)
     }
 }

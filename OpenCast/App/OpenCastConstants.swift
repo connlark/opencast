@@ -17,9 +17,13 @@ enum OpenCastConstants {
     static let supportURL = URL(string: "https://support.opencast.mobile/support")!
     static let privacyPolicyURL = URL(string: "https://support.opencast.mobile/privacy")!
     static let sourceCodeURL = URL(string: "https://github.com/connlark/opencast")!
+    static let changelogURL = URL(string: "https://github.com/connlark/opencast/releases")!
     static let websiteURL = URL(string: "https://opencast.mobile/")!
     static let appStoreID = "6766770733"
     static let appStoreURL = URL(string: "https://apps.apple.com/app/opencast/id\(appStoreID)")!
+    static let appStoreWriteReviewURL = URL(
+        string: "https://apps.apple.com/app/opencast/id\(appStoreID)?action=write-review"
+    )!
     /// Always the production origin: the token works on any ShareWorker host.
     static let episodeShareBaseURL = URL(string: "https://opencast.mobile/e/")!
     static let applePodcastsOPMLShortcutURL = URL(

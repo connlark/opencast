@@ -84,7 +84,9 @@ nonisolated enum AIServicesCopy {
     // MARK: Screen
 
     static let keysHeader = "API Keys"
-    static let providerHeader = "Provider"
+    static let modelsHeader = "About the Models"
+    static let modelsFooter = "Prices are estimates for ad detection on a typical episode, from opencast's own testing. Your provider bills you."
+    static let providerHeader = "Model"
     static let usageHeader = "Usage"
     static let providersFooter = "Ad detection and Chapters & Summary run on your device and call the provider you choose with your own key. Recap and Ask use Apple's Private Cloud Compute and need no key."
 
@@ -256,7 +258,15 @@ nonisolated enum AIServicesCopy {
 
     static let removeSyncedCopyHint = "Removes the synced copy from your other devices and keeps the key on this device"
 
+    static func strength(_ line: String) -> String {
+        "Strength: \(line)"
+    }
+
+    static func weakness(_ line: String) -> String {
+        "Weakness: \(line)"
+    }
+
     static func pickerLabel(_ feature: AnalysisFeature) -> String {
-        "\(featureName(feature)) provider"
+        "\(featureName(feature)) model"
     }
 }

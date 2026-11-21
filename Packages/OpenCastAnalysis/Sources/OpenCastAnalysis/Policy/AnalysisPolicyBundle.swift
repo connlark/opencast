@@ -22,6 +22,8 @@ public struct AnalysisPolicyBundle: Sendable, Equatable, Decodable {
     public var providers: [AnalysisProvider: AnalysisProviderEndpoint]
     public var trial: AnalysisTrialPolicy
     public var notice: AnalysisNoticePolicy?
+    /// Display order.
+    public var modelCards: [AnalysisModelCard]
 
     enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version"
@@ -32,6 +34,7 @@ public struct AnalysisPolicyBundle: Sendable, Equatable, Decodable {
         case providers
         case trial
         case notice
+        case modelCards = "model_cards"
     }
 
     private struct ProviderKey: CodingKey {
@@ -59,6 +62,9 @@ public struct AnalysisPolicyBundle: Sendable, Equatable, Decodable {
         self.providers = providers
         trial = try container.decode(AnalysisTrialPolicy.self, forKey: .trial)
         notice = try container.decodeIfPresent(AnalysisNoticePolicy.self, forKey: .notice)
+        modelCards = container.contains(.modelCards)
+            ? try container.decode(KnownProviderList<AnalysisModelCard>.self, forKey: .modelCards).items
+            : []
     }
 
     public static func decode(_ data: Data) throws -> AnalysisPolicyBundle {

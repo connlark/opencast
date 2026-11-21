@@ -14,7 +14,7 @@ from budget import MAX_AUTHORIZED_CAP, PRICES, Ledger, cost_usd, rates, verify
 EVAL = Path(__file__).resolve().parent
 # sha256 of json.dumps(budget.price_snapshot(), sort_keys=True, separators=(",", ":")).
 # A price edit must change this literal in the same commit (and reopen no ledger).
-PRICE_SNAPSHOT_SHA256 = "a5cf44c5708c5e586675da8528984ad8f32bab07ab0cce678990461a56ccbea0"
+PRICE_SNAPSHOT_SHA256 = "e852b0e1f9500df52f93bae2dc536f681bc43a75ed9489fe37f035ea4d11e83e"
 DECISION_MODELS = {
     "@cf/cloudflare/clef",
     "@cf/cloudflare/clef-flash",
@@ -44,7 +44,7 @@ class PriceTableTests(unittest.TestCase):
 
     def test_bakeoff_rows_and_conventions(self):
         self.assertEqual(MAX_AUTHORIZED_CAP, 50)
-        self.assertEqual(len(PRICES), 24)
+        self.assertEqual(len(PRICES), 31)
         for model in DECISION_MODELS:
             row = PRICES[model]
             self.assertEqual(row[3], 0, model)
@@ -65,6 +65,13 @@ class PriceTableTests(unittest.TestCase):
         # generic OpenAI long-context step (x2 input classes, x1.5 output).
         self.assertEqual(rates("claude-opus-5-5", 900_000), (4, 0.20, 5, 20))
         self.assertEqual(rates("gpt-6.1-sol", 272_001), (4, 0.20, 5, 15))
+        self.assertEqual(PRICES["gpt-6.2-sol"], (2, 0.10, 2.5, 10))
+        self.assertEqual(PRICES["gpt-6.1-terra"], (1, 0.05, 1.25, 5))
+        self.assertEqual(PRICES["gpt-6.2-astra"], (8, 0.40, 10, 40))
+        self.assertEqual(PRICES["gemini-4-hydrogen"], (1.5, 0.075, 1.5, 7.5))
+        self.assertEqual(PRICES["gemini-4-neon"], (3, 0.15, 3, 15))
+        self.assertEqual(PRICES["gemini-4-argon"], (2, 0.10, 2, 10))
+        self.assertEqual(PRICES["gemini-4-carbon"], PRICES["gemini-4-argon"])
         # September rows unchanged.
         for model, row in SEPTEMBER_PRICES.items():
             self.assertEqual(list(PRICES[model]), row)
@@ -102,6 +109,26 @@ class PriceTableTests(unittest.TestCase):
             rates("gpt-6-luna", 1)
         finally:
             budget.GEMINI_3_PRICE_EXPIRY = original
+
+    def test_expired_launch_prices_refuse_new_reservations_and_still_settle(self):
+        import datetime
+
+        self.assertEqual(budget.GEMINI_4_LAUNCH_PRICE_EXPIRY, datetime.date(2026, 11, 30))
+        original = budget.GEMINI_4_LAUNCH_PRICE_EXPIRY
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Ledger(Path(tmp) / "ledger.json", 15)
+            budget.GEMINI_4_LAUNCH_PRICE_EXPIRY = datetime.date(2100, 1, 1)
+            try:
+                reserved = ledger.reserve("gemini-4-argon", 1_000_000, 1000, {})
+                budget.GEMINI_4_LAUNCH_PRICE_EXPIRY = datetime.date(2026, 1, 1)
+                ledger.finish(reserved, "settled", usage=usage(1_000_000, 0))
+                self.assertAlmostEqual(ledger.snapshot()["entries"][0]["actual_usd"], 2)
+                for model in ("gemini-4-argon", "gemini-4-carbon"):
+                    with self.assertRaises(ValueError, msg=model):
+                        ledger.reserve(model, 1, 1, {})
+                ledger.reserve("gemini-4-hydrogen", 1, 1, {})
+            finally:
+                budget.GEMINI_4_LAUNCH_PRICE_EXPIRY = original
 
     def test_decision_reservation_with_one_output_token(self):
         with tempfile.TemporaryDirectory() as tmp:

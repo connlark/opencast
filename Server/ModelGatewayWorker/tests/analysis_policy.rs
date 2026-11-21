@@ -20,7 +20,7 @@ use opencast_transcript_analysis_worker::{
 use serde_json::{json, Value};
 use std::{fs, path::PathBuf};
 
-const CURRENT_VERSION: u32 = 3;
+const CURRENT_VERSION: u32 = 4;
 
 fn worker_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -214,6 +214,42 @@ fn generated_values_come_from_the_worker_constants() {
     }
     assert_eq!(ad.qualified_models[0].model_id, ad_policy::V3_MODEL);
     assert_eq!(ad.qualified_models[1].model_id, "gpt-6.1-sol");
+    // Each additional Gemini entry is the default entry with its own model,
+    // label and thinking.
+    let chapters = &bundle.features.chapters_summary;
+    for (additional, default) in [
+        (&ad.additional_models, &ad.qualified_models[0]),
+        (&chapters.additional_models, &chapters.allowed_models[0]),
+    ] {
+        assert_eq!(
+            additional
+                .iter()
+                .map(|entry| (entry.model_id.as_str(), entry.thinking.as_str()))
+                .collect::<Vec<_>>(),
+            analysis_policy::GOOGLE_ADDITIONAL_MODELS
+        );
+        for entry in additional {
+            let as_default = analysis_policy::ModelEntry {
+                model_id: default.model_id.clone(),
+                label: default.label.clone(),
+                thinking: default.thinking.clone(),
+                ..entry.clone()
+            };
+            assert_eq!(&as_default, default);
+        }
+    }
+    assert_eq!(
+        bundle
+            .model_cards
+            .iter()
+            .map(|card| (card.provider.as_str(), card.model_id.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("google", "gemini-3.8-flash"),
+            ("google", "gemini-4-hydrogen"),
+            ("openai", "gpt-6.1-sol")
+        ]
+    );
     assert_eq!(bundle.trial.model, ad_policy::V3_MODEL);
     assert_eq!(bundle.trial.lifetime_units, 5);
     assert_eq!(bundle.trial.starts_at, "2027-01-01T00:00:00Z");
@@ -242,7 +278,6 @@ fn generated_values_come_from_the_worker_constants() {
     assert_eq!(key_url("google"), Some(analysis_policy::GOOGLE_KEY_URL));
     assert_eq!(key_url("openai"), Some(analysis_policy::OPENAI_KEY_URL));
 
-    let chapters = &bundle.features.chapters_summary;
     // The two golden models, qualified for Chapters & Summary with the
     // Chapters worker's own output cap, first-call timeout and run budget.
     let expected: Vec<(&str, &str)> = vec![
@@ -547,6 +582,10 @@ fn relational_rules_reject_what_the_schema_cannot_express() {
         b.providers.get_mut("google").unwrap().generate_path = "/../models".to_string();
     }));
     assert!(rejected(&|b| {
+        b.providers.get_mut("google").unwrap().generate_path =
+            "/models/{model}-lite:generateContent".to_string();
+    }));
+    assert!(rejected(&|b| {
         b.features.ad_detection.qualified_models[1].model_id = "gpt/../x".to_string();
     }));
     assert!(rejected(&|b| {
@@ -566,6 +605,46 @@ fn relational_rules_reject_what_the_schema_cannot_express() {
     assert!(!rejected(&|b| {
         b.providers.get_mut("openai").unwrap().key_url = None;
     }));
+    let extra_gemini = |b: &AnalysisPolicyBundle, model_id: &str| {
+        let mut entry = b.features.chapters_summary.allowed_models[0].clone();
+        entry.model_id = model_id.to_string();
+        entry
+    };
+    assert!(!rejected(&|b| {
+        b.features.chapters_summary.additional_models = (0..6)
+            .map(|index| extra_gemini(b, &format!("gemini-extra-{index}")))
+            .collect();
+    }));
+    assert!(rejected(&|b| {
+        b.features.chapters_summary.additional_models = (0..7)
+            .map(|index| extra_gemini(b, &format!("gemini-extra-{index}")))
+            .collect();
+    }));
+    assert!(rejected(&|b| {
+        b.features.chapters_summary.additional_models = vec![extra_gemini(b, "gemini-3.8-flash")];
+    }));
+    assert!(rejected(&|b| {
+        let mut sol = b.features.ad_detection.qualified_models[1].clone();
+        sol.model_id = "gpt-6.1-sol-mini".to_string();
+        b.features.ad_detection.qualified_models.truncate(1);
+        b.features.ad_detection.additional_models = vec![sol];
+    }));
+    assert!(rejected(&|b| {
+        b.features.chapters_summary.allowed_models[0].model_id = "gemini-other".to_string();
+    }));
+    assert!(rejected(
+        &|b| b.model_cards[0].model_id = "gemini-other".to_string()
+    ));
+    assert!(rejected(&|b| {
+        let card = b.model_cards[0].clone();
+        b.model_cards.push(card);
+    }));
+    assert!(rejected(
+        &|b| b.model_cards[0].weaknesses[0].push('\u{2028}')
+    ));
+    assert!(rejected(&|b| b.model_cards[0].price = "x".repeat(121)));
+    assert!(!rejected(&|b| b.model_cards[0].price = "\u{a2}".repeat(120)));
+    assert!(!rejected(&|b| b.model_cards.clear()));
 }
 
 /// The generator and the app check a key page on its raw text with the same

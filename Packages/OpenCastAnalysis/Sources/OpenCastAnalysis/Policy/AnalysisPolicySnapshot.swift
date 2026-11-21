@@ -27,6 +27,7 @@ public struct AnalysisPolicySnapshot: Sendable, Equatable {
         self.lastRefreshFailure = lastRefreshFailure
     }
 
+    /// The provider's default entry.
     public func adDetection(provider: AnalysisProvider) -> AdDetectionAnalysisPolicy? {
         let feature = bundle.features.adDetection
         return feature.qualifiedModels.first { $0.provider == provider }.map {
@@ -34,11 +35,35 @@ public struct AnalysisPolicySnapshot: Sendable, Equatable {
         }
     }
 
+    /// The provider's default entry.
     public func chaptersSummary(provider: AnalysisProvider) -> ChaptersSummaryAnalysisPolicy? {
         let feature = bundle.features.chaptersSummary
         return feature.allowedModels.first { $0.provider == provider }.map {
             AnalysisPolicy(bundleVersion: bundle.bundleVersion, source: source, settings: feature, model: $0)
         }
+    }
+
+    public func adDetection(model: AnalysisModelIdentity) -> AdDetectionAnalysisPolicy? {
+        let feature = bundle.features.adDetection
+        return modelEntries(for: .adDetection, provider: model.provider).first { $0.modelID == model.modelID }.map {
+            AnalysisPolicy(bundleVersion: bundle.bundleVersion, source: source, settings: feature, model: $0)
+        }
+    }
+
+    public func chaptersSummary(model: AnalysisModelIdentity) -> ChaptersSummaryAnalysisPolicy? {
+        let feature = bundle.features.chaptersSummary
+        return modelEntries(for: .chaptersSummary, provider: model.provider).first { $0.modelID == model.modelID }.map {
+            AnalysisPolicy(bundleVersion: bundle.bundleVersion, source: source, settings: feature, model: $0)
+        }
+    }
+
+    /// The provider's default entry first, then its additional entries.
+    public func modelEntries(for feature: AnalysisFeature, provider: AnalysisProvider) -> [AnalysisModelEntry] {
+        let entries = switch feature {
+        case .adDetection: bundle.features.adDetection.qualifiedModels + bundle.features.adDetection.additionalModels
+        case .chaptersSummary: bundle.features.chaptersSummary.allowedModels + bundle.features.chaptersSummary.additionalModels
+        }
+        return entries.filter { $0.provider == provider }
     }
 
     /// Never `nil` for an accepted bundle: validation requires the entry.

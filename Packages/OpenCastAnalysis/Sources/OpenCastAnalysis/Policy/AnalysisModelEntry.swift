@@ -19,26 +19,34 @@ public struct AnalysisModelEntry: Sendable, Equatable, Decodable {
         case perCallTimeoutSeconds = "per_call_timeout_seconds"
         case runBudgetSeconds = "run_budget_seconds"
     }
+
+    public var identity: AnalysisModelIdentity {
+        AnalysisModelIdentity(provider: provider, modelID: modelID)
+    }
 }
 
-/// Skips entries whose provider this build does not know, so a later bundle can add a provider
+/// Skips items whose provider this build does not know, so a later bundle can add a provider
 /// without failing older apps.
-struct KnownProviderModelEntries: Decodable {
-    let entries: [AnalysisModelEntry]
+struct KnownProviderList<Item: Decodable>: Decodable {
+    let items: [Item]
+    let skippedCount: Int
 
     private struct Element: Decodable {
-        let entry: AnalysisModelEntry?
+        let item: Item?
+
+        private enum CodingKeys: String, CodingKey {
+            case provider
+        }
 
         init(from decoder: any Decoder) throws {
-            let container = try decoder.container(keyedBy: AnalysisModelEntry.CodingKeys.self)
-            let provider = try container.decode(String.self, forKey: .provider)
-            entry = AnalysisProvider(rawValue: provider) == nil
-                ? nil
-                : try AnalysisModelEntry(from: decoder)
+            let provider = try decoder.container(keyedBy: CodingKeys.self).decode(String.self, forKey: .provider)
+            item = AnalysisProvider(rawValue: provider) == nil ? nil : try Item(from: decoder)
         }
     }
 
     init(from decoder: any Decoder) throws {
-        entries = try [Element](from: decoder).compactMap(\.entry)
+        let elements = try [Element](from: decoder)
+        items = elements.compactMap(\.item)
+        skippedCount = elements.count - items.count
     }
 }

@@ -36,8 +36,11 @@ public struct ChaptersSummaryPolicy: Sendable, Equatable, Decodable {
     public var responseSchema: AnalysisPolicyJSON
     public var coalescing: Coalescing
     public var chapterCap: ChapterCap
-    /// At most one entry per provider.
+    /// At most one entry per provider: that provider's default.
     public var allowedModels: [AnalysisModelEntry]
+    public var additionalModels: [AnalysisModelEntry]
+    /// Entries of providers this build does not know; they still count toward the entry bound.
+    var skippedModelCount: Int
 
     enum CodingKeys: String, CodingKey {
         case policy
@@ -47,6 +50,7 @@ public struct ChaptersSummaryPolicy: Sendable, Equatable, Decodable {
         case coalescing
         case chapterCap = "chapter_cap"
         case allowedModels = "allowed_models"
+        case additionalModels = "additional_models"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -57,6 +61,12 @@ public struct ChaptersSummaryPolicy: Sendable, Equatable, Decodable {
         responseSchema = try container.decode(AnalysisPolicyJSON.self, forKey: .responseSchema)
         coalescing = try container.decode(Coalescing.self, forKey: .coalescing)
         chapterCap = try container.decode(ChapterCap.self, forKey: .chapterCap)
-        allowedModels = try container.decode(KnownProviderModelEntries.self, forKey: .allowedModels).entries
+        let allowed = try container.decode(KnownProviderList<AnalysisModelEntry>.self, forKey: .allowedModels)
+        let additional = container.contains(.additionalModels)
+            ? try container.decode(KnownProviderList<AnalysisModelEntry>.self, forKey: .additionalModels)
+            : nil
+        allowedModels = allowed.items
+        additionalModels = additional?.items ?? []
+        skippedModelCount = allowed.skippedCount + (additional?.skippedCount ?? 0)
     }
 }

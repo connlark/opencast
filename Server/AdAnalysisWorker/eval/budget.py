@@ -33,9 +33,18 @@ $0.10 cached = 0.05x, $2.50 cache write, $10 output; its long-context tier
 is the generic OpenAI rule below). `gpt-6-astra` was re-verified unchanged
 on the same page the same day.
 
+The 2026-11-20 rows were verified that day: `gpt-6.2-sol` ($2 input, $0.10
+cached, $10 output) and `gpt-6.1-terra` ($1, $0.05, $5) against
+developers.openai.com/api/docs/pricing, cache write at the 1.25x convention;
+`gpt-6.2-astra` ($8, $0.40, $40) on the same page;
+`gemini-4-hydrogen` ($1.50, $0.075, $7.50), `gemini-4-neon` ($3, $0.15,
+$15), `gemini-4-argon` and `gemini-4-carbon` ($2, $0.10, $10) against
+aistudio.google.com/docs/pricing (Gemini 4 cached input is 0.05x, write 1x).
+
 Gemini 3.x promotional rates expire 2026-12-31 (they double 2027-01-01):
-every `gemini-3.` key refuses to price after that date. No search/tools,
-regional endpoint, batch, or audio pricing.
+every `gemini-3.` key refuses to reserve after that date. Gemini 4 Argon and
+Carbon launch rates expire 2026-11-30 (they double 2026-12-01) and refuse the
+same way. A call already reserved still settles and verifies at its row. No search/tools, regional endpoint, batch, or audio pricing.
 """
 
 from __future__ import annotations
@@ -60,6 +69,14 @@ PRICES = {
     # 2026-10-23 frontier rows, direct; see the docstring.
     "gpt-6.1-sol": (2, 0.10, 2.5, 10),
     "claude-opus-5-5": (4, 0.20, 5, 20),
+    # 2026-11-20 rows, direct; see the docstring.
+    "gpt-6.2-sol": (2, 0.10, 2.5, 10),
+    "gpt-6.1-terra": (1, 0.05, 1.25, 5),
+    "gpt-6.2-astra": (8, 0.40, 10, 40),
+    "gemini-4-hydrogen": (1.5, 0.075, 1.5, 7.5),
+    "gemini-4-neon": (3, 0.15, 3, 15),
+    "gemini-4-argon": (2, 0.10, 2, 10),
+    "gemini-4-carbon": (2, 0.10, 2, 10),
     "gpt-5.6-sol": (4, 0.4, 5, 20),
     "gpt-5.6-terra": (2, 0.2, 2.5, 12),
     "gpt-5.6-luna": (0.2, 0.02, 0.25, 1.2),
@@ -102,13 +119,17 @@ def _long_context_tiers():
 # model -> (input tokens above which the tier applies, tier row)
 LONG_CONTEXT_TIERS = _long_context_tiers()
 GEMINI_3_PRICE_EXPIRY = datetime.date(2026, 12, 31)
+GEMINI_4_LAUNCH_PRICE_EXPIRY = datetime.date(2026, 11, 30)
+GEMINI_4_LAUNCH_PRICED = ("gemini-4-argon", "gemini-4-carbon")
 
 
-def rates(model, tokens):
-    if "gemini-3." in model and datetime.datetime.now(
-        datetime.UTC
-    ).date() > GEMINI_3_PRICE_EXPIRY:
+def rates(model, tokens, *, for_inference=True):
+    # Settling or verifying a call already made must still price after the expiry.
+    today = datetime.datetime.now(datetime.UTC).date()
+    if for_inference and "gemini-3." in model and today > GEMINI_3_PRICE_EXPIRY:
         raise ValueError("Refresh expired Gemini 3.x pricing before inference")
+    if for_inference and model in GEMINI_4_LAUNCH_PRICED and today > GEMINI_4_LAUNCH_PRICE_EXPIRY:
+        raise ValueError("Refresh expired Gemini 4 launch pricing before inference")
     result = PRICES[model]
     tier = LONG_CONTEXT_TIERS.get(model)
     if tier and tokens > tier[0]:
@@ -118,7 +139,7 @@ def rates(model, tokens):
 
 def cost_usd(model, usage):
     """Billed USD for one call's usage (the ledger's settlement formula)."""
-    price = rates(model, usage["input"])
+    price = rates(model, usage["input"], for_inference=False)
     return (
         (usage["input"] - usage["cached"] - usage["write"]) * price[0]
         + usage["cached"] * price[1]

@@ -49,7 +49,7 @@ struct AdDetectionLiveRouteTests {
             routes: AnalysisRouteResolver(
                 keys: keys,
                 policy: policy,
-                storedProvider: { _ in provider },
+                storedChoice: { _ in .init(provider: provider) },
                 trialStatus: trialStatus,
                 trial: NoTrialConnection(),
                 trialReachability: AnalysisTrialReachability { false },

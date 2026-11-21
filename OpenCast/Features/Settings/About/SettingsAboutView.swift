@@ -9,6 +9,11 @@ struct SettingsAboutView: View {
 
             Section {
                 SettingsAboutVersionRow()
+                SettingsExternalLinkRow(
+                    title: "Changelog",
+                    systemImage: "clock.arrow.circlepath",
+                    destination: OpenCastConstants.changelogURL
+                )
             }
 
             SettingsAboutLinksSection()

@@ -184,6 +184,46 @@ struct AnalysisPolicyClampTests {
         } == .outOfBounds(field: "features.ad_detection.qualified_models[0].label"))
     }
 
+    @Test("Additional entries: a default of their provider, each pair once, at most eight in a feature")
+    func additionalModelRules() {
+        func gemini(_ bundle: AnalysisPolicyBundle, _ modelID: String) -> AnalysisModelEntry {
+            var entry = bundle.features.adDetection.qualifiedModels[0]
+            entry.modelID = modelID
+            return entry
+        }
+        #expect(rejection {
+            $0.features.adDetection.additionalModels = [gemini($0, "gemini-3.8-flash")]
+        } == .outOfBounds(field: "features.ad_detection.additional_models[0].model_id"))
+        #expect(rejection {
+            $0.features.chaptersSummary.allowedModels.removeAll { $0.provider == .openai }
+            var sol = $0.features.adDetection.qualifiedModels[1]
+            sol.modelID = "gpt-6.1-sol-mini"
+            $0.features.chaptersSummary.additionalModels = [sol]
+        } == .outOfBounds(field: "features.chapters_summary.additional_models[0].provider"))
+        #expect(rejection {
+            var extra = gemini($0, "gemini-extra")
+            extra.maxOutputTokens = 16_385
+            $0.features.adDetection.additionalModels = [extra]
+        } == .outOfBounds(field: "features.ad_detection.additional_models[0].max_output_tokens"))
+        #expect(rejection { bundle in
+            bundle.features.adDetection.additionalModels = (0..<6).map { gemini(bundle, "gemini-extra-\($0)") }
+        } == nil)
+        #expect(rejection { bundle in
+            bundle.features.adDetection.additionalModels = (0..<7).map { gemini(bundle, "gemini-extra-\($0)") }
+        } == .outOfBounds(field: "features.ad_detection.additional_models"))
+    }
+
+    @Test("Model cards name a listed model once and hold bounded text without control characters")
+    func modelCardRules() {
+        #expect(rejection { $0.modelCards[0].modelID = "gemini-other" } == .outOfBounds(field: "model_cards[0].model_id"))
+        #expect(rejection { $0.modelCards = [$0.modelCards[0], $0.modelCards[0]] } == .outOfBounds(field: "model_cards[1].model_id"))
+        #expect(rejection { $0.modelCards[0].price = String(repeating: "x", count: 121) } == .outOfBounds(field: "model_cards[0].price"))
+        #expect(rejection { $0.modelCards[0].price = String(repeating: "\u{A2}", count: 120) } == nil)
+        #expect(rejection { $0.modelCards[0].weaknesses[0] += "\u{2028}" } == .outOfBounds(field: "model_cards[0].weaknesses"))
+        #expect(rejection { $0.modelCards[0].strengths = [] } == .outOfBounds(field: "model_cards[0].strengths"))
+        #expect(rejection { $0.modelCards.removeAll() } == nil)
+    }
+
     @Test("Provider keys can only go to the pinned hosts over https")
     func providerHostsArePinned() {
         let foreign: [(AnalysisProvider, String)] = [
@@ -203,6 +243,9 @@ struct AnalysisPolicyClampTests {
         #expect(rejection {
             $0.providers[.google]?.generatePath = "/../upload"
         } == .outOfBounds(field: "providers.google.generate_path"))
+        #expect(rejection {
+            $0.providers[.google]?.countTokensPath = "/models/{model}-lite:countTokens"
+        } == .outOfBounds(field: "providers.google.count_tokens_path"))
         #expect(rejection {
             $0.providers[.openai]?.countTokensPath = "/responses?key=1"
         } == .outOfBounds(field: "providers.openai.count_tokens_path"))
@@ -271,7 +314,7 @@ struct AnalysisPolicyClampTests {
         try AnalysisPolicyClamp.validate(bundle)
     }
 
-    @Test("Trial endpoint stays on opencast.mobile and names a Google ad-detection entry")
+    @Test("Trial endpoint stays on opencast.mobile and the trial model is Google's default in each feature")
     func trialRules() {
         #expect(rejection {
             $0.trial.endpoint = URL(string: "https://trial.example.com")!
@@ -280,6 +323,9 @@ struct AnalysisPolicyClampTests {
             $0.trial.endpoint = URL(string: $0.trial.endpoint.absoluteString.replacing("https:", with: "http:"))!
         } == .outOfBounds(field: "trial.endpoint"))
         #expect(rejection { $0.trial.modelID = "gpt-6.1-sol" } == .outOfBounds(field: "trial.model"))
+        #expect(rejection {
+            $0.features.chaptersSummary.allowedModels[0].modelID = "gemini-other"
+        } == .outOfBounds(field: "trial.model"))
     }
 
     @Test("Text fields and format version")

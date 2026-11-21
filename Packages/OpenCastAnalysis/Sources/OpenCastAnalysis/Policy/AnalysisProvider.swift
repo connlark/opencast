@@ -10,6 +10,11 @@ public enum AnalysisProvider: String, Sendable, Hashable, CaseIterable, Codable 
         }
     }
 
+    /// Both request paths name the model as `{model}`, so the entry chosen is the model called.
+    public var modelInPath: Bool {
+        self == .google
+    }
+
     public var thinkingLevels: Set<String> {
         switch self {
         case .google: ["low", "medium", "high"]

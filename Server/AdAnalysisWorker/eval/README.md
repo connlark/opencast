@@ -30,7 +30,8 @@ generative run (`--out ROOT/runs`), smoke and decision pipeline
 (`ROOT/decision`). Never reset the ledger or open a second one to bypass its cap.
 Reservations cover counted input and maximum output (including reasoning).
 Ambiguous dispatches retain their full reservation. Prices are frozen and must
-be reverified before reuse; Gemini 3.8 promotional prices expire 2026-12-31.
+be reverified before reuse; Gemini 3.8 promotional prices expire 2026-12-31
+and the Gemini 4 Argon and Carbon launch prices 2026-11-30.
 The default $15 cap is an experiment limit, not a production quota. The current
 authorized maximum is $50 (`budget.MAX_AUTHORIZED_CAP`, raised from $25 for the
 2026-10 ad-analysis bakeoff). Increasing an existing ledger requires an explicit
@@ -70,8 +71,8 @@ vendor_model, input_count, latency_ms, finish_reason`.
 
 | Model keys | Route | Wire | Schema |
 |---|---|---|---|
-| `gemini-3.5-flash`, `gemini-3.8-flash`, `gemini-3.1-flash-lite`, `gemini-2.5-flash-lite` | direct, `x-goog-api-key` | `generateContent`, `countTokens` | `responseJsonSchema` |
-| `gpt-6-astra`, `gpt-6.1-sol`, `gpt-5.6-*`, `gpt-6-luna` | direct, Bearer | Responses, `/responses/input_tokens` | strict `json_schema` |
+| `gemini-3.5-flash`, `gemini-3.8-flash`, `gemini-4-hydrogen`, `gemini-4-neon`, `gemini-4-argon`, `gemini-4-carbon`, `gemini-3.1-flash-lite`, `gemini-2.5-flash-lite` | direct, `x-goog-api-key` | `generateContent`, `countTokens` | `responseJsonSchema` |
+| `gpt-6-astra`, `gpt-6.2-astra`, `gpt-6.1-sol`, `gpt-6.2-sol`, `gpt-6.1-terra`, `gpt-5.6-*`, `gpt-6-luna` | direct, Bearer | Responses, `/responses/input_tokens` | strict `json_schema` |
 | `claude-haiku-5-5`, `claude-opus-5-5` (no `none`: Opus 5.5 rejects `thinking: disabled`) | direct, `x-api-key` + `anthropic-version` | `/v1/messages`, `count_tokens` (with `output_config` + `thinking`) | `output_config.format` json_schema |
 | `cf/openai/gpt-6-luna`, `cf/google/gemini-3.8-flash` | AI Gateway unified billing: `api.cloudflare.com/.../ai/v1/chat/completions`, Bearer + `cf-aig-gateway-id` | chat completions, estimated | strict (openai) / validator-only (google) |
 | `cf/anthropic/claude-haiku-5.5` | same gateway, `.../ai/v1/messages` | Anthropic Messages, estimated | validator-only |
@@ -85,9 +86,9 @@ Thinking matrix (`--thinking`; anything else is rejected before any call):
 
 | Route | default | none | low / medium / high |
 |---|---|---|---|
-| Gemini 3.x Flash | model default | rejected | `thinkingLevel` |
+| Gemini 3.x Flash, Gemini 4 | model default | rejected | `thinkingLevel` |
 | Gemini lite (3.1, 2.5) | model default | `thinkingBudget: 0` | `thinkingBudget` 1024 / 4096 / 16384 |
-| OpenAI Responses | `reasoning.effort: low` | `effort: none` (gpt-6-luna rejects `minimal`; `gpt-6.1-sol` rejects `none` and `minimal`, so `none` is not offered) | `effort` |
+| OpenAI Responses | `reasoning.effort: low` | `effort: none` (gpt-6-luna rejects `minimal`; `gpt-6.1-sol`, `gpt-6.2-sol` and `gpt-6.2-astra` reject `none` and `minimal`, so `none` is not offered) | `effort` |
 | Anthropic (direct and gateway) | rejected | `thinking: disabled` + `effort: low` (not offered on `claude-opus-5-5`, a 400) | `thinking: adaptive` + `output_config.effort` |
 | Gateway `openai/*` | `reasoning_effort: low` | `reasoning_effort: none` | `reasoning_effort` |
 | Gateway `google/*` | omitted | rejected | `reasoning_effort` |

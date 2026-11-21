@@ -13,8 +13,8 @@ struct SettingsAIServicesProvidersSection: View {
                     AnalysisProviderPickerChip(
                         feature: feature,
                         options: options(for: feature),
-                        selection: appModel.effectiveAnalysisProvider(for: feature),
-                        onSelect: selectProvider(for: feature)
+                        selection: appModel.effectiveAnalysisModel(for: feature),
+                        onSelect: selectModel(for: feature)
                     )
                 }
             }
@@ -42,18 +42,17 @@ struct SettingsAIServicesProvidersSection: View {
             : AIServicesCopy.providersFooter
     }
 
-    private func options(for feature: AnalysisFeature) -> [(provider: AnalysisProvider, title: String)] {
-        let snapshot = appModel.analysisPolicy.snapshot
-        return appModel.analysisProviderSelection
-            .eligibleProviders(for: feature, presences: appModel.analysisKeys.presences, snapshot: snapshot)
-            .compactMap { provider in
-                snapshot.modelEntry(for: feature, provider: provider).map { (provider: provider, title: $0.label) }
-            }
+    private func options(for feature: AnalysisFeature) -> [AnalysisModelEntry] {
+        appModel.analysisProviderSelection.modelOptions(
+            for: feature,
+            presences: appModel.analysisKeys.presences,
+            snapshot: appModel.analysisPolicy.snapshot
+        )
     }
 
-    private func selectProvider(for feature: AnalysisFeature) -> (AnalysisProvider) -> Void {
-        { provider in
-            appModel.analysisProviderSelection.setProvider(provider, for: feature, modelContext: modelContext)
+    private func selectModel(for feature: AnalysisFeature) -> (AnalysisModelIdentity) -> Void {
+        { model in
+            appModel.analysisProviderSelection.select(model, for: feature, modelContext: modelContext)
         }
     }
 }

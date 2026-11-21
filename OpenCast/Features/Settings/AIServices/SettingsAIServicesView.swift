@@ -8,6 +8,7 @@ struct SettingsAIServicesView: View {
             SettingsAIServicesNoticeSection()
             SettingsAIServicesKeysSection()
             SettingsAIServicesProvidersSection()
+            SettingsAIServicesModelsSection()
             SettingsAIServicesUsageSection()
         }
         .settingsSubscreen(title: AIServicesCopy.screenTitle)

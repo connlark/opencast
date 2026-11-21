@@ -11,36 +11,61 @@ struct AnalysisProviderSelectionStoreTests {
     // Stored keys are a storage contract; the literals pin them.
     private let adDetectionKey = "aiServices.provider.adDetection"
     private let chaptersSummaryKey = "aiServices.provider.chaptersSummary"
+    private let adDetectionModelKey = "aiServices.model.adDetection"
+    private let chaptersSummaryModelKey = "aiServices.model.chaptersSummary"
     private let bothKeys: [AnalysisProvider: AnalysisKeyPresence] = [.google: .saved(synced: true), .openai: .saved(synced: false)]
     private let googleOnly: [AnalysisProvider: AnalysisKeyPresence] = [.google: .saved(synced: true), .openai: AnalysisKeyPresence.none]
     private let openAIOnly: [AnalysisProvider: AnalysisKeyPresence] = [.google: AnalysisKeyPresence.none, .openai: .saved(synced: true)]
     private let noKeys: [AnalysisProvider: AnalysisKeyPresence] = [.google: AnalysisKeyPresence.none, .openai: AnalysisKeyPresence.none]
+    private let secondGoogleModel = AnalysisUITestFixtures.policySnapshot(variant: "second-google-model")
 
-    @Test("Nothing is stored until a choice is saved, and a saved choice reloads")
+    @Test("Nothing is stored until a choice is saved, and each feature's choice reloads")
     func choicesPersistAndReload() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let store = AnalysisProviderSelectionStore()
         store.load(modelContext: context)
-        #expect(store.storedProviders.isEmpty)
+        #expect(store.storedChoices.isEmpty)
 
-        let savedAdDetection = store.setProvider(.openai, for: .adDetection, modelContext: context)
-        let savedChapters = store.setProvider(.google, for: .chaptersSummary, modelContext: context)
+        let savedAdDetection = store.select(.init(provider: .google, modelID: "gemini-second"), for: .adDetection, modelContext: context)
+        let savedChapters = store.select(.init(provider: .openai, modelID: "gpt-6.1-sol"), for: .chaptersSummary, modelContext: context)
 
         #expect(savedAdDetection && savedChapters)
-        #expect(store.storedProvider(for: .adDetection) == .openai)
         #expect(store.lastErrorMessage == nil)
-        #expect(try storedValues(forKey: adDetectionKey, in: container) == ["openai"])
-        #expect(try storedValues(forKey: chaptersSummaryKey, in: container) == ["google"])
+        #expect(try storedValues(forKey: adDetectionKey, in: container) == ["google"])
+        #expect(try storedValues(forKey: adDetectionModelKey, in: container) == ["gemini-second"])
+        #expect(try storedValues(forKey: chaptersSummaryKey, in: container) == ["openai"])
+        #expect(try storedValues(forKey: chaptersSummaryModelKey, in: container) == ["gpt-6.1-sol"])
 
         let reloaded = AnalysisProviderSelectionStore()
         reloaded.load(modelContext: ModelContext(container))
-        #expect(reloaded.storedProviders == [.adDetection: .openai, .chaptersSummary: .google])
+        #expect(reloaded.storedChoices == [
+            .adDetection: .init(provider: .google, modelID: "gemini-second"),
+            .chaptersSummary: .init(provider: .openai, modelID: "gpt-6.1-sol"),
+        ])
+        #expect(reloaded.effectiveModel(for: .adDetection, presences: bothKeys, snapshot: secondGoogleModel)?.modelID == "gemini-second")
+        #expect(reloaded.effectiveModel(for: .chaptersSummary, presences: bothKeys, snapshot: secondGoogleModel)?.modelID == "gpt-6.1-sol")
 
-        // A second choice updates the row instead of adding one.
-        let changed = store.setProvider(.google, for: .adDetection, modelContext: context)
+        // A second choice updates the rows instead of adding them.
+        let changed = store.select(.init(provider: .google, modelID: "gemini-3.8-flash"), for: .adDetection, modelContext: context)
         #expect(changed)
         #expect(try storedValues(forKey: adDetectionKey, in: container) == ["google"])
+        #expect(try storedValues(forKey: adDetectionModelKey, in: container) == ["gemini-3.8-flash"])
+    }
+
+    @Test("A provider saved without a model takes that provider's default entry and writes nothing")
+    func providerWithoutModelTakesTheDefault() throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        try LocalPreferenceRecord.upsert(key: chaptersSummaryKey, value: "google", modelContext: context)
+        try context.save()
+        let store = AnalysisProviderSelectionStore()
+
+        store.load(modelContext: context)
+
+        #expect(store.storedChoice(for: .chaptersSummary) == .init(provider: .google, modelID: nil))
+        #expect(store.effectiveModel(for: .chaptersSummary, presences: bothKeys, snapshot: .baked)?.modelID == "gemini-3.8-flash")
+        #expect(try storedValues(forKey: chaptersSummaryModelKey, in: container).isEmpty)
     }
 
     @Test("A failed save keeps the previous choice and reports the error")
@@ -51,12 +76,13 @@ struct AnalysisProviderSelectionStoreTests {
         let store = AnalysisProviderSelectionStore(save: { _ in throw SaveFailed() })
         store.load(modelContext: context)
 
-        let saved = store.setProvider(.openai, for: .adDetection, modelContext: context)
+        let saved = store.select(.init(provider: .openai, modelID: "gpt-6.1-sol"), for: .adDetection, modelContext: context)
 
         #expect(!saved)
-        #expect(store.storedProvider(for: .adDetection) == nil)
+        #expect(store.storedChoice(for: .adDetection) == nil)
         #expect(store.lastErrorMessage != nil)
         #expect(try storedValues(forKey: adDetectionKey, in: container).isEmpty)
+        #expect(try storedValues(forKey: adDetectionModelKey, in: container).isEmpty)
     }
 
     @Test("The effective provider follows the rule's table")
@@ -88,23 +114,30 @@ struct AnalysisProviderSelectionStoreTests {
         #expect(store.eligibleProviders(for: .chaptersSummary, presences: openAIOnly, snapshot: withoutOpenAIChapters).isEmpty)
     }
 
-    @Test("A stored choice survives its key's removal and returns with the key")
-    func storedChoiceReturnsWithItsKey() throws {
+    @Test("A stored model applies under its own provider while the bundle lists it, and returns with its key")
+    func storedModelReturnsWithItsKey() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
         let store = AnalysisProviderSelectionStore()
-        let snapshot = AnalysisPolicySnapshot.baked
-        let saved = store.setProvider(.openai, for: .chaptersSummary, modelContext: context)
+        let snapshot = secondGoogleModel
+        let saved = store.select(.init(provider: .google, modelID: "gemini-second"), for: .chaptersSummary, modelContext: context)
         #expect(saved)
 
-        #expect(store.effectiveProvider(for: .chaptersSummary, presences: bothKeys, snapshot: snapshot) == .openai)
-        #expect(store.effectiveProvider(for: .chaptersSummary, presences: googleOnly, snapshot: snapshot) == .google)
-        #expect(store.storedProvider(for: .chaptersSummary) == .openai)
-        #expect(store.effectiveProvider(for: .chaptersSummary, presences: bothKeys, snapshot: snapshot) == .openai)
-        #expect(store.effectiveProvider(for: .chaptersSummary, presences: noKeys, snapshot: snapshot) == nil)
+        #expect(store.effectiveModel(for: .chaptersSummary, presences: bothKeys, snapshot: snapshot)?.modelID == "gemini-second")
+        var collidingBundle = snapshot.bundle
+        var openAISecond = try #require(collidingBundle.features.chaptersSummary.allowedModels.first { $0.provider == .openai })
+        openAISecond.modelID = "gemini-second"
+        collidingBundle.features.chaptersSummary.additionalModels.append(openAISecond)
+        let colliding = AnalysisPolicySnapshot(bundle: collidingBundle, source: .baked, fallbackReason: nil, lastRefreshFailure: nil)
+        #expect(store.effectiveModel(for: .chaptersSummary, presences: openAIOnly, snapshot: colliding)?.modelID == "gpt-6.1-sol")
+        #expect(store.storedChoice(for: .chaptersSummary) == .init(provider: .google, modelID: "gemini-second"))
+        #expect(store.effectiveModel(for: .chaptersSummary, presences: bothKeys, snapshot: snapshot)?.modelID == "gemini-second")
+        #expect(store.effectiveModel(for: .chaptersSummary, presences: noKeys, snapshot: snapshot) == nil)
 
-        let withoutOpenAIChapters = AnalysisUITestFixtures.policySnapshot(variant: "no-openai-chapters")
-        #expect(store.effectiveProvider(for: .chaptersSummary, presences: bothKeys, snapshot: withoutOpenAIChapters) == .google)
+        var delistedBundle = snapshot.bundle
+        delistedBundle.features.chaptersSummary.additionalModels = []
+        let delisted = AnalysisPolicySnapshot(bundle: delistedBundle, source: .baked, fallbackReason: nil, lastRefreshFailure: nil)
+        #expect(store.effectiveModel(for: .chaptersSummary, presences: bothKeys, snapshot: delisted)?.modelID == "gemini-3.8-flash")
     }
 
     private func storedValues(forKey key: String, in container: ModelContainer) throws -> [String] {

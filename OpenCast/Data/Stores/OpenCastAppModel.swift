@@ -397,8 +397,8 @@ final class OpenCastAppModel {
         analysisRoutes = AnalysisRouteResolver(
             keys: analysisKeys,
             policy: analysisPolicy,
-            storedProvider: { [analysisProviderSelection] feature in
-                analysisProviderSelection.storedProvider(for: feature)
+            storedChoice: { [analysisProviderSelection] feature in
+                analysisProviderSelection.storedChoice(for: feature)
             },
             trialStatus: trialStatus,
             trial: analysisTrialConnection,
@@ -2782,6 +2782,14 @@ final class OpenCastAppModel {
 
     func effectiveAnalysisProvider(for feature: AnalysisFeature) -> AnalysisProvider? {
         analysisProviderSelection.effectiveProvider(
+            for: feature,
+            presences: analysisKeys.presences,
+            snapshot: analysisPolicy.snapshot
+        )
+    }
+
+    func effectiveAnalysisModel(for feature: AnalysisFeature) -> AnalysisModelEntry? {
+        analysisProviderSelection.effectiveModel(
             for: feature,
             presences: analysisKeys.presences,
             snapshot: analysisPolicy.snapshot

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-11-15T23:38:03Z",
+  "updatedAt": "2026-11-21T04:12:55Z",
   "topics": [
     {
       "id": "why-we-charge",
@@ -169,7 +169,7 @@
       "title": "Using your own API key",
       "symbol": "key",
       "summary": "Ad detection and Chapters & Summary on your own Google or OpenAI account.",
-      "updatedAt": "2026-11-07T08:11:02Z",
+      "updatedAt": "2026-11-21T04:12:55Z",
       "minAppBuild": 301,
       "related": [
         "ad-detection",
@@ -190,7 +190,7 @@
             "**Google Gemini**: create a key in Google AI Studio for a project with billing set up. A key on Google's free tier is too limited for these features.",
             "**OpenAI**: create a key on the API keys page of your OpenAI account. OpenAI bills API use to that account.",
             "In Settings › AI Services, open the provider, paste the key, tap **Test** to check it, then **Save**.",
-            "With keys for both providers, choose which one each feature uses under **Provider**."
+            "Choose the model each feature uses under **Model**. Where that section is titled **Provider**, you choose a provider instead, once you have keys for both."
           ]
         },
         {
@@ -202,6 +202,14 @@
           "type": "link",
           "title": "Get an OpenAI key",
           "url": "https://platform.openai.com/settings/organization/api-keys"
+        },
+        {
+          "type": "heading",
+          "text": "Choosing a model"
+        },
+        {
+          "type": "paragraph",
+          "text": "If **Settings › AI Services** has a section titled **Model**, it lists every model your saved keys can use, and you choose one for ad detection and one for Chapters & Summary: with a Google key, Gemini 3.8 Flash or Gemini 4 Hydrogen; with an OpenAI key, GPT-6.1 Sol. **About the Models** shows each model's price, strengths and weaknesses. If the section is titled **Provider** instead, each provider offers one model and you choose the provider."
         },
         {
           "type": "heading",
@@ -217,7 +225,7 @@
         },
         {
           "type": "paragraph",
-          "text": "Your provider bills your own account at its API prices; opencast charges nothing for these features. In opencast's own use, ad detection has averaged about 6 cents an episode with Gemini 3.8 Flash, and Google's price for it doubles on January 1, 2027. Settings › AI Services shows the tokens your provider reported for runs on your key, the last run and this month's total, counted on your device. When opencast finishes a run on its trial service, opencast covers that part and it is not included in Usage; tokens your provider reported for calls made with your key before the handover still appear there. The small free-tier check is not counted. Your provider's dashboard is the bill."
+          "text": "Your provider bills your own account at its API prices; opencast charges nothing for these features. In opencast's own testing, ad detection costs about 6 cents an episode with Gemini 3.8 Flash, about 12 cents from January 1, 2027, when Google's price for it doubles, and about 6 cents with GPT-6.1 Sol. Gemini 4 Hydrogen, offered where the section is titled **Model**, costs about 9 cents an episode. Settings › AI Services shows the tokens your provider reported for runs on your key, the last run and this month's total, counted on your device. When opencast finishes a run on its trial service, opencast covers that part and it is not included in Usage; tokens your provider reported for calls made with your key before the handover still appear there. The small free-tier check is not counted. Your provider's dashboard is the bill."
         },
         {
           "type": "heading",

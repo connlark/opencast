@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct SettingsAboutHeroSection: View {
-    private static let heroSide = 256.0
+    private static let heroSide = 276.0
 
     let model: SettingsAboutHeroModel
 

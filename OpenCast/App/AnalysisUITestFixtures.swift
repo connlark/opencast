@@ -27,12 +27,28 @@ enum AnalysisUITestFixtures {
         switch variant ?? "baked" {
         case "no-openai-chapters":
             bundle.features.chaptersSummary.allowedModels.removeAll { $0.provider == .openai }
+        case "second-google-model":
+            bundle.features.adDetection.additionalModels = secondGoogleModel(of: bundle.features.adDetection.qualifiedModels)
+            bundle.features.chaptersSummary.additionalModels = secondGoogleModel(of: bundle.features.chaptersSummary.allowedModels)
+            let ad = bundle.features.adDetection
+            let chapters = bundle.features.chaptersSummary
+            let listed = Set((ad.qualifiedModels + ad.additionalModels + chapters.allowedModels + chapters.additionalModels).map(\.identity))
+            bundle.modelCards.removeAll { !listed.contains($0.identity) }
         case "trial-started":
             bundle.trial.startsAt = bundle.generatedAt
         default:
             return .baked
         }
         return AnalysisPolicySnapshot(bundle: bundle, source: .baked, fallbackReason: nil, lastRefreshFailure: nil)
+    }
+
+    private static func secondGoogleModel(of defaults: [AnalysisModelEntry]) -> [AnalysisModelEntry] {
+        defaults.filter { $0.provider == .google }.map { entry in
+            var second = entry
+            second.modelID = "gemini-second"
+            second.label = "Gemini Second"
+            return second
+        }
     }
 
     static func trialStatus(_ rawValue: String?) -> AnalysisTrialStatus? {

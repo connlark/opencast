@@ -48,6 +48,7 @@ struct AnalysisRouteResolverTests {
             keys seeded: [AnalysisProvider: AnalysisProviderKey] = [:],
             readFailure: ReadFailure? = nil,
             effective: AnalysisProvider? = .google,
+            storedModelID: String? = nil,
             status: AnalysisTrialProxyStatus? = AnalysisRouteResolverTests.open,
             hasTrialRoute: Bool = true,
             isReachable: Bool? = nil,
@@ -67,7 +68,7 @@ struct AnalysisRouteResolverTests {
             resolver = AnalysisRouteResolver(
                 keys: keys,
                 policy: .fixed(snapshot),
-                storedProvider: { _ in effective },
+                storedChoice: { _ in effective.map { .init(provider: $0, modelID: storedModelID) } },
                 trialStatus: AnalysisTrialStatusCache(defaults: UserDefaults(suiteName: suiteName)!, fetch: {
                     fetches.add()
                     duringStatusFetch()
@@ -548,6 +549,41 @@ struct AnalysisRouteResolverTests {
         #expect(resolution.route == .direct(provider: .openai))
         #expect(resolution.resumingRunID == runID)
         #expect(Self.keyBytes(resolution) == AnalysisKeyFixtures.bytes(of: Self.openAIKey))
+    }
+
+    @Test("A new run takes the stored model under its provider")
+    func newRunUsesTheStoredModel() async {
+        let stack = Stack(
+            snapshot: AnalysisUITestFixtures.policySnapshot(variant: "second-google-model"),
+            keys: [.google: Self.googleKey],
+            effective: .google,
+            storedModelID: "gemini-second"
+        )
+
+        let resolution = await stack.resolve(.chaptersSummary)
+
+        #expect(resolution.route == .direct(provider: .google))
+        #expect(resolution.policy?.model.modelID == "gemini-second")
+    }
+
+    @Test("A direct run resumes on its own model after the picker moves to another")
+    func directResumeKeepsItsModel() async throws {
+        let stack = Stack(
+            snapshot: AnalysisUITestFixtures.policySnapshot(variant: "second-google-model"),
+            keys: [.google: Self.googleKey],
+            effective: .google,
+            storedModelID: "gemini-3.8-flash"
+        )
+        let second = AnalysisModelIdentity(provider: .google, modelID: "gemini-second")
+        let policy = try #require(AnalysisRouteResolver.directPolicy(feature: .adDetection, model: second, snapshot: stack.snapshot))
+        let runID = try stack.beginRun(.adDetection, route: .direct(provider: .google), policy: policy)
+
+        let resumed = await stack.resolve(.adDetection, resuming: runID)
+        let fresh = await stack.resolve(.adDetection)
+
+        #expect(resumed.resumingRunID == runID)
+        #expect(resumed.policy?.model.modelID == "gemini-second")
+        #expect(fresh.policy?.model.modelID == "gemini-3.8-flash")
     }
 
     @Test("A direct run whose key is gone is not resumed")

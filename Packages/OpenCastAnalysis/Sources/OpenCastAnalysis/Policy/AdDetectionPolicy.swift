@@ -49,8 +49,11 @@ public struct AdDetectionPolicy: Sendable, Equatable, Decodable {
     public var window: Window
     public var limits: Limits
     public var repair: Repair
-    /// At most one entry per provider.
+    /// At most one entry per provider: that provider's default.
     public var qualifiedModels: [AnalysisModelEntry]
+    public var additionalModels: [AnalysisModelEntry]
+    /// Entries of providers this build does not know; they still count toward the entry bound.
+    var skippedModelCount: Int
 
     enum CodingKeys: String, CodingKey {
         case policy
@@ -61,6 +64,7 @@ public struct AdDetectionPolicy: Sendable, Equatable, Decodable {
         case limits
         case repair
         case qualifiedModels = "qualified_models"
+        case additionalModels = "additional_models"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -72,6 +76,12 @@ public struct AdDetectionPolicy: Sendable, Equatable, Decodable {
         window = try container.decode(Window.self, forKey: .window)
         limits = try container.decode(Limits.self, forKey: .limits)
         repair = try container.decode(Repair.self, forKey: .repair)
-        qualifiedModels = try container.decode(KnownProviderModelEntries.self, forKey: .qualifiedModels).entries
+        let qualified = try container.decode(KnownProviderList<AnalysisModelEntry>.self, forKey: .qualifiedModels)
+        let additional = container.contains(.additionalModels)
+            ? try container.decode(KnownProviderList<AnalysisModelEntry>.self, forKey: .additionalModels)
+            : nil
+        qualifiedModels = qualified.items
+        additionalModels = additional?.items ?? []
+        skippedModelCount = qualified.skippedCount + (additional?.skippedCount ?? 0)
     }
 }

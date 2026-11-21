@@ -31,7 +31,8 @@ nonisolated struct AdAnalysisRunProgress: Sendable, Hashable {
 
     static let defaultStepBudgetSeconds = stepBudgetSeconds(perCallTimeoutSeconds: bakedPerCallTimeoutSeconds)
 
-    private static let bakedPerCallTimeoutSeconds = AnalysisPolicyBundle.baked.features.adDetection.qualifiedModels
+    private static let bakedPerCallTimeoutSeconds = (AnalysisPolicyBundle.baked.features.adDetection.qualifiedModels
+        + AnalysisPolicyBundle.baked.features.adDetection.additionalModels)
         .map(\.perCallTimeoutSeconds)
         .max() ?? 120
 

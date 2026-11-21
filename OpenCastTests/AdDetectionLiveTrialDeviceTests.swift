@@ -40,7 +40,7 @@ struct AdDetectionLiveTrialDeviceTests {
             routes: AnalysisRouteResolver(
                 keys: keys,
                 policy: policy,
-                storedProvider: { _ in nil },
+                storedChoice: { _ in nil },
                 trialStatus: trialStatus,
                 trial: connection,
                 trialReachability: AnalysisTrialReachability { true },

@@ -293,16 +293,21 @@ final class AIServicesSettingsUITests: XCTestCase {
         gemini.tap()
         both.terminate()
 
-        let googleOnly = makeApp(seedsGoogleKey: true)
+        let googleOnly = makeApp(seedsGoogleKey: true, policyVariant: "second-google-model")
         googleOnly.launch()
         openSettingsScreen("AI Services", in: googleOnly)
         let googleOnlyAdDetection = picker("ad_detection", in: googleOnly)
-        assertPickerValue(googleOnlyAdDetection, beginsWith: "Gemini")
+        assertPickerValue(googleOnlyAdDetection, beginsWith: "Gemini 3.8 Flash")
         openPicker(googleOnlyAdDetection, in: googleOnly)
-        let onlyGemini = menuOption(beginningWith: "Gemini", in: googleOnly)
-        assertHittable(onlyGemini, named: "Gemini option with only a Google key")
+        assertExists(menuOption(beginningWith: "Gemini 3.8 Flash", in: googleOnly), named: "the default Gemini option")
+        let second = menuOption(beginningWith: "Gemini Second", in: googleOnly)
+        assertHittable(second, named: "the second Gemini option with only a Google key")
         assertDoesNotExist(menuOption(beginningWith: "GPT", in: googleOnly), named: "GPT option without an OpenAI key")
-        onlyGemini.tap()
+        attachSmokeScreenshot(named: "ai_services_ad_detection_picker_two_gemini_models")
+        second.tap()
+        assertDoesNotExist(second, named: "ad detection menu after choosing the second Gemini model", timeout: 5)
+        assertPickerValue(googleOnlyAdDetection, beginsWith: "Gemini Second")
+        assertPickerValue(picker("chapters_summary", in: googleOnly), beginsWith: "Gemini 3.8 Flash")
     }
 
     // MARK: Free tier

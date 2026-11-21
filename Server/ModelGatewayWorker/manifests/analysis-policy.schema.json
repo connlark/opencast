@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "opencast analysis policy bundle, schema version 1",
-  "description": "Prompts, response schemas, model entries, timeouts and limits for on-device ad detection and Chapters & Summary. Numeric bounds are the app's hard bounds: each maximum is the limit the workers' validators were qualified with, so a bundle may only tighten. Relational rules (overlap under half the window, run budget at least one call, one entry per provider, the trial model naming a google ad-detection entry, pinned provider hosts, auth styles and thinking levels, prompts and response schemas at most 65,536 UTF-8 bytes) are checked by verify_policy and by the app.",
+  "description": "Prompts, response schemas, model entries, timeouts and limits for on-device ad detection and Chapters & Summary. Numeric bounds are the app's hard bounds: each maximum is the limit the workers' validators were qualified with, so a bundle may only tighten. Relational rules (overlap under half the window, run budget at least one call, one default entry per provider, additional entries only for a provider with a default entry and each provider and model pair once per feature, at most 8 entries per feature across both lists, the trial model being google's default entry in each feature, each model card naming a listed model once with no control characters, pinned provider hosts, auth styles and thinking levels, prompts and response schemas at most 65,536 UTF-8 bytes) are checked by verify_policy and by the app.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "bundle_version", "generated_at", "min_app_build", "features", "providers", "trial"],
@@ -42,7 +42,8 @@
       "properties": {
         "starts_at": { "type": "string", "format": "date-time", "minLength": 20, "maxLength": 32 }
       }
-    }
+    },
+    "model_cards": { "type": "array", "items": { "$ref": "#/$defs/model_card" } }
   },
   "$defs": {
     "model_id": { "type": "string", "minLength": 1, "maxLength": 128 },
@@ -52,6 +53,19 @@
     "provider": { "enum": ["google", "openai"] },
     "per_call_timeout_seconds": { "type": "integer", "minimum": 10, "maximum": 300 },
     "run_budget_seconds": { "type": "integer", "minimum": 10, "maximum": 600 },
+    "card_line": { "type": "string", "minLength": 1, "maxLength": 90 },
+    "model_card": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model_id", "price", "strengths", "weaknesses"],
+      "properties": {
+        "provider": { "$ref": "#/$defs/provider" },
+        "model_id": { "$ref": "#/$defs/model_id" },
+        "price": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "strengths": { "type": "array", "minItems": 1, "maxItems": 3, "items": { "$ref": "#/$defs/card_line" } },
+        "weaknesses": { "type": "array", "minItems": 1, "maxItems": 3, "items": { "$ref": "#/$defs/card_line" } }
+      }
+    },
     "ad_model_entry": {
       "type": "object",
       "additionalProperties": false,
@@ -120,7 +134,8 @@
             "feedback_bytes": { "type": "integer", "minimum": 1, "maximum": 32768 }
           }
         },
-        "qualified_models": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/ad_model_entry" } }
+        "qualified_models": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/ad_model_entry" } },
+        "additional_models": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/ad_model_entry" } }
       }
     },
     "chapters_summary": {
@@ -153,7 +168,8 @@
             "seconds_per_chapter": { "type": "number", "minimum": 240, "maximum": 300 }
           }
         },
-        "allowed_models": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/chapters_model_entry" } }
+        "allowed_models": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/chapters_model_entry" } },
+        "additional_models": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/chapters_model_entry" } }
       }
     },
     "provider_endpoint": {

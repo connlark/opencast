@@ -16,11 +16,11 @@ enum SettingsAboutHeroScene {
         return (stage, turntable)
     }
 
-    /// A 30° field of view from 0.3 m frames the 0.12 m tile at about three
-    /// quarters of the view, leaving room for its corners mid-turn.
+    /// A 26° field of view from 0.3 m frames the 0.12 m tile at 87% of the
+    /// view; mid-turn its near edge reaches 95%.
     private static func makeCamera() -> PerspectiveCamera {
         let camera = PerspectiveCamera()
-        camera.camera.fieldOfViewInDegrees = 30
+        camera.camera.fieldOfViewInDegrees = 26
         camera.look(at: .zero, from: [0, 0, 0.30], relativeTo: nil)
         return camera
     }

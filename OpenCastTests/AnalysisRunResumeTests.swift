@@ -196,7 +196,7 @@ struct AnalysisRunResumeTests {
         let resolver = AnalysisRouteResolver(
             keys: AnalysisProviderKeyStore(storage: InMemoryAnalysisProviderKeyStorage()),
             policy: policy,
-            storedProvider: { _ in .google },
+            storedChoice: { _ in .init(provider: .google) },
             trialStatus: AnalysisTrialStatusCache(defaults: defaults, fetch: { status }),
             trial: FixedTrialConnection(exchange: exchange),
             trialReachability: AnalysisTrialReachability { true },

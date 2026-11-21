@@ -35,6 +35,11 @@ public enum AnalysisPolicyClamp {
     public static let maximumResponseSchemaBytes = 65_536
     public static let maximumLabelScalars = 64
     public static let maximumVersionHeaders = 8
+    /// Entries per feature across both lists, counted before unknown providers are skipped.
+    public static let maximumModelsPerFeature = 8
+    public static let maximumCardPriceScalars = 120
+    public static let maximumCardLineScalars = 90
+    public static let maximumCardLines = 3
 
     /// Leaves the app-build comparison to the caller: the baked copy is exempt from `minAppBuild`.
     public static func validate(_ bundle: AnalysisPolicyBundle) throws(AnalysisPolicyRejection) {
@@ -47,6 +52,7 @@ public enum AnalysisPolicyClamp {
         try validate(bundle.features.chaptersSummary)
         try validateProviders(bundle)
         try validateTrial(bundle)
+        try validateCards(bundle)
     }
 
     private static func validate(_ ad: AdDetectionPolicy) throws(AnalysisPolicyRejection) {
@@ -65,7 +71,13 @@ public enum AnalysisPolicyClamp {
         try check(ad.repair.attempts, "\(path).repair.attempts")
         try check(ad.repair.feedbackBytes, "\(path).repair.feedback_bytes")
         try validateText(policy: ad.policy, revision: ad.revision, prompt: ad.prompt, schema: ad.responseSchema, path: path)
-        try validate(ad.qualifiedModels, path: "\(path).qualified_models")
+        try validateModels(
+            defaults: ad.qualifiedModels,
+            additional: ad.additionalModels,
+            skipped: ad.skippedModelCount,
+            path: path,
+            defaultsName: "qualified_models"
+        )
     }
 
     private static func validate(_ chapters: ChaptersSummaryPolicy) throws(AnalysisPolicyRejection) {
@@ -84,33 +96,65 @@ public enum AnalysisPolicyClamp {
             schema: chapters.responseSchema,
             path: path
         )
-        try validate(chapters.allowedModels, path: "\(path).allowed_models")
+        try validateModels(
+            defaults: chapters.allowedModels,
+            additional: chapters.additionalModels,
+            skipped: chapters.skippedModelCount,
+            path: path,
+            defaultsName: "allowed_models"
+        )
     }
 
-    private static func validate(_ entries: [AnalysisModelEntry], path: String) throws(AnalysisPolicyRejection) {
+    private static func validateModels(
+        defaults: [AnalysisModelEntry],
+        additional: [AnalysisModelEntry],
+        skipped: Int,
+        path: String,
+        defaultsName: String
+    ) throws(AnalysisPolicyRejection) {
+        let boundsPath = "\(path).\(defaultsName)"
         var providers: Set<AnalysisProvider> = []
-        for (index, entry) in entries.enumerated() {
-            let entryPath = "\(path)[\(index)]"
+        for (index, entry) in defaults.enumerated() {
+            let entryPath = "\(boundsPath)[\(index)]"
             guard providers.insert(entry.provider).inserted else {
                 throw .outOfBounds(field: "\(entryPath).provider")
             }
-            guard isValidModelID(entry.modelID) else { throw .outOfBounds(field: "\(entryPath).model_id") }
-            guard (1...maximumLabelScalars).contains(entry.label.unicodeScalars.count) else {
-                throw .outOfBounds(field: "\(entryPath).label")
-            }
-            guard entry.provider.thinkingLevels.contains(entry.thinking) else {
-                throw .outOfBounds(field: "\(entryPath).thinking")
-            }
-            try check(entry.maxOutputTokens, "\(path).max_output_tokens", reported: "\(entryPath).max_output_tokens")
-            try check(
-                entry.perCallTimeoutSeconds,
-                "\(path).per_call_timeout_seconds",
-                reported: "\(entryPath).per_call_timeout_seconds"
-            )
-            try check(entry.runBudgetSeconds, "\(path).run_budget_seconds", reported: "\(entryPath).run_budget_seconds")
-            guard entry.runBudgetSeconds >= entry.perCallTimeoutSeconds else {
-                throw .outOfBounds(field: "\(entryPath).run_budget_seconds")
-            }
+            try validate(entry, entryPath: entryPath, boundsPath: boundsPath)
+        }
+        var listed = Set(defaults.map(\.identity))
+        for (index, entry) in additional.enumerated() {
+            let entryPath = "\(path).additional_models[\(index)]"
+            guard providers.contains(entry.provider) else { throw .outOfBounds(field: "\(entryPath).provider") }
+            try validate(entry, entryPath: entryPath, boundsPath: boundsPath)
+            guard listed.insert(entry.identity).inserted else { throw .outOfBounds(field: "\(entryPath).model_id") }
+        }
+        guard defaults.count + additional.count + skipped <= maximumModelsPerFeature else {
+            throw .outOfBounds(field: "\(path).additional_models")
+        }
+    }
+
+    /// Additional entries are held to the bounds of their feature's default list.
+    private static func validate(
+        _ entry: AnalysisModelEntry,
+        entryPath: String,
+        boundsPath: String
+    ) throws(AnalysisPolicyRejection) {
+        guard isValidModelID(entry.modelID) else { throw .outOfBounds(field: "\(entryPath).model_id") }
+        guard (1...maximumLabelScalars).contains(entry.label.unicodeScalars.count) else {
+            throw .outOfBounds(field: "\(entryPath).label")
+        }
+        guard entry.provider.thinkingLevels.contains(entry.thinking) else {
+            throw .outOfBounds(field: "\(entryPath).thinking")
+        }
+        try check(entry.maxOutputTokens, "\(boundsPath).max_output_tokens", reported: "\(entryPath).max_output_tokens")
+        try check(
+            entry.perCallTimeoutSeconds,
+            "\(boundsPath).per_call_timeout_seconds",
+            reported: "\(entryPath).per_call_timeout_seconds"
+        )
+        try check(entry.runBudgetSeconds, "\(boundsPath).run_budget_seconds", reported: "\(entryPath).run_budget_seconds")
+        guard entry.runBudgetSeconds >= entry.perCallTimeoutSeconds else {
+            throw .outOfBounds(field: "\(entryPath).run_budget_seconds")
         }
     }
 
@@ -147,8 +191,10 @@ public enum AnalysisPolicyClamp {
             }
             let expectedAuth: AnalysisProviderEndpoint.Auth = provider == .google ? .googleAPIKey : .bearer
             guard endpoint.auth == expectedAuth else { throw .outOfBounds(field: "\(path).auth") }
-            guard isSafePath(endpoint.generatePath) else { throw .outOfBounds(field: "\(path).generate_path") }
-            guard isSafePath(endpoint.countTokensPath) else {
+            guard isSafePath(endpoint.generatePath), namesModel(endpoint.generatePath, for: provider) else {
+                throw .outOfBounds(field: "\(path).generate_path")
+            }
+            guard isSafePath(endpoint.countTokensPath), namesModel(endpoint.countTokensPath, for: provider) else {
                 throw .outOfBounds(field: "\(path).count_tokens_path")
             }
             if let keyPage = endpoint.keyPage, !isValidKeyPage(keyPage) {
@@ -171,10 +217,52 @@ public enum AnalysisPolicyClamp {
             throw .outOfBounds(field: "trial.endpoint")
         }
         try check(trial.lifetimeUnits, "trial.lifetime_units")
-        let namesGoogleAdEntry = bundle.features.adDetection.qualifiedModels.contains {
-            $0.provider == .google && $0.modelID == trial.modelID
+        guard isValidModelID(trial.modelID) else { throw .outOfBounds(field: "trial.model") }
+        for defaults in [bundle.features.adDetection.qualifiedModels, bundle.features.chaptersSummary.allowedModels] {
+            guard defaults.first(where: { $0.provider == .google })?.modelID == trial.modelID else {
+                throw .outOfBounds(field: "trial.model")
+            }
         }
-        guard namesGoogleAdEntry else { throw .outOfBounds(field: "trial.model") }
+    }
+
+    private static func validateCards(_ bundle: AnalysisPolicyBundle) throws(AnalysisPolicyRejection) {
+        let ad = bundle.features.adDetection
+        let chapters = bundle.features.chaptersSummary
+        let listed = Set((ad.qualifiedModels + ad.additionalModels + chapters.allowedModels + chapters.additionalModels).map(\.identity))
+        var seen: Set<AnalysisModelIdentity> = []
+        for (index, card) in bundle.modelCards.enumerated() {
+            let path = "model_cards[\(index)]"
+            guard isValidModelID(card.modelID), listed.contains(card.identity), seen.insert(card.identity).inserted else {
+                throw .outOfBounds(field: "\(path).model_id")
+            }
+            guard isValidCardText(card.price, maximumScalars: maximumCardPriceScalars) else {
+                throw .outOfBounds(field: "\(path).price")
+            }
+            for (name, lines) in [("strengths", card.strengths), ("weaknesses", card.weaknesses)] {
+                guard (1...maximumCardLines).contains(lines.count),
+                      lines.allSatisfy({ isValidCardText($0, maximumScalars: maximumCardLineScalars) })
+                else {
+                    throw .outOfBounds(field: "\(path).\(name)")
+                }
+            }
+        }
+    }
+
+    /// C0, DEL, C1 and the line and paragraph separators: the publisher refuses the same set.
+    private static func isValidCardText(_ text: String, maximumScalars: Int) -> Bool {
+        (1...maximumScalars).contains(text.unicodeScalars.count) && !text.unicodeScalars.contains { scalar in
+            scalar.value <= 0x1F || (0x7F...0x9F).contains(scalar.value) || scalar.value == 0x2028 || scalar.value == 0x2029
+        }
+    }
+
+    /// The model-name component is exactly `{model}`: `/{model}:<verb>`, so no other model can be
+    /// written around the placeholder.
+    private static func namesModel(_ path: String, for provider: AnalysisProvider) -> Bool {
+        guard provider.modelInPath else { return true }
+        let parts = path.components(separatedBy: "{model}")
+        guard parts.count == 2, parts[0].hasSuffix("/"), parts[1].hasPrefix(":") else { return false }
+        let verb = parts[1].dropFirst()
+        return !verb.isEmpty && !verb.contains(where: { "/{}".contains($0) })
     }
 
     private static func check(_ value: Int, _ field: String, reported: String? = nil) throws(AnalysisPolicyRejection) {
