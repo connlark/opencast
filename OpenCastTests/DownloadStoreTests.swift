@@ -128,6 +128,35 @@ struct DownloadStoreTests {
         #expect(store.lastErrorMessage(for: episode.episodeID) != nil)
     }
 
+    @Test("ensureCompletedDownload restarts a download whose task an episode re-key orphaned", .timeLimit(.minutes(1)))
+    func ensureCompletedDownloadRestartsOrphanedDownload() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        let fileStore = EpisodeDownloadFileStore(baseDirectory: temporaryDirectory)
+        let downloader = ChunkedEpisodeAudioDownloader(chunks: [Data("abc".utf8)])
+        let store = DownloadStore(downloader: downloader, fileStore: fileStore)
+        let episode = makeEpisode(episodeID: "ensure-rekeyed")
+
+        store.startDownload(for: makeEpisode(episodeID: "ensure-before-rekey"), modelContext: context)
+        try store.migrateEpisodeSidecars(
+            from: "ensure-before-rekey",
+            to: episode.episodeID,
+            canonicalPodcastID: episode.podcastID,
+            modelContext: context
+        )
+        try #require(store.record(for: episode.episodeID)?.state == .downloading)
+
+        let ensured = try await store.ensureCompletedDownload(
+            for: episode,
+            modelContext: context,
+            onWaitStarted: { try Task.checkCancellation() }
+        )
+
+        #expect(ensured.state == .completed)
+        #expect(ensured.bytesReceived == 3)
+    }
+
     @Test("Cancel removes the download record and partial file")
     func cancelRemovesRecordAndPartialFile() async throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)

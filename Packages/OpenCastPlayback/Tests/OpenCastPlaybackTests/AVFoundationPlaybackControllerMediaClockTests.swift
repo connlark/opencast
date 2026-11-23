@@ -158,6 +158,62 @@ struct AVFoundationPlaybackControllerMediaClockTests {
         for await _ in stream {}
     }
 
+    @Test("A media clock client keeps receiving samples after a media services reset")
+    func clientKeepsReceivingSamplesAfterMediaServicesReset() async throws {
+        try await AVFoundationPlaybackTestGate.acquire()
+        defer {
+            AVFoundationPlaybackTestGate.release()
+        }
+
+        let fixtureURL = try VoiceBoostAudioFixture.writeSine(
+            fileExtension: "m4a",
+            settings: VoiceBoostAudioFixture.aacSettings(),
+            duration: 180
+        )
+        let controller = AVFoundationPlaybackController()
+        defer {
+            controller.unload()
+            try? FileManager.default.removeItem(at: fixtureURL)
+        }
+        try controller.load(Episode(
+            id: EpisodeID(rawValue: "media-clock-reset"),
+            podcastID: PodcastID(rawValue: "podcast"),
+            podcastTitle: "Podcast",
+            title: "Media Clock Reset",
+            duration: 180,
+            audioURL: fixtureURL
+        ))
+        var latestPlayingPosition: TimeInterval?
+        let stream = controller.mediaClockSamples()
+        let consumer = Task {
+            for await sample in stream where sample.isPlaying {
+                latestPlayingPosition = sample.position
+            }
+        }
+        defer {
+            consumer.cancel()
+        }
+        controller.play()
+        try await waitForPlayingPosition { latestPlayingPosition != nil }
+
+        controller.handleAudioSessionMediaServicesWereReset()
+        let positionAtReset = try #require(latestPlayingPosition)
+
+        // Half a second is past anything the stream buffered before the reset.
+        try await waitForPlayingPosition { (latestPlayingPosition ?? 0) > positionAtReset + 0.5 }
+    }
+
+    private func waitForPlayingPosition(_ predicate: () -> Bool) async throws {
+        let deadline = Date.now.addingTimeInterval(60)
+        while Date.now < deadline {
+            if predicate() {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        Issue.record("The media clock never delivered the expected playing sample.")
+    }
+
     private func waitForMediaClockClientCount(
         _ expected: Int,
         in controller: AVFoundationPlaybackController

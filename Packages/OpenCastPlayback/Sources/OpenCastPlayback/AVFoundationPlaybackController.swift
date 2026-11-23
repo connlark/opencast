@@ -47,13 +47,21 @@ public final class AVFoundationPlaybackController {
     /// `currentEpisode` and `position` for readers off the main thread.
     public nonisolated let playheadMirror = PlaybackPlayheadMirror()
 
-    @ObservationIgnored private let player = AVPlayer()
+    @ObservationIgnored private var player = AVPlayer()
+    /// Set when media services reset under the player, until it is replaced: an orphaned
+    /// player never readies another item.
+    @ObservationIgnored private var isPlayerOrphaned = false
+    /// Reads the item too: its failure can be waiting behind the main-actor hop of its callback.
+    private var needsNewPlayer: Bool {
+        isPlayerOrphaned || PlaybackFailureRecoveryPolicy.isMediaServicesReset(player.currentItem?.error)
+    }
     @ObservationIgnored private let mediaSession: SystemPlaybackMediaSession
     @ObservationIgnored private var timeObserver: PlayerTimeObserver?
     @ObservationIgnored private var outroBoundaryObserver: PlayerTimeObserver?
     @ObservationIgnored private var outroBoundaryCutoff: TimeInterval?
     @ObservationIgnored private var currentItemObservationGeneration = 0
     @ObservationIgnored private var mediaClockObservers: [UUID: PlayerTimeObserver] = [:]
+    @ObservationIgnored private var mediaClockIntervals: [UUID: TimeInterval] = [:]
     @ObservationIgnored private var mediaClockContinuations: [UUID: AsyncStream<PlaybackMediaClockSample>.Continuation] = [:]
     @ObservationIgnored private var currentItemEndObserver: NSObjectProtocol?
     @ObservationIgnored private var currentItemPlaybackStalledObserver: NSObjectProtocol?
@@ -152,11 +160,7 @@ public final class AVFoundationPlaybackController {
         self.skipCuePlayerFactory = skipCuePlayerFactory
         self.audioSessionActivation = audioSessionActivation
         self.audioSessionDeactivation = audioSessionDeactivation
-        // Audio-only app: external playback hands the stream to a video-capable
-        // AirPlay receiver (Mac, Apple TV), which opens a video surface and
-        // bypasses the Voice Boost tap. Keep AirPlay on the audio route instead.
-        player.allowsExternalPlayback = false
-        observePlayerTimeControlStatus()
+        configurePlayer()
         installAudioSessionObservers()
         installRemoteCommands()
     }
@@ -200,6 +204,9 @@ public final class AVFoundationPlaybackController {
         }
 
         playbackIntentRevision &+= 1
+        if needsNewPlayer {
+            installNewPlayer()
+        }
         removeCurrentItemObservations()
         playbackPositionProtection.clear()
         voiceBoostTrackLoadTask?.cancel()
@@ -488,6 +495,7 @@ public final class AVFoundationPlaybackController {
         isPlaybackRequested = false
         shouldResumeAfterInterruption = false
         invalidateAudioSessionActivation()
+        isPlayerOrphaned = needsNewPlayer
         removeCurrentItemObservations()
         voiceBoostTrackLoadTask?.cancel()
         voiceBoostTrackLoadTask = nil
@@ -776,19 +784,8 @@ public final class AVFoundationPlaybackController {
             bufferingPolicy: .bufferingNewest(1)
         )
         mediaClockContinuations[id] = continuation
-        mediaClockObservers[id] = PlayerTimeObserver(token: player.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: interval, preferredTimescale: 600),
-            queue: .main
-        ) { [weak self] _ in
-            // AVPlayer invokes this callback on the explicitly supplied main
-            // queue, so avoid allocating a MainActor hop at display cadence.
-            MainActor.assumeIsolated {
-                guard let self, let sample = self.currentMediaClockSample() else {
-                    return
-                }
-                continuation.yield(sample)
-            }
-        })
+        mediaClockIntervals[id] = interval
+        installMediaClockObserver(id, interval: interval, continuation: continuation)
         continuation.onTermination = { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.removeMediaClockClient(id)
@@ -835,11 +832,76 @@ public final class AVFoundationPlaybackController {
         )
     }
 
+    private func installMediaClockObserver(
+        _ id: UUID,
+        interval: TimeInterval,
+        continuation: AsyncStream<PlaybackMediaClockSample>.Continuation
+    ) {
+        mediaClockObservers[id] = PlayerTimeObserver(token: player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: interval, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] _ in
+            // AVPlayer invokes this callback on the explicitly supplied main
+            // queue, so avoid allocating a MainActor hop at display cadence.
+            MainActor.assumeIsolated {
+                guard let self, let sample = self.currentMediaClockSample() else {
+                    return
+                }
+                continuation.yield(sample)
+            }
+        })
+    }
+
     private func removeMediaClockClient(_ id: UUID) {
         if let observer = mediaClockObservers.removeValue(forKey: id) {
             player.removeTimeObserver(observer.token)
         }
+        mediaClockIntervals[id] = nil
         mediaClockContinuations.removeValue(forKey: id)?.finish()
+    }
+
+    private func configurePlayer() {
+        // Audio-only app: external playback hands the stream to a video-capable
+        // AirPlay receiver (Mac, Apple TV), which opens a video surface and
+        // bypasses the Voice Boost tap. Keep AirPlay on the audio route instead.
+        player.allowsExternalPlayback = false
+        observePlayerTimeControlStatus()
+    }
+
+    /// Every observer token belongs to the player that issued it, so each comes off the old
+    /// player before the swap and goes onto the new one after it.
+    private func installNewPlayer() {
+        forgetLostAudioSession()
+        removeCurrentItemObservations()
+        for observer in mediaClockObservers.values {
+            player.removeTimeObserver(observer.token)
+        }
+        mediaClockObservers.removeAll()
+        playerTimeControlStatusObservation?.invalidate()
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+
+        player = AVPlayer()
+        isPlayerOrphaned = false
+        configurePlayer()
+        for (id, interval) in mediaClockIntervals {
+            guard let continuation = mediaClockContinuations[id] else {
+                continue
+            }
+            installMediaClockObserver(id, interval: interval, continuation: continuation)
+        }
+        recordDiagnosticsEvent("replaced player")
+    }
+
+    private func replacePlayerKeepingCurrentEpisode() {
+        installNewPlayer()
+        guard snapshot.currentEpisode != nil, rebuildCurrentItem() else {
+            return
+        }
+        if !isPlaybackRequested {
+            snapshot.state = .paused
+            publishPlaybackState()
+        }
     }
 
     private func observePlayerTimeControlStatus() {
@@ -984,11 +1046,8 @@ public final class AVFoundationPlaybackController {
     }
 
     func handleAudioSessionMediaServicesWereReset() {
-        invalidateAudioSessionActivation()
-        isAudioSessionActive = false
-        dropAutoSkipCue()
-        invalidatePreviewCue(sessionLost: true)
         recordDiagnosticsEvent("audio session media services reset")
+        replacePlayerKeepingCurrentEpisode()
 
         guard isPlaybackRequested, snapshot.currentEpisode != nil else {
             return
@@ -1002,10 +1061,7 @@ public final class AVFoundationPlaybackController {
             isPlaybackRequested: isPlaybackRequested,
             state: snapshot.state
         )
-        invalidateAudioSessionActivation()
-        isAudioSessionActive = false
-        dropAutoSkipCue()
-        invalidatePreviewCue(sessionLost: true)
+        forgetLostAudioSession()
         guard snapshot.currentEpisode != nil else {
             isPlaybackRequested = false
             player.pause()
@@ -1014,6 +1070,13 @@ public final class AVFoundationPlaybackController {
         }
         pause(reason: "audio session interruption began")
         shouldResumeAfterInterruption = recordedResumeIntent
+    }
+
+    private func forgetLostAudioSession() {
+        invalidateAudioSessionActivation()
+        isAudioSessionActive = false
+        dropAutoSkipCue()
+        invalidatePreviewCue(sessionLost: true)
     }
 
     func handleAudioSessionInterruptionEnded(shouldResume: Bool) {
@@ -1450,6 +1513,9 @@ public final class AVFoundationPlaybackController {
         guard snapshot.currentEpisode != nil else {
             return false
         }
+        if needsNewPlayer {
+            return true
+        }
         if case .failed = snapshot.state {
             return true
         }
@@ -1468,6 +1534,9 @@ public final class AVFoundationPlaybackController {
             return false
         }
 
+        if needsNewPlayer {
+            installNewPlayer()
+        }
         removeCurrentItemObservations()
         playbackPositionProtection.clear()
         voiceBoostTrackLoadTask?.cancel()
@@ -1480,6 +1549,7 @@ public final class AVFoundationPlaybackController {
         let retryItem = makeDirectPlayerItem(audioURL: audioURL, continuationState: continuationState)
         player.replaceCurrentItem(with: retryItem)
         observeCurrentItem(retryItem)
+        refreshOutroBoundaryObserver()
 
         if snapshot.position > 0 {
             seekPlayer(to: snapshot.position, mode: .restoredPosition)
@@ -1492,6 +1562,16 @@ public final class AVFoundationPlaybackController {
     }
 
     private func handleFailedCurrentItem(_ playerItem: AVPlayerItem) {
+        if PlaybackFailureRecoveryPolicy.isMediaServicesReset(playerItem.error) {
+            // The orphaned player's clock keeps running: its observers come off before the
+            // position can pass audio nobody heard.
+            isPlayerOrphaned = true
+            recordFailedItemDiagnostics(playerItem, error: playerItem.error, prefix: "media services reset")
+            removeCurrentItemObservations()
+            forgetLostAudioSession()
+            pause(reason: "media services reset")
+            return
+        }
         if recoverFromFailedCurrentItemIfNeeded(playerItem) {
             return
         }

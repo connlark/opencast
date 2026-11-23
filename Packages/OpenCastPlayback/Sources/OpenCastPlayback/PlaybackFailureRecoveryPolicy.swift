@@ -24,6 +24,15 @@ struct PlaybackFailureRecoveryPolicy {
         return true
     }
 
+    /// By raw value: `AVError.Code.mediaServicesWereReset` is unavailable on macOS, where the
+    /// package's tests build.
+    static func isMediaServicesReset(_ error: (any Error)?) -> Bool {
+        guard let error = error as NSError? else {
+            return false
+        }
+        return error.domain == AVFoundationErrorDomain && error.code == -11819
+    }
+
     static func errorLogFieldsIndicateTimedOut(
         errorDomain: String,
         errorStatusCode: Int,

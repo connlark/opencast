@@ -673,13 +673,15 @@ final class DownloadStore {
                     throw CompletedDownloadError.fileMissing
                 }
                 return record
-            case .downloading:
+            case .downloading where downloadTasks[episode.episodeID] != nil:
                 try await waitForDownload(episodeID: episode.episodeID)
-            case .paused, .failed, .missing:
+            case .downloading, .paused, .failed, .missing:
+                // A `.downloading` record with no task never settles, and waiting on it would
+                // return without suspending.
                 guard !didStartDownload else {
                     throw CompletedDownloadError.notCompleted(
                         state: record.state,
-                        errorMessage: record.errorMessage
+                        errorMessage: record.errorMessage ?? lastErrorMessage(for: episode.episodeID)
                     )
                 }
                 startDownload(for: episode, modelContext: modelContext)

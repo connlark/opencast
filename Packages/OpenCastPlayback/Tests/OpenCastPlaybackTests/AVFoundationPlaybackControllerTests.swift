@@ -571,6 +571,49 @@ struct AVFoundationPlaybackControllerTests {
         }
     }
 
+    @Test("A media services reset while playing resumes the episode on a new player item")
+    func mediaServicesResetWhilePlayingResumesOnNewItem() async throws {
+        try await AVFoundationPlaybackTestGate.acquire()
+        defer {
+            AVFoundationPlaybackTestGate.release()
+        }
+        let fixtureURL = try VoiceBoostAudioFixture.writeSine(
+            fileExtension: "m4a",
+            settings: VoiceBoostAudioFixture.aacSettings(),
+            duration: 180
+        )
+        let probe = AudioSessionActivationProbe(outcomes: [.success])
+        let controller = AVFoundationPlaybackController(
+            voiceBoostTapDiagnostics: nil,
+            audioSessionActivation: { try await probe.activate() }
+        )
+        defer {
+            controller.unload()
+            try? FileManager.default.removeItem(at: fixtureURL)
+        }
+        try controller.load(Episode(
+            id: EpisodeID(rawValue: "media-services-reset"),
+            podcastID: PodcastID(rawValue: "podcast"),
+            podcastTitle: "Podcast",
+            title: "Media Services Reset",
+            duration: 180,
+            audioURL: fixtureURL
+        ))
+        controller.isAudioSessionActive = true
+        controller.play()
+        try #require(try await waitForPlaybackState(in: controller) { $0 == .playing } == .playing)
+        let generationBeforeReset = controller.currentItemGeneration
+
+        controller.handleAudioSessionMediaServicesWereReset()
+
+        try await waitForActivationCalls(1, probe: probe)
+        await probe.releaseCalls(through: 1)
+        #expect(try await waitForPlaybackState(in: controller) { $0 == .playing } == .playing)
+        #expect(controller.currentItemGeneration != generationBeforeReset)
+        let resumedPosition = controller.snapshot.position
+        try await waitUntil { controller.snapshot.position > resumedPosition }
+    }
+
     @Test(arguments: [true, false])
     func pausedInterruptionNeverResumes(
         operatingSystemShouldResume: Bool
