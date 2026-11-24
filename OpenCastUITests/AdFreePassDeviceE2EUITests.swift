@@ -41,16 +41,6 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-        addUIInterruptionMonitor(withDescription: "paste permission") { alert in
-            MainActor.assumeIsolated {
-                let deny = alert.buttons["Don't Allow Paste"]
-                if deny.exists {
-                    deny.tap()
-                    return true
-                }
-                return false
-            }
-        }
         addUIInterruptionMonitor(withDescription: "notification permission") { alert in
             MainActor.assumeIsolated {
                 let allow = alert.buttons["Allow"]

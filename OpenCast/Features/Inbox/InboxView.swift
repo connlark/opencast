@@ -9,7 +9,7 @@ struct InboxView: View {
     @Environment(SceneLibraryLayouts.self) private var sceneLibraryLayouts: SceneLibraryLayouts?
     @State private var visibleEpisodeCount = EpisodeCatalogContinuation.pageSize
 
-    let onAdd: () -> Void
+    let onSearchForPodcasts: () -> Void
     let onOpenEpisode: (String) -> Void
     var onOpenAdDetectionQueue: () -> Void = {}
 
@@ -123,7 +123,7 @@ struct InboxView: View {
             inboxList {
                 InboxEmptyStateView(
                     syncActivity: appModel.syncStatus.libraryActivity,
-                    onAdd: onAdd
+                    onSearchForPodcasts: onSearchForPodcasts
                 )
             }
         } else if model.isFilteredEmpty {

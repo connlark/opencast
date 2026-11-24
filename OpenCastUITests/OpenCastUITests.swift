@@ -444,6 +444,39 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
+    func testDiscoverResultOpensAPreviewThatSubscribesOnlyFromItsButton() throws {
+        let app = makeCompletedOnboardingApp()
+        app.launchEnvironment["OPENCAST_UI_TEST_DIRECTORY_FIXTURE"] = "1"
+        app.launch()
+
+        let searchField = openGlobalSearch(in: app)
+        searchField.typeText("preview")
+        let discoverScope = app.buttons["Discover"].firstMatch
+        assertExists(discoverScope, named: "Discover scope")
+        discoverScope.tap()
+
+        let result = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "UI Test Preview Show")).firstMatch
+        let addedResult = app.buttons["UI Test Preview Show, In Library"]
+        let closePreview = app.buttons["Podcast Preview Close"]
+        assertHittable(result, named: "fixture directory result", timeout: 10)
+        result.tap()
+        assertExists(app.staticTexts["Preview Fixture Episode 5"], named: "newest episode in the preview", timeout: 20)
+        closePreview.tap()
+        assertDoesNotExist(closePreview, named: "preview after closing it", timeout: 5)
+        assertDoesNotExist(addedResult, named: "result marked added before subscribing", timeout: 2)
+
+        result.tap()
+        let subscribe = app.buttons["Podcast Preview Subscribe"]
+        assertExists(subscribe, named: "preview Subscribe button", timeout: 20)
+        let subscribeEnabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: subscribe)
+        XCTAssertEqual(XCTWaiter.wait(for: [subscribeEnabled], timeout: 20), .completed, "Subscribe should wait for the feed")
+        subscribe.tap()
+        assertExists(app.buttons["Go to Show"], named: "Go to Show after subscribing", timeout: 20)
+        closePreview.tap()
+        assertExists(addedResult, named: "result marked added after subscribing", timeout: 10)
+    }
+
+    @MainActor
     func testSlowICloudAccountCheckDoesNotHoldOnboarding() throws {
         let app = makeOnboardingApp(forcesDarkMode: false)
         app.launchEnvironment["OPENCAST_UI_TEST_CLOUDKIT_ACCOUNT_STATUS_DELAY_MILLISECONDS"] = "45000"
@@ -504,6 +537,7 @@ final class OpenCastUITests: XCTestCase {
     @MainActor
     func testFirstLaunchOnboardingScreenshotsOPMLSkipAndPodcastSetup() throws {
         let app = makeOnboardingApp(forcesDarkMode: true)
+        app.launchEnvironment["OPENCAST_UI_TEST_DIRECTORY_FIXTURE"] = "1"
         app.launch()
 
         assertExists(app.staticTexts["Welcome to opencast!"], named: "onboarding welcome")
@@ -525,24 +559,16 @@ final class OpenCastUITests: XCTestCase {
 
         app.buttons["Skip"].tap()
         assertExists(app.staticTexts["Find Podcasts"], named: "Find Podcasts onboarding screen")
-        assertExists(app.textFields["Podcast or creator"], named: "onboarding podcast search field")
-        assertExists(app.staticTexts["Sample Podcasts"], named: "sample podcasts section")
-        assertExists(app.staticTexts["This American Life"], named: "This American Life sample")
-        app.buttons["RSS"].tap()
-        assertExists(app.textFields["RSS Feed URL"], named: "onboarding RSS feed field")
-        assertExists(app.buttons["Paste"], named: "onboarding Paste button")
-        let rssSubscribeButton = app.buttons["Onboarding RSS Subscribe"]
-        assertExists(rssSubscribeButton, named: "onboarding RSS Subscribe button")
-        XCTAssertGreaterThan(rssSubscribeButton.frame.width, 280)
-        attachSmokeScreenshot(named: "onboarding_podcast_setup_rss_dark")
-        app.segmentedControls["Add Podcast Mode"].buttons["Search"].tap()
-        assertExists(app.textFields["Podcast or creator"], named: "onboarding podcast search field after returning to search")
-        app.textFields["Podcast or creator"].tap()
-        app.textFields["Podcast or creator"].typeText("history\n")
+        let searchField = app.textFields["Podcast name or feed URL"]
+        assertExists(searchField, named: "onboarding podcast search field")
+        assertExists(app.staticTexts["Suggested Shows"], named: "suggested shows section")
+        assertExists(app.buttons["This American Life, This American Life"], named: "This American Life suggestion row")
+        assertExists(app.buttons["The Rest Is Science, Goalhanger"], named: "The Rest Is Science suggestion row")
+        searchField.tap()
+        searchField.typeText("preview\n")
         assertExists(app.staticTexts["Find Podcasts"], named: "onboarding stays visible after keyboard search submit")
         XCTAssertFalse(app.buttons["Add This American Life"].exists)
-        scrollUntilExists(app.staticTexts["The Rest Is Science"], in: app, maxSwipes: 2)
-        assertExists(app.staticTexts["The Rest Is Science"], named: "The Rest Is Science sample")
+        assertExists(app.buttons["UI Test Preview Show, UI Test Author"], named: "fixture directory result row", timeout: 10)
         attachSmokeScreenshot(named: "onboarding_podcast_setup_dark")
 
         app.buttons["Continue"].tap()
@@ -588,10 +614,10 @@ final class OpenCastUITests: XCTestCase {
         app.buttons["Continue"].tap()
         app.buttons["Skip"].tap()
         assertExists(app.staticTexts["Find Podcasts"], named: "debug podcast setup")
-        assertExists(app.textFields["Podcast or creator"], named: "debug onboarding podcast search field")
+        assertExists(app.textFields["Podcast name or feed URL"], named: "debug onboarding podcast search field")
         assertExists(app.staticTexts["Your Podcasts"], named: "debug imported podcasts section")
         assertExists(app.staticTexts["UI Test Show"], named: "debug existing subscription")
-        XCTAssertFalse(app.staticTexts["Sample Podcasts"].exists)
+        XCTAssertFalse(app.staticTexts["Suggested Shows"].exists)
         attachSmokeScreenshot(named: "settings_debug_onboarding_podcast_setup_light")
         app.buttons["Continue"].tap()
         assertExists(app.staticTexts["Tiny Whisper Model"], named: "debug Tiny Whisper setup")
@@ -5387,10 +5413,11 @@ final class OpenCastUITests: XCTestCase {
         app.launch()
 
         openLibrary(in: app)
-        tapAddPodcastButton(in: app)
-        app.buttons["Subscribe"].tap()
+        openAddByFeedURL(in: app)
+        subscribeInAddByFeedURL(in: app)
+        goToShowFromAddByFeedURL(in: app)
 
-        assertExists(app.staticTexts["The Rest Is Science - Goalhanger"], named: "The Rest Is Science subscription", timeout: 30)
+        assertScreen("The Rest Is Science", named: "The Rest Is Science show page", in: app, timeout: 30)
         openInbox(in: app)
 
         let firstEpisode = restIsScienceFirstEpisode(in: app)
@@ -5528,9 +5555,8 @@ final class OpenCastUITests: XCTestCase {
         assertExists(app.buttons["Skip"], named: "Skip OPML onboarding action")
         app.buttons["Skip"].tap()
         assertExists(app.staticTexts["Find Podcasts"], named: "Find Podcasts onboarding screen")
-        assertExists(app.textFields["Podcast or creator"], named: "onboarding podcast search field")
-        assertExists(app.buttons["RSS"], named: "onboarding RSS mode")
-        assertExists(app.staticTexts["This American Life"], named: "This American Life sample suggestion")
+        assertExists(app.textFields["Podcast name or feed URL"], named: "onboarding podcast search field")
+        assertExists(app.buttons["This American Life, This American Life"], named: "This American Life sample suggestion row")
 
         app.buttons["Continue"].tap()
         assertExists(app.staticTexts["Tiny Whisper Model"], named: "Tiny Whisper onboarding screen")
@@ -7158,7 +7184,16 @@ final class OpenCastUITests: XCTestCase {
             NSPredicate(format: "identifier == %@ OR label == %@", "New Playlist", "New Playlist…")
         ).firstMatch
         assertHittable(newPlaylistItem, named: "Library Add menu New Playlist item")
-        assertExists(app.buttons["Add Podcast"].firstMatch, named: "Library Add menu Add Podcast item")
+        for (identifier, label) in [
+            ("Search for Podcasts", "Search for Podcasts"),
+            ("Add by Feed URL", "Add by Feed URL…"),
+            ("Import OPML File", "Import OPML File…")
+        ] {
+            assertExists(
+                app.buttons.matching(NSPredicate(format: "identifier == %@ OR label == %@", identifier, label)).firstMatch,
+                named: "Library Add menu \(identifier) item"
+            )
+        }
         assertDoesNotExist(
             app.buttons.matching(
                 NSPredicate(format: "identifier == %@ OR label == %@", "New Smart Playlist", "New Smart Playlist\u{2026}")
@@ -9724,7 +9759,7 @@ final class OpenCastUITests: XCTestCase {
     }
 
     @MainActor
-    private func tapAddPodcastButton(
+    private func openAddByFeedURL(
         in app: XCUIApplication,
         file: StaticString = #filePath,
         line: UInt = #line
@@ -9735,11 +9770,11 @@ final class OpenCastUITests: XCTestCase {
             app.buttons["Add"].firstMatch
         ]
         guard let addButton = addButtons.first(where: { $0.waitForExistence(timeout: 2) }) else {
-            XCTFail("Add Podcast button should exist", file: file, line: line)
+            XCTFail("Library Add menu should exist", file: file, line: line)
             return
         }
         addButton.tap()
-        tapAddPodcastMenuItemIfPresented(in: app)
+        tapAddByFeedURLMenuItem(in: app)
     }
 
     @MainActor
@@ -10819,20 +10854,38 @@ final class OpenCastUITests: XCTestCase {
 }
 
 extension XCTestCase {
-    /// The Library's Add is a menu whose Add Podcast item opens the sheet, so
-    /// the item is tapped when it appears. The empty states carry their own
-    /// Add Podcast buttons, which are excluded.
     @MainActor
-    func tapAddPodcastMenuItemIfPresented(in app: XCUIApplication) {
-        let addPodcastMenuItem = app.buttons.matching(
-            NSPredicate(
-                format: "label == %@ AND NOT (identifier IN %@)",
-                "Add Podcast",
-                ["Library Empty Add Podcast", "Inbox Empty Add Podcast"]
-            )
+    func tapAddByFeedURLMenuItem(in app: XCUIApplication) {
+        // A toolbar menu item may not carry its identifier, so the label counts too.
+        let menuItem = app.buttons.matching(
+            NSPredicate(format: "identifier == %@ OR label == %@", "Add by Feed URL", "Add by Feed URL…")
         ).firstMatch
-        if addPodcastMenuItem.waitForExistence(timeout: 2) {
-            addPodcastMenuItem.tap()
+        if menuItem.waitForExistence(timeout: 5) {
+            menuItem.tap()
         }
+    }
+
+    @MainActor
+    func subscribeInAddByFeedURL(typing feedURL: String? = nil, in app: XCUIApplication, timeout: TimeInterval = 60) {
+        let field = app.textFields["RSS Feed URL"]
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "Add by Feed URL field should exist")
+        if let feedURL {
+            field.tap()
+            field.typeText(feedURL + "\n")
+        }
+        let subscribe = app.buttons["Podcast Preview Subscribe"]
+        let subscribeEnabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: subscribe)
+        XCTAssertEqual(XCTWaiter.wait(for: [subscribeEnabled], timeout: timeout), .completed, "Subscribe should follow the feed read")
+        subscribe.tap()
+        XCTAssertTrue(app.buttons["Go to Show"].waitForExistence(timeout: timeout), "Go to Show should follow the subscription")
+    }
+
+    @MainActor
+    func goToShowFromAddByFeedURL(in app: XCUIApplication) {
+        app.buttons["Go to Show"].tap()
+        XCTAssertTrue(
+            app.textFields["RSS Feed URL"].waitForNonExistence(timeout: 10),
+            "Add by Feed URL should close on Go to Show"
+        )
     }
 }

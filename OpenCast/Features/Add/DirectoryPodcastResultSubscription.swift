@@ -1,8 +1,8 @@
 import OpenCastCore
 
 extension DirectoryPodcastResult {
-    func isSubscribed(activePodcastIDs: Set<String>) -> Bool {
-        !activePodcastIDs.isDisjoint(with: candidateCanonicalFeedURLStrings)
+    var knownPodcastKey: KnownPodcastsStore.Key {
+        KnownPodcastsStore.Key(resultID: id, feedURLs: candidateCanonicalFeedURLStrings)
     }
 
     var candidateCanonicalFeedURLStrings: Set<String> {

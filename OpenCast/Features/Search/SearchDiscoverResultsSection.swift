@@ -2,11 +2,12 @@ import OpenCastCore
 import SwiftUI
 
 struct SearchDiscoverResultsSection: View {
-    @Bindable var searchStore: PodcastSearchStore
+    let searchStore: PodcastSearchStore
+    let subscriptionFlow: DirectorySubscriptionFlowStore
+    let knownPodcasts: KnownPodcastsStore
     let activePodcastIDs: Set<String>
-    let subscribingResultID: String?
-    let isSubscriptionInProgress: Bool
-    let onSubscribe: (DirectoryPodcastResult) -> Void
+    let onPreview: (DirectoryPodcastResult) -> Void
+    let onQuickAdd: (DirectoryPodcastResult) -> Void
     let onOpenPodcast: (String) -> Void
 
     var body: some View {
@@ -37,18 +38,20 @@ struct SearchDiscoverResultsSection: View {
         case .results(let results):
             Section {
                 ForEach(results) { result in
-                    Button {
-                        select(result)
-                    } label: {
-                        PodcastSearchResultRow(
-                            result: result,
-                            isSubscribed: isSubscribed(result),
-                            isSubscribing: result.id == subscribingResultID
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isSelectionDisabled(result))
-                    .accessibilityHint(accessibilityHint(result))
+                    let status = PodcastResultRow.Status(
+                        of: result,
+                        addFlow: subscriptionFlow,
+                        knownPodcasts: knownPodcasts,
+                        activePodcastIDs: activePodcastIDs
+                    )
+                    PodcastResultRow(
+                        result: result,
+                        status: status,
+                        openHint: status.openHint(opensShowPage: true),
+                        onOpen: { open(result) },
+                        onAdd: { onQuickAdd(result) }
+                    )
+                    .disabled(subscriptionFlow.isBusy && status != .adding)
                 }
             } header: {
                 Text("Results")
@@ -58,41 +61,18 @@ struct SearchDiscoverResultsSection: View {
         }
     }
 
-    private func select(_ result: DirectoryPodcastResult) {
-        // The active subscription may live under any candidate URL of a
-        // merged result, not just the display feed URL.
-        if let subscribedPodcastID = subscribedPodcastID(result) {
-            onOpenPodcast(subscribedPodcastID)
+    private func open(_ result: DirectoryPodcastResult) {
+        guard !subscriptionFlow.isBusy else {
+            return
+        }
+        if let libraryFeedURL = knownPodcasts.libraryFeedURL(for: result.knownPodcastKey, activePodcastIDs: activePodcastIDs) {
+            onOpenPodcast(libraryFeedURL)
             return
         }
         guard result.canResolveFeed else {
             return
         }
 
-        onSubscribe(result)
-    }
-
-    private func subscribedPodcastID(_ result: DirectoryPodcastResult) -> String? {
-        result.candidateCanonicalFeedURLStrings.first(where: activePodcastIDs.contains)
-    }
-
-    private func isSubscribed(_ result: DirectoryPodcastResult) -> Bool {
-        result.isSubscribed(activePodcastIDs: activePodcastIDs)
-    }
-
-    private func isSelectionDisabled(_ result: DirectoryPodcastResult) -> Bool {
-        isSubscriptionInProgress || !result.canResolveFeed
-    }
-
-    private func accessibilityHint(_ result: DirectoryPodcastResult) -> String {
-        if !result.canResolveFeed {
-            return "This podcast cannot be opened because the directory did not provide an RSS feed."
-        }
-
-        if isSubscribed(result) {
-            return "Opens this podcast in your library."
-        }
-
-        return "Subscribes to this podcast."
+        onPreview(result)
     }
 }

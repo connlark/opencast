@@ -1,7 +1,7 @@
 import Foundation
 
 enum SheetDestination: Identifiable {
-    case addPodcast
+    case addByFeedURL(onGoToShow: (String) -> Void)
     case addToPlaylist(episodeID: String)
     case analysisKeyRequired(AnalysisKeyRequiredRequest)
     case episodeDiagnostics(episodeID: String)
@@ -10,6 +10,7 @@ enum SheetDestination: Identifiable {
     case nukeConfirmation
     case onboarding
     case playlistOrganizer(podcastID: String)
+    case podcastPreview(PodcastPreviewRequest, PodcastPreviewPresenter)
     case podcastPlaybackSettings(feedURL: String)
     case podcastDownloadSettings(feedURL: String)
     case transcriptRecap(episodeID: String, kind: TranscriptRecapWindowKind, playhead: TimeInterval)
@@ -21,8 +22,8 @@ enum SheetDestination: Identifiable {
 
     var id: String {
         switch self {
-        case .addPodcast:
-            "addPodcast"
+        case .addByFeedURL:
+            "addByFeedURL"
         case .addToPlaylist(let episodeID):
             "addToPlaylist-\(episodeID)"
         case .analysisKeyRequired(let request):
@@ -39,6 +40,8 @@ enum SheetDestination: Identifiable {
             "onboarding"
         case .playlistOrganizer(let podcastID):
             "playlistOrganizer-\(podcastID)"
+        case .podcastPreview(let request, _):
+            "podcastPreview-\(request.id.uuidString)"
         case .podcastPlaybackSettings(let feedURL):
             "podcastPlaybackSettings-\(feedURL)"
         case .podcastDownloadSettings(let feedURL):

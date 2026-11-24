@@ -6,34 +6,40 @@ struct SearchView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
 
+    @Binding var scope: SearchScope
     @Binding var isSearchPresented: Bool
 
     @State private var query = ""
-    @State private var scope = SearchScope.library
     @State private var searchSession = EpisodeSearchSession()
     @State private var searchStore: PodcastSearchStore
     @State private var subscriptionFlow: DirectorySubscriptionFlowStore
-    @State private var subscribingFeedURLString: String?
-    @State private var subscriptionErrorMessage: String?
+    @State private var sheetDestination: SheetDestination?
 
+    let onSheetDismissed: () -> Void
     let onOpenEpisode: (String) -> Void
     let onOpenPodcast: (String) -> Void
 
     init(
         directoryService: any PodcastDirectoryService,
         directoryResolver: DirectoryFeedCandidateResolver = DirectoryFeedCandidateResolver(),
+        knownPodcasts: KnownPodcastsStore,
+        scope: Binding<SearchScope>,
         isSearchPresented: Binding<Bool>,
+        onSheetDismissed: @escaping () -> Void,
         onOpenEpisode: @escaping (String) -> Void,
         onOpenPodcast: @escaping (String) -> Void
     ) {
+        _scope = scope
         _isSearchPresented = isSearchPresented
-        _searchStore = State(initialValue: PodcastSearchStore(directoryService: directoryService))
+        _searchStore = State(initialValue: PodcastSearchStore(directoryService: directoryService, knownPodcasts: knownPodcasts))
         _subscriptionFlow = State(
             initialValue: DirectorySubscriptionFlowStore(
                 directoryService: directoryService,
-                resolver: directoryResolver
+                resolver: directoryResolver,
+                knownPodcasts: knownPodcasts
             )
         )
+        self.onSheetDismissed = onSheetDismissed
         self.onOpenEpisode = onOpenEpisode
         self.onOpenPodcast = onOpenPodcast
     }
@@ -50,19 +56,18 @@ struct SearchView: View {
         let searchResults = searchSession.displayedResults(for: requestKey)
 
         List {
-            if let feedURLString = PodcastFeedURLDetector.feedURLString(from: query) {
-                SearchAddFeedSection(
-                    feedURLString: feedURLString,
-                    activePodcastIDs: appModel.library.activePodcastIDs,
-                    subscribingFeedURLString: subscribingFeedURLString,
-                    onAdd: { subscribe(to: feedURLString) }
-                )
+            if let typedFeedURL {
+                Section {
+                    PodcastOpenFeedRow(feedURL: typedFeedURL) {
+                        openFeed(typedFeedURL)
+                    }
+                    .disabled(subscriptionFlow.isBusy)
+                }
             }
 
-            if let displayedSubscriptionErrorMessage {
+            if let failure = subscriptionFlow.failure {
                 Section {
-                    Label(displayedSubscriptionErrorMessage, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
+                    PodcastAddFailureRow(failure: failure, onDismiss: subscriptionFlow.clearError)
                 }
             }
 
@@ -87,7 +92,7 @@ struct SearchView: View {
                         onClear: clearRecentSearches
                     )
                 }
-            } else {
+            } else if !PodcastFeedURLDetector.isAddressLike(query) {
                 switch scope {
                 case .library:
                     if searchSession.isIndexedSearchUnavailable {
@@ -110,10 +115,11 @@ struct SearchView: View {
                 case .discover:
                     SearchDiscoverResultsSection(
                         searchStore: searchStore,
+                        subscriptionFlow: subscriptionFlow,
+                        knownPodcasts: appModel.knownPodcasts,
                         activePodcastIDs: appModel.library.activePodcastIDs,
-                        subscribingResultID: subscriptionFlow.subscribingResultID,
-                        isSubscriptionInProgress: isSubscriptionInProgress,
-                        onSubscribe: subscribe,
+                        onPreview: preview,
+                        onQuickAdd: quickAdd,
                         onOpenPodcast: openPodcast
                     )
                 }
@@ -131,14 +137,8 @@ struct SearchView: View {
         .searchScopes($scope) {
             SearchScopePicker()
         }
-        .sheet(item: Bindable(subscriptionFlow).pendingChoice) { pending in
-            DirectoryFeedChoiceView(
-                pending: pending,
-                onSelect: { candidate in
-                    subscribeToChoice(candidate, pending: pending)
-                },
-                onCancel: subscriptionFlow.dismissChoice
-            )
+        .sheet(item: $sheetDestination, onDismiss: onSheetDismissed) { destination in
+            SheetDestinationView(destination: destination, onDismiss: dismissSheet)
         }
         .onSubmit(of: .search, recordRecentSearch)
         .onChange(of: appModel.systemSearchRequest, initial: true) { _, request in
@@ -152,8 +152,11 @@ struct SearchView: View {
         .onChange(of: scope) { _, _ in
             synchronizeDirectorySearch()
         }
+        .onChange(of: subscriptionFlow.pendingChoice?.id) { _, _ in
+            presentHandedOffChoice()
+        }
         .task(id: taskKey) {
-            guard scope == .library else {
+            guard scope == .library, !PodcastFeedURLDetector.isAddressLike(query) else {
                 return
             }
 
@@ -172,7 +175,17 @@ struct SearchView: View {
                 showNotesProvider: { await library.showNotesHTMLByEpisodeID() }
             )
         }
-        .onDisappear(perform: searchStore.cancelSearch)
+        .onAppear(perform: subscriptionFlow.presenterDidAppear)
+        .onDisappear(perform: handleDisappear)
+    }
+
+    private var typedFeedURL: URL? {
+        PodcastFeedURLDetector.openableFeedURL(from: query)
+    }
+
+    private func handleDisappear() {
+        searchStore.cancelSearch()
+        subscriptionFlow.presenterDidDisappear(library: appModel.library, modelContext: modelContext)
     }
 
     private func synchronizeDirectorySearch() {
@@ -208,21 +221,44 @@ struct SearchView: View {
         onOpenPodcast(feedURLString)
     }
 
-    private var isSubscriptionInProgress: Bool {
-        subscribingFeedURLString != nil || subscriptionFlow.isSubscribing
+    private func preview(_ result: DirectoryPodcastResult) {
+        KeyboardDismissal.dismiss()
+        present(PodcastPreviewRequest(subject: .result(result)))
     }
 
-    private var displayedSubscriptionErrorMessage: String? {
-        subscriptionErrorMessage ?? subscriptionFlow.errorMessage
+    private func openFeed(_ feedURL: URL) {
+        let request = PodcastPreviewRequest(subject: .feedURL(feedURL))
+        if let libraryFeedURL = appModel.knownPodcasts.libraryFeedURL(
+            for: request.knownPodcastKey,
+            activePodcastIDs: appModel.library.activePodcastIDs
+        ) {
+            openPodcast(libraryFeedURL)
+        } else {
+            KeyboardDismissal.dismiss()
+            present(request)
+        }
     }
 
-    private func subscribe(to result: DirectoryPodcastResult) {
-        guard !isSubscriptionInProgress else {
+    private func presentHandedOffChoice() {
+        guard let request = subscriptionFlow.handOffChoice() else {
             return
         }
+        present(request)
+    }
 
+    private func present(_ request: PodcastPreviewRequest) {
+        sheetDestination = .podcastPreview(
+            request,
+            PodcastPreviewPresenter(
+                addFlow: subscriptionFlow,
+                onSubscribed: recordRecentSearch,
+                afterSubscribe: .offersGoToShow(goToShow)
+            )
+        )
+    }
+
+    private func quickAdd(_ result: DirectoryPodcastResult) {
         KeyboardDismissal.dismiss()
-        subscriptionErrorMessage = nil
         subscriptionFlow.subscribe(
             to: result,
             library: appModel.library,
@@ -231,44 +267,12 @@ struct SearchView: View {
         )
     }
 
-    private func subscribeToChoice(
-        _ candidate: ResolvedFeedCandidate,
-        pending: DirectorySubscriptionFlowStore.PendingChoice
-    ) {
-        subscriptionFlow.subscribe(
-            candidate: candidate,
-            for: pending,
-            library: appModel.library,
-            modelContext: modelContext,
-            onSubscribed: recordRecentSearch
-        )
+    private func goToShow(_ feedURLString: String) {
+        sheetDestination = nil
+        onOpenPodcast(feedURLString)
     }
 
-    private func subscribe(to feedURLString: String) {
-        guard !isSubscriptionInProgress else {
-            return
-        }
-
-        KeyboardDismissal.dismiss()
-        Task {
-            await performSubscription(to: feedURLString)
-        }
-    }
-
-    private func performSubscription(to feedURLString: String) async {
-        subscriptionErrorMessage = nil
-        subscriptionFlow.clearError()
-        subscribingFeedURLString = feedURLString
-        defer {
-            subscribingFeedURLString = nil
-        }
-
-        do {
-            try await appModel.library.subscribe(to: feedURLString, modelContext: modelContext)
-            recordRecentSearch()
-        } catch is CancellationError {
-        } catch {
-            subscriptionErrorMessage = error.localizedDescription
-        }
+    private func dismissSheet() {
+        sheetDestination = nil
     }
 }

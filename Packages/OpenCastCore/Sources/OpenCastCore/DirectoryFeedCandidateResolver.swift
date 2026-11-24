@@ -26,7 +26,14 @@ public struct DirectoryFeedCandidateResolver: Sendable {
         guard let primary = resolved.first else {
             throw firstError(in: outcomes) ?? OpenCastCoreError.invalidHTTPResponse
         }
+        let readFeedURLs = Set(resolved.flatMap { [$0.candidate.canonicalFeedURLString, $0.canonicalResolvedURLString] })
+        return DirectoryFeedResolution(outcome: outcome(primary: primary, resolved: resolved), readFeedURLs: readFeedURLs)
+    }
 
+    private func outcome(
+        primary: ResolvedFeedCandidate,
+        resolved: [ResolvedFeedCandidate]
+    ) -> DirectoryFeedResolution.Outcome {
         let alternates = resolved.dropFirst().filter { alternate in
             alternate.canonicalResolvedURLString != primary.canonicalResolvedURLString
                 && !hasConflictingGUID(primary, alternate)

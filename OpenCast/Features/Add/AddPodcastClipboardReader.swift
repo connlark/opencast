@@ -9,12 +9,4 @@ enum AddPodcastClipboardReader {
         )
         return patterns?.contains(\UIPasteboard.DetectedValues.probableWebURL) == true
     }
-
-    static func feedURLStringFromClipboard() -> String? {
-        feedURLString(from: UIPasteboard.general.string)
-    }
-
-    nonisolated static func feedURLString(from rawValue: String?) -> String? {
-        PodcastFeedURLDetector.feedURLString(from: rawValue)
-    }
 }

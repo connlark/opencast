@@ -10,6 +10,7 @@ struct OpenCastTabRootView: View {
     @Environment(SceneLibraryLayouts.self) private var inheritedSceneLayouts: SceneLibraryLayouts?
 
     @State private var isSearchPresented = false
+    @State private var searchScope = SearchScope.library
     @State private var showsPlaylistsTab = false
     /// Kept as state so the deferred update reads it as it is when it runs.
     @State private var playlistsTabSizeClass: UserInterfaceSizeClass?
@@ -26,6 +27,7 @@ struct OpenCastTabRootView: View {
     /// Kept as state so the deferred update reads it as it is when it runs.
     @State private var upNextTabSizeClass: UserInterfaceSizeClass?
     @State private var accessoryGeometryStore = TabAccessoryGeometryStore()
+    @State private var searchSheetDismissals = 0
     @State private var rootWindow = TwoPaneRootWindow.unmeasured
     @State private var rootContainer = TwoPaneRootContainer.stack
     @State private var tabRefreshes = TabRefreshes()
@@ -36,7 +38,8 @@ struct OpenCastTabRootView: View {
 
     @Binding var selectedTab: AppSection
     @Binding var navigationPaths: AppNavigationPaths
-    let onAdd: () -> Void
+    let onAddByFeedURL: () -> Void
+    let onImportOPMLFile: (URL) -> Void
     let onOpenUpNext: () -> Void
     let onPresentNowPlaying: () -> Void
 
@@ -46,7 +49,8 @@ struct OpenCastTabRootView: View {
         selectedTab: Binding<AppSection>,
         navigationPaths: Binding<AppNavigationPaths>,
         upNextTabSwitch: Bool,
-        onAdd: @escaping () -> Void,
+        onAddByFeedURL: @escaping () -> Void,
+        onImportOPMLFile: @escaping (URL) -> Void,
         onOpenUpNext: @escaping () -> Void,
         onPresentNowPlaying: @escaping () -> Void
     ) {
@@ -54,7 +58,8 @@ struct OpenCastTabRootView: View {
         _navigationPaths = navigationPaths
         _showsUpNextTab = State(initialValue: upNextTabSwitch)
         _showsSettingsTab = State(initialValue: !upNextTabSwitch)
-        self.onAdd = onAdd
+        self.onAddByFeedURL = onAddByFeedURL
+        self.onImportOPMLFile = onImportOPMLFile
         self.onOpenUpNext = onOpenUpNext
         self.onPresentNowPlaying = onPresentNowPlaying
     }
@@ -113,7 +118,9 @@ struct OpenCastTabRootView: View {
                     onOpenPlaylist: openPlaylist(on: .library)
                 ) {
                     LibraryView(
-                        onAdd: onAdd,
+                        onSearchForPodcasts: searchForPodcasts,
+                        onAddByFeedURL: onAddByFeedURL,
+                        onImportOPMLFile: onImportOPMLFile,
                         onOpenPlaylists: { openFromRoot(on: .library)(.playlists) },
                         onOpenUpNext: openUpNext,
                         onOpenPlaylist: { openFromRoot(on: .library)(.playlistDetail(id: $0)) },
@@ -171,7 +178,7 @@ struct OpenCastTabRootView: View {
                     onOpenPlaylist: { _ in }
                 ) {
                     InboxView(
-                        onAdd: onAdd,
+                        onSearchForPodcasts: searchForPodcasts,
                         onOpenEpisode: { openFromRoot(on: .inbox)(.episodeDetail(id: $0)) },
                         onOpenAdDetectionQueue: { openFromRoot(on: .inbox)(.adDetectionQueue) }
                     )
@@ -208,7 +215,10 @@ struct OpenCastTabRootView: View {
                     SearchView(
                         directoryService: appModel.podcastDirectoryService,
                         directoryResolver: appModel.podcastDirectoryResolver,
+                        knownPodcasts: appModel.knownPodcasts,
+                        scope: $searchScope,
                         isSearchPresented: $isSearchPresented,
+                        onSheetDismissed: { searchSheetDismissals += 1 },
                         onOpenEpisode: openEpisode(on: .search),
                         onOpenPodcast: { feedURL in
                             navigationPaths[.search].append(.podcastDetail(feedURL: feedURL))
@@ -723,7 +733,10 @@ struct OpenCastTabRootView: View {
     }
 
     private var showsTabAccessory: Bool {
-        appModel.playback.currentEpisode != nil || appModel.showsUpNextAccessory
+        // Read so the Search sheet's dismissal re-evaluates the rule: a sample started
+        // under that sheet sometimes leaves this view without the update that enables it.
+        _ = searchSheetDismissals
+        return appModel.playback.currentEpisode != nil || appModel.showsUpNextAccessory
     }
 
     private func updateAccessoryGeometry(_ geometry: TabAccessoryGeometry) {
@@ -741,6 +754,13 @@ struct OpenCastTabRootView: View {
                 onOpenQueue: openUpNext
             )
         }
+    }
+
+    private func searchForPodcasts() {
+        selectedTab = .search
+        navigationPaths[.search] = []
+        searchScope = .discover
+        isSearchPresented = true
     }
 
     private var commandActions: OpenCastCommandActions {

@@ -17,10 +17,13 @@ struct SheetDestinationView: View {
     @ViewBuilder
     private var content: some View {
         switch destination {
-        case .addPodcast:
-            AddPodcastView(
+        case .addByFeedURL(let onGoToShow):
+            AddByFeedURLSheet(
                 directoryService: appModel.podcastDirectoryService,
-                directoryResolver: appModel.podcastDirectoryResolver
+                resolver: appModel.podcastDirectoryResolver,
+                knownPodcasts: appModel.knownPodcasts,
+                onClose: onDismiss,
+                onGoToShow: onGoToShow
             )
         case .addToPlaylist(let episodeID):
             AddToPlaylistSheet(episodeID: episodeID)
@@ -44,12 +47,22 @@ struct SheetDestinationView: View {
             OnboardingView(
                 directoryService: appModel.podcastDirectoryService,
                 directoryResolver: appModel.podcastDirectoryResolver,
+                knownPodcasts: appModel.knownPodcasts,
                 onCompleted: onDismiss
             )
         case .playlistOrganizer(let podcastID):
             PlaylistOrganizerSheet(podcastID: podcastID)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
+        case .podcastPreview(let request, let presenter):
+            PodcastPreviewSheet(
+                request: request,
+                directoryService: appModel.podcastDirectoryService,
+                resolver: appModel.podcastDirectoryResolver,
+                knownPodcasts: appModel.knownPodcasts,
+                presenter: presenter,
+                onClose: onDismiss
+            )
         case .podcastPlaybackSettings(let feedURL):
             PodcastPlaybackSettingsView(feedURL: feedURL)
                 .presentationDetents([.medium, .large])

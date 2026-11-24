@@ -4,7 +4,7 @@ enum OpenCastConstants {
     static let thisAmericanLifeFeedURL = "https://www.thisamericanlife.org/podcast/rss.xml"
     static let restIsScienceFeedURL = "https://feeds.megaphone.fm/GLT6907573392"
 
-    static var addPodcastInitialFeedURL: String {
+    static var addByFeedURLInitialText: String {
         let environment = ProcessInfo.processInfo.environment
         if environment["OPENCAST_UI_TESTING"] == "1",
            let override = environment["OPENCAST_DEFAULT_FEED_URL"] {

@@ -77,6 +77,7 @@ final class OpenCastAppModel {
     let runsVoiceBoostDeviceProbe: Bool
     let podcastDirectoryService: any PodcastDirectoryService
     let podcastDirectoryResolver: DirectoryFeedCandidateResolver
+    let knownPodcasts = KnownPodcastsStore()
     let syncStatus: SyncStatusStore
     let allowsAutomaticFeedRefresh: Bool
     let adFreePassPresentationOverride: EpisodeAdFreePassPresentation?
@@ -259,6 +260,7 @@ final class OpenCastAppModel {
         exposesVoiceBoostDiagnosticsStatus: Bool = false,
         runsVoiceBoostDeviceProbe: Bool = false,
         podcastDirectoryService: (any PodcastDirectoryService)? = nil,
+        podcastDirectoryResolver: DirectoryFeedCandidateResolver? = nil,
         syncStatus: SyncStatusStore = SyncStatusStore(),
         allowsAutomaticFeedRefresh: Bool = true,
         adFreePassPresentationOverride: EpisodeAdFreePassPresentation? = nil,
@@ -519,7 +521,7 @@ final class OpenCastAppModel {
         let resolvedPodcastDirectoryService = podcastDirectoryService
             ?? Self.defaultPodcastDirectoryService(httpClient: resolvedHTTPClient)
         self.podcastDirectoryService = resolvedPodcastDirectoryService
-        podcastDirectoryResolver = DirectoryFeedCandidateResolver(
+        self.podcastDirectoryResolver = podcastDirectoryResolver ?? DirectoryFeedCandidateResolver(
             feedService: DefaultFeedService(httpClient: resolvedHTTPClient)
         )
         self.syncStatus = syncStatus

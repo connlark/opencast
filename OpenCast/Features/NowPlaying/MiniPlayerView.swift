@@ -24,6 +24,7 @@ struct MiniPlayerView: View {
             let playlistRemainingCount = playlistSource.map {
                 appModel.remainingQueuedCount(forPlaylist: $0.playlistID)
             } ?? 0
+            let isPreview = !appModel.library.isActivelySubscribed(to: episode.podcastID.rawValue)
             let row = TabAccessoryRow(geometry: accessoryGeometry, isInline: isInline)
             let metrics = row.metrics
 
@@ -43,6 +44,7 @@ struct MiniPlayerView: View {
                             podcastTitle: episode.podcastTitle,
                             playlistSource: isInline ? nil : playlistSource,
                             playlistRemainingCount: playlistRemainingCount,
+                            isPreview: isPreview,
                             showsSecondaryLine: row != .dense
                         )
                     }
@@ -54,6 +56,7 @@ struct MiniPlayerView: View {
                 .accessibilityValue(
                     openNowPlayingValue(
                         for: episode,
+                        isPreview: isPreview,
                         playlistSource: playlistSource,
                         remainingCount: playlistRemainingCount
                     )
@@ -127,11 +130,14 @@ struct MiniPlayerView: View {
 
     private func openNowPlayingValue(
         for episode: Episode,
+        isPreview: Bool,
         playlistSource: PlaylistPlaybackSource?,
         remainingCount: Int
     ) -> String {
         guard let playlistSource else {
-            return "\(episode.title), \(episode.podcastTitle)"
+            return isPreview
+                ? "\(episode.title), Preview, \(episode.podcastTitle)"
+                : "\(episode.title), \(episode.podcastTitle)"
         }
         return PlaylistPlaybackSourceText.miniPlayerAccessibilityValue(
             title: episode.title,

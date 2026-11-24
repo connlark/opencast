@@ -1,11 +1,27 @@
 import SwiftData
 
 enum OnboardingCompletionService {
-    static func needsSampleConfirmation(activePodcastIDs: Set<String>) -> Bool {
-        activePodcastIDs.isEmpty
+    enum Outcome {
+        case completed
+        case needsSampleConfirmation
     }
 
-    static func markCompleted(
+    static func finish(
+        after addFlow: DirectorySubscriptionFlowStore,
+        library: LibraryStore,
+        onboardingState: OnboardingStateStore,
+        modelContext: ModelContext
+    ) async throws -> Outcome {
+        await addFlow.waitForCurrentSubscription()
+        try Task.checkCancellation()
+        guard !library.activePodcastIDs.isEmpty else {
+            return .needsSampleConfirmation
+        }
+        try markCompleted(onboardingState: onboardingState, modelContext: modelContext)
+        return .completed
+    }
+
+    private static func markCompleted(
         onboardingState: OnboardingStateStore,
         modelContext: ModelContext
     ) throws {

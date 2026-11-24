@@ -145,6 +145,8 @@ final class OpenCastAppRuntime {
                 voiceBoostDiagnostics: voiceBoostDiagnostics,
                 exposesVoiceBoostDiagnosticsStatus: launchConfiguration.exposesVoiceBoostDiagnosticsStatus,
                 runsVoiceBoostDeviceProbe: launchConfiguration.runsVoiceBoostDeviceProbe,
+                podcastDirectoryService: Self.podcastDirectoryService(launchConfiguration: launchConfiguration),
+                podcastDirectoryResolver: Self.podcastDirectoryResolver(launchConfiguration: launchConfiguration),
                 syncStatus: syncStatus,
                 allowsAutomaticFeedRefresh: !launchConfiguration.usesInMemoryStore,
                 adFreePassPresentationOverride: launchConfiguration.adFreePassPresentationOverride,
@@ -361,6 +363,28 @@ final class OpenCastAppRuntime {
             return nil
         }
         return LibraryStore(feedService: feedService, localCache: localCacheStore)
+    }
+
+    private static func podcastDirectoryService(
+        launchConfiguration: OpenCastLaunchConfiguration
+    ) -> (any PodcastDirectoryService)? {
+        #if DEBUG
+        if launchConfiguration.usesUITestDirectoryFixture {
+            return OpenCastUITestDirectoryService()
+        }
+        #endif
+        return nil
+    }
+
+    private static func podcastDirectoryResolver(
+        launchConfiguration: OpenCastLaunchConfiguration
+    ) -> DirectoryFeedCandidateResolver? {
+        #if DEBUG
+        if launchConfiguration.usesUITestDirectoryFixture {
+            return DirectoryFeedCandidateResolver(feedService: OpenCastUITestDirectoryFeedService())
+        }
+        #endif
+        return nil
     }
 
     private static func syncStatusStore(

@@ -57,16 +57,6 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-        addUIInterruptionMonitor(withDescription: "paste permission") { alert in
-            MainActor.assumeIsolated {
-                let deny = alert.buttons["Don't Allow Paste"]
-                if deny.exists {
-                    deny.tap()
-                    return true
-                }
-                return false
-            }
-        }
         addUIInterruptionMonitor(withDescription: "notification permission") { alert in
             MainActor.assumeIsolated {
                 let allow = alert.buttons["Allow"]
@@ -532,24 +522,11 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
 
     // MARK: - Tab navigation
 
-    /// `openSection`'s single-match tap can fail here: with the mini player
-    /// accessory up, more than one tab bar (and "Library" button) exists.
-    /// The paste-permission alert is springboard-hosted: it blocks every
-    /// in-app tap while interruption monitors never fire on hittability
-    /// checks. Dismiss it explicitly.
+    /// The Low Battery alert is springboard-hosted: it blocks every in-app
+    /// tap while interruption monitors never fire on hittability checks.
     @MainActor
-    private func dismissPasteAlertIfPresent(waiting timeout: TimeInterval = 0) {
+    private func dismissLowBatteryAlertIfPresent() {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        let deny = springboard.buttons["Don't Allow Paste"].firstMatch
-        if timeout > 0 ? deny.waitForExistence(timeout: timeout) : deny.exists {
-            if deny.isHittable {
-                deny.tap()
-                usleep(500_000)
-            }
-        }
-        // The Low Battery alert blocks in-app hittability the same way the
-        // paste alert does, and interruption monitors never fire on
-        // hittability checks.
         let lowBattery = springboard.alerts["Low Battery"].firstMatch
         if lowBattery.exists {
             let dismiss = lowBattery.buttons["OK"].firstMatch
@@ -560,11 +537,13 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         }
     }
 
+    /// `openSection`'s single-match tap can fail here: with the mini player
+    /// accessory up, more than one tab bar (and "Library" button) exists.
     @MainActor
     private func openTab(_ title: String, in app: XCUIApplication) {
         var attemptNotes: [String] = []
         for attempt in 0..<4 {
-            dismissPasteAlertIfPresent()
+            dismissLowBatteryAlertIfPresent()
             if hasArrived(at: title, in: app) {
                 return
             }
@@ -720,28 +699,14 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         var sheetShown = false
         for _ in 0..<3 {
             tapAddButton(in: app)
-            if app.staticTexts["Add Podcast"].waitForExistence(timeout: 8) {
+            if app.textFields["RSS Feed URL"].waitForExistence(timeout: 8) {
                 sheetShown = true
                 break
             }
         }
-        XCTAssertTrue(sheetShown, "Add Podcast sheet should present")
-        dismissPasteAlertIfPresent(waiting: 3)
-        if !app.textFields["RSS Feed URL"].waitForExistence(timeout: 3) {
-            let rssMode = app.segmentedControls["Add Podcast Mode"].buttons["RSS"]
-            if rssMode.waitForExistence(timeout: 3) {
-                rssMode.tap()
-            } else {
-                app.buttons["RSS"].firstMatch.tap()
-            }
-        }
-        let field = app.textFields["RSS Feed URL"]
-        XCTAssertTrue(field.waitForExistence(timeout: 10), "RSS Feed URL field should exist")
-        field.tap()
-        field.typeText(feed.urlString)
-        let subscribeButton = app.buttons["Subscribe"].firstMatch
-        XCTAssertTrue(subscribeButton.waitForExistence(timeout: 5), "Subscribe button should exist")
-        subscribeButton.tap()
+        XCTAssertTrue(sheetShown, "Add by Feed URL sheet should present")
+        subscribeInAddByFeedURL(typing: feed.urlString, in: app)
+        app.buttons["Cancel"].firstMatch.tap()
 
         var subscribed = false
         for _ in 0..<4 {
@@ -769,7 +734,7 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         for candidate in candidates {
             if candidate.waitForExistence(timeout: 3), candidate.isHittable {
                 candidate.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-                tapAddPodcastMenuItemIfPresented(in: app)
+                tapAddByFeedURLMenuItem(in: app)
                 return
             }
         }

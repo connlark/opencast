@@ -7,6 +7,7 @@ struct MiniPlayerMetadataView: View {
     let podcastTitle: String
     var playlistSource: PlaylistPlaybackSource? = nil
     var playlistRemainingCount = 0
+    var isPreview = false
     var showsSecondaryLine = true
 
     var body: some View {
@@ -46,6 +47,8 @@ struct MiniPlayerMetadataView: View {
                         .layoutPriority(1)
                 }
             }
+        } else if isPreview {
+            Text("\(Text("Preview").foregroundStyle(.tint)) · \(podcastTitle)")
         } else {
             Text(podcastTitle)
         }

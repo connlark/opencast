@@ -64,6 +64,7 @@ public enum DirectoryResultMerger {
             id: apple.id,
             title: apple.title,
             artistName: apple.artistName ?? podcastIndex.artistName,
+            genre: apple.genre ?? podcastIndex.genre,
             feedURL: apple.feedURL ?? podcastIndex.feedURL,
             artworkURL: apple.artworkURL ?? podcastIndex.artworkURL,
             collectionViewURL: apple.collectionViewURL ?? podcastIndex.collectionViewURL,

@@ -7,11 +7,47 @@ import Testing
 @MainActor
 @Suite("Onboarding completion service")
 struct OnboardingCompletionServiceTests {
-    @Test("Existing subscriptions finish without sample confirmation")
-    func existingSubscriptionsFinishWithoutSampleConfirmation() {
-        #expect(!OnboardingCompletionService.needsSampleConfirmation(activePodcastIDs: [
-            "https://example.com/feed.xml"
-        ]))
+    @Test("Finishing while a quick add is in flight completes with that show and no fallback offer")
+    func finishingWhileAQuickAddIsInFlightCompletesWithThatShow() async throws {
+        let context = try makeContext()
+        let feedURL = "https://example.com/quick-add.xml"
+        let (library, addFlow) = startQuickAdd(of: feedURL, modelContext: context)
+        let onboardingState = OnboardingStateStore()
+
+        let outcome = try await OnboardingCompletionService.finish(
+            after: addFlow,
+            library: library,
+            onboardingState: onboardingState,
+            modelContext: context
+        )
+
+        #expect(outcome == .completed)
+        #expect(library.subscriptions.map(\.feedURL) == [feedURL])
+        #expect(onboardingState.isCompleted)
+    }
+
+    @Test("A finish cancelled before its wait ends completes nothing and offers nothing")
+    func cancelledFinishCompletesNothing() async throws {
+        let context = try makeContext()
+        let feedURL = "https://example.com/quick-add.xml"
+        let (library, addFlow) = startQuickAdd(of: feedURL, modelContext: context)
+        let onboardingState = OnboardingStateStore()
+
+        let finishing = Task {
+            try await OnboardingCompletionService.finish(
+                after: addFlow,
+                library: library,
+                onboardingState: onboardingState,
+                modelContext: context
+            )
+        }
+        finishing.cancel()
+
+        await #expect(throws: CancellationError.self) {
+            try await finishing.value
+        }
+        #expect(!onboardingState.isCompleted)
+        #expect(library.subscriptions.map(\.feedURL) == [feedURL])
     }
 
     @Test("Fallback subscription uses This American Life and completes onboarding")
@@ -72,6 +108,24 @@ struct OnboardingCompletionServiceTests {
             forKey: OnboardingStateStore.completedPreferenceKey,
             modelContext: context
         ) == nil)
+    }
+
+    private func startQuickAdd(of feedURL: String, modelContext: ModelContext) -> (LibraryStore, DirectorySubscriptionFlowStore) {
+        let feedService = StubOnboardingFeedService(responses: [
+            feedURL: .success(makeSnapshot(feedURL: feedURL, podcastTitle: "Quick Add", episodeID: "quick-add-1"))
+        ])
+        let library = LibraryStore(feedService: feedService, localCache: SQLiteLocalLibraryCacheStore.inMemory())
+        let addFlow = DirectorySubscriptionFlowStore(
+            directoryService: StubOnboardingDirectoryService(),
+            resolver: DirectoryFeedCandidateResolver(feedService: feedService),
+            knownPodcasts: KnownPodcastsStore()
+        )
+        addFlow.subscribe(
+            to: DirectoryPodcastResult(id: 1, title: "Quick Add", feedURL: URL(string: feedURL)),
+            library: library,
+            modelContext: modelContext
+        )
+        return (library, addFlow)
     }
 
     private func makeContext() throws -> ModelContext {
@@ -144,6 +198,12 @@ private actor StubOnboardingFeedService: FeedService {
 
     func requestedURLStrings() -> [String] {
         requestedURLs
+    }
+}
+
+private struct StubOnboardingDirectoryService: PodcastDirectoryService {
+    func search(query: String) async throws -> [DirectoryPodcastResult] {
+        []
     }
 }
 

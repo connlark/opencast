@@ -2,7 +2,7 @@ import SwiftUI
 
 struct InboxEmptyStateView: View {
     let syncActivity: SyncLibraryActivity
-    let onAdd: () -> Void
+    let onSearchForPodcasts: () -> Void
 
     var body: some View {
         VStack(spacing: 24) {
@@ -18,7 +18,7 @@ struct InboxEmptyStateView: View {
                     Text("Episodes appear here after you subscribe to a podcast.")
                 }
 
-                Button(action: onAdd) {
+                Button(action: onSearchForPodcasts) {
                     Text("Add Podcast")
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)

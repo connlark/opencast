@@ -6,8 +6,8 @@ import Testing
 @MainActor
 @Suite("Podcast search store")
 struct PodcastSearchStoreTests {
-    @Test("Search query returns result rows")
-    func searchQueryReturnsResultRows() async {
+    @Test("Search query returns result rows", arguments: ["searchable", "24/7 news", "9:30/8:30 Central"])
+    func searchQueryReturnsResultRows(query: String) async {
         let result = DirectoryPodcastResult(
             id: 1,
             title: "Searchable Show",
@@ -16,27 +16,56 @@ struct PodcastSearchStoreTests {
             artworkURL: URL(string: "https://example.com/art.jpg")
         )
         let directoryService = StubPodcastDirectoryService(responses: [
-            "searchable": .success([result])
+            query: .success([result])
         ])
         let appModel = OpenCastAppModel(podcastDirectoryService: directoryService)
         let store = PodcastSearchStore(
             directoryService: appModel.podcastDirectoryService,
+            knownPodcasts: appModel.knownPodcasts,
             debounceDuration: .zero
         )
 
-        store.query = "searchable"
+        store.query = query
         await store.waitForCurrentSearch()
 
         #expect(store.state == .results([result]))
-        #expect(await directoryService.requestedSearchQueries() == ["searchable"])
+        #expect(await directoryService.requestedSearchQueries() == [query])
     }
 
     @Test("Empty query does not call the service")
     func emptyQueryDoesNotCallService() async {
         let directoryService = StubPodcastDirectoryService(responses: [:])
-        let store = PodcastSearchStore(directoryService: directoryService, debounceDuration: .zero)
+        let store = PodcastSearchStore(directoryService: directoryService, knownPodcasts: KnownPodcastsStore(), debounceDuration: .zero)
 
         store.query = "   "
+
+        #expect(await directoryService.requestedSearchQueries().isEmpty)
+        #expect(store.state == .idle)
+    }
+
+    @Test(
+        "A feed address typed as the query is never sent to the directory",
+        arguments: [
+            "https://feeds.example.com/private.xml?token=secret",
+            "https://user:secret@",
+            "feeds.example.com/private.xml?token=secret",
+            "https://feeds.example.com/My Show.xml?token=secret",
+            "the feed is feeds.example.com/private.xml?token=secret",
+            "feeds.example.com:8443/private.xml?token=secret",
+            "192.0.2.10/private.xml?token=secret",
+            "user:secret@feeds.example.com:8443/private.xml",
+            "user:secret@feeds.example.com:8443",
+            "//feeds.example.com:8443/private.xml?token=secret",
+            "münchen.example.com:8443/private.xml?token=secret",
+            "[2001:db8::1]:8443/private.xml?token=secret",
+        ]
+    )
+    func feedAddressQueryIsNeverSentToTheDirectory(query: String) async {
+        let directoryService = StubPodcastDirectoryService(responses: [:])
+        let store = PodcastSearchStore(directoryService: directoryService, knownPodcasts: KnownPodcastsStore(), debounceDuration: .zero)
+
+        store.query = query
+        await store.waitForCurrentSearch()
 
         #expect(await directoryService.requestedSearchQueries().isEmpty)
         #expect(store.state == .idle)
@@ -58,7 +87,7 @@ struct PodcastSearchStoreTests {
             "old": .delayedSuccess([oldResult], duration: .seconds(1)),
             "new": .success([newResult])
         ])
-        let store = PodcastSearchStore(directoryService: directoryService, debounceDuration: .zero)
+        let store = PodcastSearchStore(directoryService: directoryService, knownPodcasts: KnownPodcastsStore(), debounceDuration: .zero)
 
         store.query = "old"
         await directoryService.waitForRequestCount(1)
@@ -75,7 +104,7 @@ struct PodcastSearchStoreTests {
         let directoryService = StubPodcastDirectoryService(responses: [
             "broken": .failure("Directory unavailable")
         ])
-        let store = PodcastSearchStore(directoryService: directoryService, debounceDuration: .zero)
+        let store = PodcastSearchStore(directoryService: directoryService, knownPodcasts: KnownPodcastsStore(), debounceDuration: .zero)
 
         store.query = "broken"
         await store.waitForCurrentSearch()

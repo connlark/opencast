@@ -280,10 +280,12 @@ final class NotificationSecurityUITests: XCTestCase {
     @MainActor
     private func subscribeToFeed(in app: XCUIApplication, title: String, timeout: TimeInterval = 45) {
         openLibrary(in: app)
-        tapAddPodcastButton(in: app)
-        scrollUntilHittable(app.buttons["Subscribe"], in: app).tap()
+        openAddByFeedURL(in: app)
+        subscribeInAddByFeedURL(in: app, timeout: timeout)
+        goToShowFromAddByFeedURL(in: app)
 
-        XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: timeout))
+        XCTAssertTrue(app.buttons["Podcast Actions"].waitForExistence(timeout: timeout))
+        XCTAssertTrue(app.staticTexts[title].exists)
     }
 
     @MainActor
@@ -370,18 +372,18 @@ final class NotificationSecurityUITests: XCTestCase {
     }
 
     @MainActor
-    private func tapAddPodcastButton(in app: XCUIApplication) {
+    private func openAddByFeedURL(in app: XCUIApplication) {
         let addButtons = [
             toolbarButton("Add", in: "Library", of: app),
             app.navigationBars["opencast"].buttons["Add"],
             app.buttons["Add"].firstMatch
         ]
         guard let addButton = addButtons.first(where: { $0.waitForExistence(timeout: 2) }) else {
-            XCTFail("Add Podcast button should exist")
+            XCTFail("Library Add menu should exist")
             return
         }
         addButton.tap()
-        tapAddPodcastMenuItemIfPresented(in: app)
+        tapAddByFeedURLMenuItem(in: app)
     }
 
     @MainActor

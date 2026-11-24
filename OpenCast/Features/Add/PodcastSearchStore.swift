@@ -16,14 +16,17 @@ final class PodcastSearchStore {
     private(set) var state = PodcastSearchState.idle
 
     @ObservationIgnored private let directoryService: any PodcastDirectoryService
+    @ObservationIgnored private let knownPodcasts: KnownPodcastsStore
     @ObservationIgnored private let debounceDuration: Duration
     @ObservationIgnored private var searchTask: Task<Void, Never>?
 
     init(
         directoryService: any PodcastDirectoryService = ITunesPodcastDirectoryService(),
+        knownPodcasts: KnownPodcastsStore,
         debounceDuration: Duration = .milliseconds(350)
     ) {
         self.directoryService = directoryService
+        self.knownPodcasts = knownPodcasts
         self.debounceDuration = debounceDuration
     }
 
@@ -43,7 +46,7 @@ final class PodcastSearchStore {
         searchTask?.cancel()
 
         let searchQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !searchQuery.isEmpty else {
+        guard !searchQuery.isEmpty, !PodcastFeedURLDetector.isAddressLike(searchQuery) else {
             searchTask = nil
             setState(.idle)
             return
@@ -71,6 +74,9 @@ final class PodcastSearchStore {
     }
 
     private func finishSearch(results: [DirectoryPodcastResult]) {
+        for result in results {
+            knownPodcasts.learn(result.candidateCanonicalFeedURLStrings, about: result.knownPodcastKey)
+        }
         setState(results.isEmpty ? .empty : .results(results))
         searchTask = nil
     }

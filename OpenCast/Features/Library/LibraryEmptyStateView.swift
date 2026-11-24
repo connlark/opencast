@@ -4,7 +4,7 @@ struct LibraryEmptyStateView: View {
     let syncActivity: SyncLibraryActivity
     let isSubscribingSample: Bool
     let sampleSubscriptionErrorMessage: String?
-    let onAdd: () -> Void
+    let onSearchForPodcasts: () -> Void
     let onSubscribeSample: () -> Void
 
     var body: some View {
@@ -18,11 +18,11 @@ struct LibraryEmptyStateView: View {
                 ContentUnavailableView {
                     Label("No Subscriptions", systemImage: "books.vertical")
                 } description: {
-                    Text("Add a podcast by search or RSS, or start with This American Life.")
+                    Text("Search for a podcast, or start with This American Life.")
                 }
 
                 VStack(spacing: 12) {
-                    Button(action: onAdd) {
+                    Button(action: onSearchForPodcasts) {
                         Text("Add Podcast")
                             .lineLimit(1)
                             .minimumScaleFactor(0.85)

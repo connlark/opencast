@@ -59,16 +59,6 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
-        addUIInterruptionMonitor(withDescription: "paste permission") { alert in
-            MainActor.assumeIsolated {
-                let deny = alert.buttons["Don't Allow Paste"]
-                if deny.exists {
-                    deny.tap()
-                    return true
-                }
-                return false
-            }
-        }
         addUIInterruptionMonitor(withDescription: "notification permission") { alert in
             MainActor.assumeIsolated {
                 let allow = alert.buttons["Allow"]
@@ -82,83 +72,6 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
     }
 
     // MARK: - Gates
-
-    /// One-time device prep: set OpenCast's "Paste from Other Apps" to
-    /// Deny. A synchronous `UIPasteboard.general.string` read with a
-    /// universal-clipboard item around raises iOS's paste prompt, the app's
-    /// main thread parks inside the read (every app-side AX snapshot then
-    /// times out), and the prompt's alert is hosted by a remote process
-    /// XCUITest cannot see or tap (kAXErrorServerNotFound) — recorded
-    /// during this gate's bring-up. Denying the permission makes the read
-    /// return nil instantly, forever. iOS lists the row only once the app
-    /// has raised that prompt, and the Add sheet now reads the pasteboard
-    /// only from a tap on its own Paste button, so an install that never
-    /// did has nothing to deny and the leg skips.
-    @MainActor
-    func testDeviceE2E00DenyPastePermissionOnce() throws {
-        try skipUnlessDeviceE2E()
-        let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
-        settings.launch()
-        _ = settings.wait(for: .runningForeground, timeout: 15)
-
-        let searchField = settings.searchFields.firstMatch
-        assertExists(searchField, named: "Settings search field", timeout: 15)
-        searchField.tap()
-        searchField.typeText("opencast")
-        sleep(2)
-        attachTimestampedSmokeScreenshot(named: "00-settings-search")
-
-        let appRow = settings.cells.containing(
-            NSPredicate(format: "label CONTAINS[c] %@", "opencast")
-        ).firstMatch
-        let appHit = appRow.exists
-            ? appRow
-            : settings.staticTexts.matching(
-                NSPredicate(format: "label CONTAINS[c] %@", "opencast")
-            ).firstMatch
-        assertExists(appHit, named: "opencast search result", timeout: 10)
-        appHit.tap()
-        assertExists(settings.navigationBars["opencast"], named: "opencast's Settings page", timeout: 15)
-
-        let pasteRow = settings.descendants(matching: .any).matching(
-            NSPredicate(format: "label CONTAINS %@", "Paste from Other Apps")
-        ).firstMatch
-        // A longer page can hold the row below the fold, where the list has
-        // not realized it yet: look a couple of strokes down before
-        // concluding it is absent.
-        var pasteRowFound = pasteRow.waitForExistence(timeout: 15)
-        var scanStrokes = 0
-        while !pasteRowFound, scanStrokes < 2 {
-            settings.swipeUp()
-            scanStrokes += 1
-            pasteRowFound = pasteRow.waitForExistence(timeout: 2)
-        }
-        guard pasteRowFound else {
-            for _ in 0..<scanStrokes {
-                settings.swipeDown()
-            }
-            attachTimestampedSmokeScreenshot(named: "00-no-paste-row")
-            settings.terminate()
-            throw XCTSkip(
-                "opencast's Settings page has no \"Paste from Other Apps\" row: iOS lists it only after the app "
-                    + "has raised the system paste prompt, and the Add sheet reads the pasteboard only from a tap "
-                    + "on its own Paste button."
-            )
-        }
-        if !pasteRow.isHittable {
-            settings.swipeUp()
-        }
-        pasteRow.tap()
-
-        let deny = settings.descendants(matching: .any).matching(
-            NSPredicate(format: "label == %@", "Deny")
-        ).firstMatch
-        assertExists(deny, named: "Deny option", timeout: 10)
-        deny.tap()
-        sleep(1)
-        attachTimestampedSmokeScreenshot(named: "00-paste-denied")
-        settings.terminate()
-    }
 
     /// Manual-only proof: a completed transcript triggers NO analysis on its
     /// own; the Generate entry waits below the show notes, the first tap
@@ -477,23 +390,11 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
         sleep(2)
     }
 
-    /// The paste-permission alert is springboard-hosted: it blocks every
-    /// in-app tap, interruption monitors never fire for it, and — recorded
-    /// during this gate's bring-up — APP-side snapshot queries hang for
-    /// minutes while it is up. Always wait for and dismiss it on the
-    /// springboard side BEFORE the next app-side query.
+    /// The Low Battery alert is springboard-hosted: it blocks every in-app
+    /// tap and interruption monitors never fire for it.
     @MainActor
-    private func dismissBlockingAlertsIfPresent(waiting timeout: TimeInterval = 0) {
+    private func dismissBlockingAlertsIfPresent() {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        let deny = springboard.buttons["Don't Allow Paste"].firstMatch
-        if timeout > 0 ? deny.waitForExistence(timeout: timeout) : deny.exists {
-            if deny.isHittable {
-                deny.tap()
-            } else {
-                deny.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-            }
-            usleep(500_000)
-        }
         let lowBattery = springboard.alerts["Low Battery"].firstMatch
         if lowBattery.exists {
             let dismiss = lowBattery.buttons["OK"].firstMatch
@@ -621,38 +522,17 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
         openLibrary(in: app)
         sleep(1)
         var sheetShown = false
-        outer: for _ in 0..<3 {
+        for _ in 0..<3 {
             tapAddButton(in: app)
-            // Opening the sheet pre-reads the pasteboard, raising the paste
-            // prompt moments later. Springboard-side wait FIRST — an
-            // app-side query while the prompt is up never returns.
-            dismissBlockingAlertsIfPresent(waiting: 4)
-            for _ in 0..<3 {
-                if app.staticTexts["Add Podcast"].waitForExistence(timeout: 3) {
-                    sheetShown = true
-                    break outer
-                }
-                dismissBlockingAlertsIfPresent(waiting: 2)
+            dismissBlockingAlertsIfPresent()
+            if app.textFields["RSS Feed URL"].waitForExistence(timeout: 8) {
+                sheetShown = true
+                break
             }
         }
-        XCTAssertTrue(sheetShown, "Add Podcast sheet should present")
-        dismissBlockingAlertsIfPresent()
-        if !app.textFields["RSS Feed URL"].waitForExistence(timeout: 3) {
-            let rssMode = app.segmentedControls["Add Podcast Mode"].buttons["RSS"]
-            if rssMode.waitForExistence(timeout: 3) {
-                rssMode.tap()
-            } else {
-                app.buttons["RSS"].firstMatch.tap()
-            }
-        }
-        let field = app.textFields["RSS Feed URL"]
-        XCTAssertTrue(field.waitForExistence(timeout: 10), "RSS Feed URL field should exist")
-        field.tap()
-        dismissBlockingAlertsIfPresent(waiting: 2)
-        field.typeText(feedURL)
-        let subscribeButton = app.buttons["Subscribe"].firstMatch
-        XCTAssertTrue(subscribeButton.waitForExistence(timeout: 5), "Subscribe button should exist")
-        subscribeButton.tap()
+        XCTAssertTrue(sheetShown, "Add by Feed URL sheet should present")
+        subscribeInAddByFeedURL(typing: feedURL, in: app)
+        app.buttons["Cancel"].firstMatch.tap()
         // Let the post-subscribe reload/hydration settle.
         sleep(8)
     }
@@ -673,7 +553,7 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
         for candidate in candidates {
             if candidate.waitForExistence(timeout: 3), candidate.isHittable {
                 candidate.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-                tapAddPodcastMenuItemIfPresented(in: app)
+                tapAddByFeedURLMenuItem(in: app)
                 return
             }
         }

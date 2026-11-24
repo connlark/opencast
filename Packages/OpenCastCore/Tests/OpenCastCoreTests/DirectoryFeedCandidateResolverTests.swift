@@ -158,6 +158,26 @@ struct DirectoryFeedCandidateResolverTests {
         #expect(resolved.candidate.feedURL == windowedURL)
     }
 
+    @Test("The redirect of a candidate the resolution does not offer is reported as read")
+    func reportsRedirectOfCandidateNotOffered() async throws {
+        let resolver = makeResolver(
+            [
+                windowedURL: makeSnapshot(feedURL: windowedURL, episodeCount: 120, newest: Self.newestEpisodeDate),
+                fullURL: makeSnapshot(feedURL: fullURL, episodeCount: 120, newest: Self.newestEpisodeDate),
+            ],
+            finalURLs: [fullURL: URL(string: "https://moved.example.com/full")!]
+        )
+
+        let resolution = try await resolver.resolve(candidates: serialShapedCandidates())
+
+        #expect(subscribedCase(from: resolution)?.candidate.feedURL == windowedURL)
+        #expect(resolution.readFeedURLs == [
+            "https://feeds.example.com/windowed",
+            "https://feeds.example.com/full",
+            "https://moved.example.com/full",
+        ])
+    }
+
     @Test("Only one working candidate subscribes directly")
     func singleWorkingCandidateSubscribesDirectly() async throws {
         let resolver = makeResolver([
@@ -246,14 +266,14 @@ struct DirectoryFeedCandidateResolverTests {
     }
 
     private func choiceCase(from resolution: DirectoryFeedResolution) -> DirectoryFeedChoice? {
-        if case .choice(let choice) = resolution {
+        if case .choice(let choice) = resolution.outcome {
             return choice
         }
         return nil
     }
 
     private func subscribedCase(from resolution: DirectoryFeedResolution) -> ResolvedFeedCandidate? {
-        if case .subscribe(let resolved) = resolution {
+        if case .subscribe(let resolved) = resolution.outcome {
             return resolved
         }
         return nil

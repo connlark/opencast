@@ -39,6 +39,7 @@ struct OpenCastLaunchConfiguration {
     var usesUITestSeedFeedRefreshService: Bool
     var salvagesUITestSeedFeedRefresh: Bool
     var uiTestFeedTransportFailure: URLError.Code?
+    var usesUITestDirectoryFixture: Bool
     var seededAnalysisKeyProviders: [AnalysisProvider]
     var seedsAnalysisKeysLocalOnly: Bool
     var uiTestAnalysisPolicy: AnalysisPolicySnapshot?
@@ -217,10 +218,13 @@ struct OpenCastLaunchConfiguration {
             ? OpenCastUITestFeedTransportFailureService.resolve(environment: environment)
             : nil
         #if DEBUG
+        let usesUITestDirectoryFixture = isUITesting
+            && environment[OpenCastUITestDirectoryService.environmentKey] == "1"
         let runsVoiceBoostDeviceProbe = shouldRunVoiceBoostDeviceProbe
         let capturesVoiceBoostDiagnostics = shouldCaptureVoiceBoostDiagnostics || runsVoiceBoostDeviceProbe
         let exposesVoiceBoostDiagnosticsStatus = isUITesting && capturesVoiceBoostDiagnostics
         #else
+        let usesUITestDirectoryFixture = false
         let runsVoiceBoostDeviceProbe = false
         let capturesVoiceBoostDiagnostics = isUITesting && shouldCaptureVoiceBoostDiagnostics
         let exposesVoiceBoostDiagnosticsStatus = isUITesting && capturesVoiceBoostDiagnostics
@@ -270,6 +274,7 @@ struct OpenCastLaunchConfiguration {
             usesUITestSeedFeedRefreshService: usesUITestSeedFeedRefreshService,
             salvagesUITestSeedFeedRefresh: salvagesUITestSeedFeedRefresh,
             uiTestFeedTransportFailure: uiTestFeedTransportFailure,
+            usesUITestDirectoryFixture: usesUITestDirectoryFixture,
             seededAnalysisKeyProviders: seededAnalysisKeyProviders,
             seedsAnalysisKeysLocalOnly: isUITesting && shouldSeedAnalysisKeysLocalOnly,
             uiTestAnalysisPolicy: isUITesting

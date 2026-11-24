@@ -371,8 +371,12 @@ final class LibraryStore {
         }
     }
 
-    func subscribe(prepared: PreparedFeed, modelContext: ModelContext) async throws {
-        let generation = writeGeneration.capture()
+    func captureWriteGeneration() -> Int {
+        writeGeneration.capture()
+    }
+
+    func subscribe(prepared: PreparedFeed, modelContext: ModelContext, generation: Int? = nil) async throws {
+        let generation = generation ?? writeGeneration.capture()
         state = .refreshing
         lastErrorMessage = nil
         do {

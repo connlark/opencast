@@ -311,6 +311,93 @@ struct LibraryStoreNukeRaceProbeTests {
         #expect(appModel.library.state == .idle)
     }
 
+    @Test("A quick add parked in its feed read across the nuke writes nothing")
+    func quickAddParkedInFeedReadAcrossNukeWritesNothing() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let feedService = ProbeFeedService(steps: [.hang])
+        let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
+            library: LibraryStore(feedService: feedService, localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            syncStatus: SyncStatusStore(accountStatusProvider: AvailableAccountStatusProvider()),
+            allowsAutomaticFeedRefresh: false
+        )
+        await appModel.library.load(modelContext: context)
+        let flow = DirectorySubscriptionFlowStore(
+            directoryService: NoLookupDirectoryService(),
+            resolver: DirectoryFeedCandidateResolver(feedService: feedService),
+            knownPodcasts: appModel.knownPodcasts
+        )
+
+        flow.subscribe(
+            to: DirectoryPodcastResult(id: 1, title: "Probe Show", feedURL: URL(string: Self.feedURL)),
+            library: appModel.library,
+            modelContext: context
+        )
+        #expect(await feedService.waitForHang())
+        try await appModel.nukeAllData(modelContext: context)
+        await feedService.release(Self.makeSnapshot(episodeID: "probe-episode-1"))
+        await flow.waitForCurrentSubscription()
+
+        #expect(try context.fetch(FetchDescriptor<SubscriptionRecord>()).isEmpty)
+        #expect(appModel.library.subscriptions.isEmpty)
+    }
+
+    @Test("A choice handed to a peek before the nuke writes nothing when subscribed after it")
+    func handedOffChoiceSubscribedAfterNukeWritesNothing() async throws {
+        let container = try OpenCastModelContainerFactory.make(inMemory: true)
+        let context = ModelContext(container)
+        let archive = Self.makeSnapshot(feedURL: Self.migratedFeedURL, episodeID: "probe-archive-1")
+        let feedService = SingleSnapshotStubFeedService(snapshotsByURL: [
+            Self.feedURL: Self.makeSnapshot(episodeID: "probe-episode-1"),
+            Self.migratedFeedURL: FeedSnapshot(
+                podcast: archive.podcast,
+                episodes: archive.episodes
+                    + Self.makeSnapshot(feedURL: Self.migratedFeedURL, episodeID: "probe-archive-2").episodes
+            ),
+        ])
+        let appModel = OpenCastAppModel(
+            appAttestSuspension: AppAttestSuspension(),
+            library: LibraryStore(feedService: feedService, localCache: SQLiteLocalLibraryCacheStore.inMemory()),
+            syncStatus: SyncStatusStore(accountStatusProvider: AvailableAccountStatusProvider()),
+            allowsAutomaticFeedRefresh: false
+        )
+        await appModel.library.load(modelContext: context)
+        let flow = DirectorySubscriptionFlowStore(
+            directoryService: NoLookupDirectoryService(),
+            resolver: DirectoryFeedCandidateResolver(feedService: feedService),
+            knownPodcasts: appModel.knownPodcasts
+        )
+        flow.subscribe(
+            to: DirectoryPodcastResult(
+                id: "probe",
+                title: "Probe Show",
+                sources: [.podcastIndex],
+                feedCandidates: [
+                    DirectoryFeedCandidate(source: .podcastIndex, feedURL: URL(string: Self.feedURL)!),
+                    DirectoryFeedCandidate(source: .podcastIndex, feedURL: URL(string: Self.migratedFeedURL)!),
+                ]
+            ),
+            library: appModel.library,
+            modelContext: context
+        )
+        await flow.waitForCurrentSubscription()
+        let request = try #require(flow.handOffChoice())
+        let peek = PodcastPreviewStore(
+            directoryService: NoLookupDirectoryService(),
+            resolver: DirectoryFeedCandidateResolver(feedService: feedService),
+            knownPodcasts: appModel.knownPodcasts
+        )
+        await peek.load(request)
+
+        try await appModel.nukeAllData(modelContext: context)
+        peek.subscribe(through: flow, library: appModel.library, modelContext: context)
+        await flow.waitForCurrentSubscription()
+
+        #expect(try context.fetch(FetchDescriptor<SubscriptionRecord>()).isEmpty)
+        #expect(appModel.library.subscriptions.isEmpty)
+    }
+
     // MARK: - Helpers
 
     private static func makeSnapshot(
@@ -350,6 +437,12 @@ private actor AvailableAccountStatusProvider: CloudKitAccountStatusProviding {
 
 private struct ProbeFeedError: Error {
     let message: String
+}
+
+private struct NoLookupDirectoryService: PodcastDirectoryService {
+    func search(query: String) async throws -> [DirectoryPodcastResult] {
+        []
+    }
 }
 
 private actor ProbeFeedService: FeedService {

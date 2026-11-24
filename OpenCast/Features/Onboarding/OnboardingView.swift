@@ -12,33 +12,34 @@ struct OnboardingView: View {
 
     @State private var selectedPage: OnboardingPage
     private let pages = OnboardingPage.allCases
-    @State private var selectedAddMode = AddPodcastMode.search
-    @State private var feedURLString: String
     @State private var searchStore: PodcastSearchStore
     @State private var subscriptionFlow: DirectorySubscriptionFlowStore
-    @State private var subscriptionErrorMessage: String?
-    @State private var subscribingFeedURLString: String?
-    @State private var clipboardErrorMessage: String?
+    @State private var sheetDestination: SheetDestination?
+    @State private var completionErrorMessage: String?
+    @State private var isFinishing = false
+    @State private var finishTask: Task<Void, Never>?
+    @State private var isSubscribingToFallback = false
     @State private var isSampleConfirmationPresented = false
     @State private var importedNotificationFeedbackToken = 0
     @State private var announcedImportedNotificationID: Int?
     @State private var isWhisperModelInstallToastPresented = false
     @State private var whisperModelInstallToastFeedbackToken = 0
-    @FocusState private var focusedField: OnboardingFocusedField?
+    @FocusState private var isSearchFieldFocused: Bool
 
     init(
         directoryService: any PodcastDirectoryService,
         directoryResolver: DirectoryFeedCandidateResolver = DirectoryFeedCandidateResolver(),
+        knownPodcasts: KnownPodcastsStore,
         onCompleted: @escaping () -> Void
     ) {
         self.onCompleted = onCompleted
         _selectedPage = State(initialValue: .welcome)
-        _feedURLString = State(initialValue: OpenCastConstants.addPodcastInitialFeedURL)
-        _searchStore = State(initialValue: PodcastSearchStore(directoryService: directoryService))
+        _searchStore = State(initialValue: PodcastSearchStore(directoryService: directoryService, knownPodcasts: knownPodcasts))
         _subscriptionFlow = State(
             initialValue: DirectorySubscriptionFlowStore(
                 directoryService: directoryService,
-                resolver: directoryResolver
+                resolver: directoryResolver,
+                knownPodcasts: knownPodcasts
             )
         )
     }
@@ -61,7 +62,8 @@ struct OnboardingView: View {
                 OnboardingControlsView(
                     page: selectedPage,
                     canGoBack: selectedPage.previous(in: pages) != nil,
-                    isPrimaryDisabled: isSubscribing && selectedPage == .podcastSetup,
+                    isPrimaryBusy: isFinishing && selectedPage == pages.last,
+                    addedShowCount: selectedPage == .podcastSetup ? appModel.library.activePodcastIDs.count : 0,
                     onBack: goBack,
                     onPrimary: performPrimaryAction
                 )
@@ -92,14 +94,10 @@ struct OnboardingView: View {
             .animation(.bouncy, value: appModel.importedSubscriptionsNotification?.id)
             .animation(.bouncy, value: isWhisperModelInstallToastPresented)
         }
-        .sheet(item: Bindable(subscriptionFlow).pendingChoice) { pending in
-            DirectoryFeedChoiceView(
-                pending: pending,
-                onSelect: { candidate in
-                    subscribeToChoice(candidate, pending: pending)
-                },
-                onCancel: subscriptionFlow.dismissChoice
-            )
+        .sheet(item: $sheetDestination) { destination in
+            // Glass would let the Continue button behind the peek show through beside Subscribe.
+            SheetDestinationView(destination: destination, onDismiss: dismissSheet)
+                .presentationBackground(.background)
         }
         .interactiveDismissDisabled(!appModel.onboardingState.isCompleted)
         .sensoryFeedback(.success, trigger: importedNotificationFeedbackToken)
@@ -113,6 +111,15 @@ struct OnboardingView: View {
 
             importedNotificationFeedbackToken += 1
             announceImportedNotification(notification, id: notificationID)
+        }
+        .onChange(of: selectedPage, handlePageChange)
+        .onChange(of: isSampleConfirmationPresented) { _, isPresented in
+            if !isPresented, !isSubscribingToFallback {
+                isFinishing = false
+            }
+        }
+        .onChange(of: subscriptionFlow.pendingChoice?.id) { _, _ in
+            presentHandedOffChoice()
         }
         .task(id: whisperModelInstallToastFeedbackToken) {
             await dismissWhisperModelInstallToastAfterDelay()
@@ -131,20 +138,14 @@ struct OnboardingView: View {
         case .podcastSetup:
             OnboardingPodcastSetupPage(
                 searchStore: searchStore,
-                selectedMode: $selectedAddMode,
-                feedURLString: $feedURLString,
-                focusedField: $focusedField,
+                addFlow: subscriptionFlow,
+                knownPodcasts: appModel.knownPodcasts,
                 subscriptions: appModel.library.subscriptions,
                 activePodcastIDs: appModel.library.activePodcastIDs,
-                isSubscribing: isSubscribing,
-                subscribingResultID: subscriptionFlow.subscribingResultID,
-                subscriptionErrorMessage: displayedSubscriptionErrorMessage,
-                clipboardErrorMessage: clipboardErrorMessage,
-                canSubscribeToRawFeed: canSubscribeToRawFeed,
-                onPaste: pasteFromClipboard,
-                onSubscribeRawFeed: subscribeToRawFeed,
-                onSubscribeSearchResult: subscribeToSearchResult,
-                onSubscribeSample: subscribeToSuggestion
+                isSearchFieldFocused: $isSearchFieldFocused,
+                onOpenResult: openResult,
+                onOpenFeed: openFeed,
+                onQuickAdd: quickAdd
             )
         case .transcriptionModelSetup:
             OnboardingTranscriptionModelSetupPage(
@@ -154,30 +155,14 @@ struct OnboardingView: View {
             )
         case .notificationSetup:
             OnboardingNotificationSetupPage(
-                completionErrorMessage: subscriptionErrorMessage
+                completionErrorMessage: completionErrorMessage
             )
         }
     }
 
-    private var isSubscribing: Bool {
-        subscribingFeedURLString != nil || subscriptionFlow.isSubscribing
-    }
-
-    private var displayedSubscriptionErrorMessage: String? {
-        subscriptionErrorMessage ?? subscriptionFlow.errorMessage
-    }
-
-    private var canSubscribeToRawFeed: Bool {
-        !trimmedFeedURLString.isEmpty
-    }
-
-    private var trimmedFeedURLString: String {
-        feedURLString.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     private func goBack() {
-        guard focusedField == nil else {
-            focusedField = nil
+        guard !isSearchFieldFocused else {
+            isSearchFieldFocused = false
             return
         }
 
@@ -191,8 +176,8 @@ struct OnboardingView: View {
     }
 
     private func performPrimaryAction() {
-        guard focusedField == nil else {
-            focusedField = nil
+        guard !isSearchFieldFocused else {
+            isSearchFieldFocused = false
             return
         }
 
@@ -207,53 +192,71 @@ struct OnboardingView: View {
     }
 
     private func finishOnboarding() {
-        guard !OnboardingCompletionService.needsSampleConfirmation(
-            activePodcastIDs: appModel.library.activePodcastIDs
-        ) else {
-            isSampleConfirmationPresented = true
+        guard !isFinishing else {
             return
         }
 
-        completeOnboarding()
+        isFinishing = true
+        finishTask = Task {
+            await finishAfterAddInFlight()
+        }
     }
 
-    private func completeOnboarding() {
+    private func finishAfterAddInFlight() async {
         do {
-            try OnboardingCompletionService.markCompleted(
+            let outcome = try await OnboardingCompletionService.finish(
+                after: subscriptionFlow,
+                library: appModel.library,
                 onboardingState: appModel.onboardingState,
                 modelContext: modelContext
             )
-            completeResolvedOnboarding()
+            switch outcome {
+            case .completed:
+                completeResolvedOnboarding()
+            case .needsSampleConfirmation:
+                isSampleConfirmationPresented = true
+            }
+        } catch is CancellationError {
         } catch {
-            subscriptionErrorMessage = error.localizedDescription
+            completionErrorMessage = error.localizedDescription
+            isFinishing = false
         }
     }
 
-    private func subscribeToSuggestion(_ result: DirectoryPodcastResult) {
-        subscribeToDirectoryResult(result)
+    private func cancelFinish() {
+        finishTask?.cancel()
+        finishTask = nil
+        if !isSubscribingToFallback {
+            isFinishing = false
+        }
     }
 
-    private func subscribeToRawFeed() {
-        guard canSubscribeToRawFeed, !isSubscribing else {
+    private func handlePageChange(from oldPage: OnboardingPage, to newPage: OnboardingPage) {
+        if oldPage == pages.last {
+            cancelFinish()
+        }
+        if oldPage == .podcastSetup {
+            subscriptionFlow.presenterDidDisappear(library: appModel.library, modelContext: modelContext)
+        }
+        if newPage == .podcastSetup {
+            subscriptionFlow.presenterDidAppear()
+        }
+    }
+
+    private func openResult(_ result: DirectoryPodcastResult) {
+        guard !subscriptionFlow.isBusy, result.canResolveFeed else {
             return
         }
 
-        clipboardErrorMessage = nil
-        Task {
-            await subscribe(to: trimmedFeedURLString)
-        }
+        present(PodcastPreviewRequest(subject: .result(result)))
     }
 
-    private func subscribeToSearchResult(_ result: DirectoryPodcastResult) {
-        subscribeToDirectoryResult(result)
+    private func openFeed(_ feedURL: URL) {
+        present(PodcastPreviewRequest(subject: .feedURL(feedURL)))
     }
 
-    private func subscribeToDirectoryResult(_ result: DirectoryPodcastResult) {
-        guard !isSubscribing else {
-            return
-        }
-
-        subscriptionErrorMessage = nil
+    private func quickAdd(_ result: DirectoryPodcastResult) {
+        isSearchFieldFocused = false
         subscriptionFlow.subscribe(
             to: result,
             library: appModel.library,
@@ -261,42 +264,24 @@ struct OnboardingView: View {
         )
     }
 
-    private func subscribeToChoice(
-        _ candidate: ResolvedFeedCandidate,
-        pending: DirectorySubscriptionFlowStore.PendingChoice
-    ) {
-        subscriptionFlow.subscribe(
-            candidate: candidate,
-            for: pending,
-            library: appModel.library,
-            modelContext: modelContext
-        )
-    }
-
-    private func pasteFromClipboard() {
-        guard let copiedFeedURLString = AddPodcastClipboardReader.feedURLStringFromClipboard() else {
-            clipboardErrorMessage = "Clipboard does not contain an HTTP podcast feed URL."
+    private func presentHandedOffChoice() {
+        guard selectedPage == .podcastSetup, let request = subscriptionFlow.handOffChoice() else {
             return
         }
 
-        feedURLString = copiedFeedURLString
-        clipboardErrorMessage = nil
+        present(request)
     }
 
-    private func subscribe(to feedURLString: String) async {
-        subscriptionErrorMessage = nil
-        subscriptionFlow.clearError()
-        subscribingFeedURLString = feedURLString
-        defer {
-            subscribingFeedURLString = nil
-        }
+    private func present(_ request: PodcastPreviewRequest) {
+        isSearchFieldFocused = false
+        sheetDestination = .podcastPreview(
+            request,
+            PodcastPreviewPresenter(addFlow: subscriptionFlow, onSubscribed: {}, afterSubscribe: .closesPeek)
+        )
+    }
 
-        do {
-            try await appModel.library.subscribe(to: feedURLString, modelContext: modelContext)
-        } catch is CancellationError {
-        } catch {
-            subscriptionErrorMessage = error.localizedDescription
-        }
+    private func dismissSheet() {
+        sheetDestination = nil
     }
 
     private func installTinyWhisperModel() {
@@ -345,20 +330,21 @@ struct OnboardingView: View {
     }
 
     private func subscribeToFallbackAndComplete() {
-        guard !isSubscribing else {
+        guard !isSubscribingToFallback else {
             return
         }
 
+        isSubscribingToFallback = true
+        isFinishing = true
         Task {
             await completeAfterFallbackSubscription()
         }
     }
 
     private func completeAfterFallbackSubscription() async {
-        subscriptionErrorMessage = nil
-        subscribingFeedURLString = OpenCastConstants.thisAmericanLifeFeedURL
+        completionErrorMessage = nil
         defer {
-            subscribingFeedURLString = nil
+            isSubscribingToFallback = false
         }
 
         do {
@@ -369,8 +355,10 @@ struct OnboardingView: View {
             )
             completeResolvedOnboarding()
         } catch is CancellationError {
+            isFinishing = false
         } catch {
-            subscriptionErrorMessage = error.localizedDescription
+            completionErrorMessage = error.localizedDescription
+            isFinishing = false
         }
     }
 
@@ -390,6 +378,7 @@ struct OnboardingView: View {
     }
 
     private func handleDisappear() {
+        finishTask?.cancel()
         searchStore.cancelSearch()
         subscriptionFlow.presenterDidDisappear(
             library: appModel.library,

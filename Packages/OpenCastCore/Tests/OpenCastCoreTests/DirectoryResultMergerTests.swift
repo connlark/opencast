@@ -10,6 +10,7 @@ struct DirectoryResultMergerTests {
             id: 917_918_570,
             title: "Serial",
             artistName: "Serial Productions",
+            genre: "News",
             feedURL: URL(string: "https://feeds.example.com/windowed"),
             artworkURL: URL(string: "https://images.example.com/serial-apple.jpg")
         )
@@ -42,6 +43,7 @@ struct DirectoryResultMergerTests {
         #expect(result.id == "apple:917918570")
         #expect(result.title == "Serial")
         #expect(result.artistName == "Serial Productions")
+        #expect(result.genre == "News")
         #expect(result.feedURL?.absoluteString == "https://feeds.example.com/windowed")
         #expect(result.artworkURL?.absoluteString == "https://images.example.com/serial-apple.jpg")
         #expect(result.collectionViewURL?.absoluteString == "https://serial.example.com")

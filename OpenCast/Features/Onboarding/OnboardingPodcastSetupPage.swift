@@ -3,86 +3,50 @@ import SwiftUI
 
 struct OnboardingPodcastSetupPage: View {
     @Bindable var searchStore: PodcastSearchStore
-    @Binding var selectedMode: AddPodcastMode
-    @Binding var feedURLString: String
 
-    let focusedField: FocusState<OnboardingFocusedField?>.Binding
+    let addFlow: DirectorySubscriptionFlowStore
+    let knownPodcasts: KnownPodcastsStore
     let subscriptions: [SubscriptionRecord]
     let activePodcastIDs: Set<String>
-    let isSubscribing: Bool
-    let subscribingResultID: String?
-    let subscriptionErrorMessage: String?
-    let clipboardErrorMessage: String?
-    let canSubscribeToRawFeed: Bool
-    let onPaste: () -> Void
-    let onSubscribeRawFeed: () -> Void
-    let onSubscribeSearchResult: (DirectoryPodcastResult) -> Void
-    let onSubscribeSample: (DirectoryPodcastResult) -> Void
+    let isSearchFieldFocused: FocusState<Bool>.Binding
+    let onOpenResult: (DirectoryPodcastResult) -> Void
+    let onOpenFeed: (URL) -> Void
+    let onQuickAdd: (DirectoryPodcastResult) -> Void
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Find Podcasts")
-                        .font(.largeTitle)
-                        .bold()
+                Text("Find Podcasts")
+                    .font(.largeTitle)
+                    .bold()
 
-                    Text(instructionText)
-                        .font(.body)
-                        .foregroundStyle(.secondary)
+                OnboardingPodcastSearchField(text: $searchStore.query, isFocused: isSearchFieldFocused)
+
+                if let failure = addFlow.failure {
+                    PodcastAddFailureRow(failure: failure, onDismiss: addFlow.clearError)
                 }
 
-                GlassEffectContainer(spacing: 18) {
-                    VStack(alignment: .leading, spacing: 18) {
-                        AddPodcastModePicker(selectedMode: $selectedMode)
-                            .padding(4)
-                            .glassEffect(.regular, in: .rect(cornerRadius: 22))
+                if searchStore.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if showsSuggestions {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Suggested Shows")
+                                .font(.headline)
+                                .accessibilityAddTraits(.isHeader)
 
-                        switch selectedMode {
-                        case .rss:
-                            OnboardingRSSFeedSection(
-                                feedURLString: $feedURLString,
-                                focusedField: focusedField,
-                                isSubscribing: isSubscribing,
-                                canSubscribe: canSubscribeToRawFeed,
-                                onPaste: onPaste,
-                                onSubscribe: onSubscribeRawFeed
-                            )
-                        case .search:
-                            OnboardingPodcastSearchSection(
-                                store: searchStore,
-                                focusedField: focusedField,
-                                activePodcastIDs: activePodcastIDs,
-                                isSubscribing: isSubscribing,
-                                subscribingResultID: subscribingResultID,
-                                onSubscribe: onSubscribeSearchResult
-                            )
+                            resultList(OpenCastSamplePodcastSuggestions.all)
                         }
-
-                        if subscriptions.isEmpty {
-                            OnboardingSamplePodcastsSection(
-                                activePodcastIDs: activePodcastIDs,
-                                isSubscribing: isSubscribing,
-                                subscribingResultID: subscribingResultID,
-                                onSubscribe: onSubscribeSample
-                            )
-                        } else {
-                            OnboardingSubscribedPodcastsSection(subscriptions: subscriptions)
-                        }
+                    } else {
+                        OnboardingSubscribedPodcastsSection(subscriptions: subscriptions)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                } else {
+                    if let feedURL = PodcastFeedURLDetector.openableFeedURL(from: searchStore.query) {
+                        PodcastOpenFeedRow(feedURL: feedURL) {
+                            onOpenFeed(feedURL)
+                        }
+                        .disabled(addFlow.isBusy)
+                    }
 
-                if let clipboardErrorMessage {
-                    Label(clipboardErrorMessage, systemImage: "doc.on.clipboard")
-                        .font(.subheadline)
-                        .foregroundStyle(.orange)
-                }
-
-                if let subscriptionErrorMessage {
-                    Label(subscriptionErrorMessage, systemImage: "exclamationmark.triangle")
-                        .font(.subheadline)
-                        .foregroundStyle(.red)
+                    searchContent
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -95,9 +59,51 @@ struct OnboardingPodcastSetupPage: View {
         .scrollContentBackground(.visible)
     }
 
-    private var instructionText: String {
-        subscriptions.isEmpty
-            ? "Search by name, paste an RSS feed URL, or start with a sample show."
-            : "Search by name, paste an RSS feed URL, or keep building from your imported library."
+    private var showsSuggestions: Bool {
+        let suggestionFeedURLs = OpenCastSamplePodcastSuggestions.all.reduce(into: Set<String>()) { urls, suggestion in
+            urls.formUnion(knownPodcasts.feedURLs(for: suggestion.knownPodcastKey))
+        }
+        return activePodcastIDs.isSubset(of: suggestionFeedURLs)
+    }
+
+    @ViewBuilder
+    private var searchContent: some View {
+        switch searchStore.state {
+        case .idle:
+            EmptyView()
+        case .error(let errorMessage):
+            Label(errorMessage, systemImage: "exclamationmark.triangle")
+                .font(.subheadline)
+                .foregroundStyle(.red)
+        case .loading:
+            HStack(spacing: 10) {
+                ProgressView()
+                Text("Searching")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.subheadline)
+        case .empty:
+            ContentUnavailableView(
+                "No Results",
+                systemImage: "magnifyingglass",
+                description: Text("Try another search.")
+            )
+        case .results(let results):
+            VStack(alignment: .leading, spacing: 8) {
+                resultList(results)
+                PodcastIndexAttributionFooter(results: results)
+            }
+        }
+    }
+
+    private func resultList(_ results: [DirectoryPodcastResult]) -> OnboardingPodcastResultList {
+        OnboardingPodcastResultList(
+            results: results,
+            addFlow: addFlow,
+            knownPodcasts: knownPodcasts,
+            activePodcastIDs: activePodcastIDs,
+            onOpen: onOpenResult,
+            onAdd: onQuickAdd
+        )
     }
 }

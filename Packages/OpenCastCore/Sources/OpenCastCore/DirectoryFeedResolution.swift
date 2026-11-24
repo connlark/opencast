@@ -44,9 +44,20 @@ public struct ResolvedFeedCandidate: Hashable, Sendable {
     }
 }
 
-public enum DirectoryFeedResolution: Sendable {
-    case subscribe(ResolvedFeedCandidate)
-    case choice(DirectoryFeedChoice)
+public struct DirectoryFeedResolution: Sendable {
+    public enum Outcome: Sendable {
+        case subscribe(ResolvedFeedCandidate)
+        case choice(DirectoryFeedChoice)
+    }
+
+    public let outcome: Outcome
+    /// Canonical requested and final URLs of every candidate read, offered or not.
+    public let readFeedURLs: Set<String>
+
+    public init(outcome: Outcome, readFeedURLs: Set<String>) {
+        self.outcome = outcome
+        self.readFeedURLs = readFeedURLs
+    }
 }
 
 public struct DirectoryFeedChoice: Hashable, Sendable {

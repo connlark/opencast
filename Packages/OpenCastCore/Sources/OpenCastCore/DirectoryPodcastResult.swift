@@ -5,6 +5,7 @@ public struct DirectoryPodcastResult: Codable, Hashable, Identifiable, Sendable 
     public var id: String
     public var title: String
     public var artistName: String?
+    public var genre: String?
     public var feedURL: URL?
     public var artworkURL: URL?
     public var collectionViewURL: URL?
@@ -20,6 +21,7 @@ public struct DirectoryPodcastResult: Codable, Hashable, Identifiable, Sendable 
         id: String,
         title: String,
         artistName: String? = nil,
+        genre: String? = nil,
         feedURL: URL? = nil,
         artworkURL: URL? = nil,
         collectionViewURL: URL? = nil,
@@ -32,6 +34,7 @@ public struct DirectoryPodcastResult: Codable, Hashable, Identifiable, Sendable 
         self.id = id
         self.title = title
         self.artistName = artistName
+        self.genre = genre
         self.feedURL = feedURL
         self.artworkURL = artworkURL
         self.collectionViewURL = collectionViewURL
@@ -46,6 +49,7 @@ public struct DirectoryPodcastResult: Codable, Hashable, Identifiable, Sendable 
         id: Int,
         title: String,
         artistName: String? = nil,
+        genre: String? = nil,
         feedURL: URL? = nil,
         artworkURL: URL? = nil,
         collectionViewURL: URL? = nil
@@ -54,6 +58,7 @@ public struct DirectoryPodcastResult: Codable, Hashable, Identifiable, Sendable 
             id: "apple:\(id)",
             title: title,
             artistName: artistName,
+            genre: genre,
             feedURL: feedURL,
             artworkURL: artworkURL,
             collectionViewURL: collectionViewURL,

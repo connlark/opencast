@@ -13,8 +13,12 @@ struct LibraryView: View {
     @State private var namePromptRequest: PlaylistNamePromptRequest?
     @State private var pendingOpenPlaylistID: String?
     @State private var notesCount: Int?
+    @State private var isChoosingOPMLFile = false
+    @State private var opmlFileErrorMessage: String?
 
-    let onAdd: () -> Void
+    let onSearchForPodcasts: () -> Void
+    let onAddByFeedURL: () -> Void
+    let onImportOPMLFile: (URL) -> Void
     let onOpenPlaylists: () -> Void
     let onOpenUpNext: () -> Void
     let onOpenPlaylist: (String) -> Void
@@ -70,7 +74,13 @@ struct LibraryView: View {
 
                 ToolbarItem(placement: .topBarPinnedTrailing) {
                     Menu {
-                        Button("Add Podcast", systemImage: "antenna.radiowaves.left.and.right", action: onAdd)
+                        Button("Search for Podcasts", systemImage: "magnifyingglass", action: onSearchForPodcasts)
+                            .accessibilityIdentifier("Search for Podcasts")
+                        Button("Add by Feed URL…", systemImage: "dot.radiowaves.up.forward", action: onAddByFeedURL)
+                            .accessibilityIdentifier("Add by Feed URL")
+                        Button("Import OPML File…", systemImage: "square.and.arrow.down", action: chooseOPMLFile)
+                            .accessibilityIdentifier("Import OPML File")
+                        Divider()
                         Button("New Playlist…", systemImage: "text.badge.plus", action: promptNewPlaylist)
                             .accessibilityIdentifier("New Playlist")
                     } label: {
@@ -79,6 +89,16 @@ struct LibraryView: View {
                 }
             }
             .playlistNamePrompt($namePromptRequest, onCommit: createPlaylist)
+            .fileImporter(
+                isPresented: $isChoosingOPMLFile,
+                allowedContentTypes: OPMLFileDocument.readableContentTypes,
+                allowsMultipleSelection: false,
+                onCompletion: importOPMLFile
+            )
+            .alert("Couldn’t Open the File", item: $opmlFileErrorMessage) { _ in
+            } message: { message in
+                Text(message)
+            }
             .onChange(of: namePromptRequest) {
                 openPendingPlaylistAfterPrompt()
             }
@@ -127,7 +147,7 @@ struct LibraryView: View {
                         syncActivity: appModel.syncStatus.libraryActivity,
                         isSubscribingSample: isSubscribingSample,
                         sampleSubscriptionErrorMessage: sampleSubscriptionErrorMessage,
-                        onAdd: onAdd,
+                        onSearchForPodcasts: onSearchForPodcasts,
                         onSubscribeSample: subscribeToSample
                     )
                 }
@@ -218,6 +238,21 @@ struct LibraryView: View {
         }
         // A count that fails to load still shows the row, without a number.
         notesCount = (try? EpisodeNoteStore.noteCount(in: modelContext)) ?? 0
+    }
+
+    private func chooseOPMLFile() {
+        isChoosingOPMLFile = true
+    }
+
+    private func importOPMLFile(_ result: Result<[URL], any Error>) {
+        switch result {
+        case .success(let urls):
+            if let url = urls.first {
+                onImportOPMLFile(url)
+            }
+        case .failure(let error):
+            opmlFileErrorMessage = error.localizedDescription
+        }
     }
 
     private func promptNewPlaylist() {

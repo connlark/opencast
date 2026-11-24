@@ -25,14 +25,11 @@ final class LargeFeedDeviceUITests: XCTestCase {
         let add = app.buttons["Add"].firstMatch
         XCTAssertTrue(add.waitForExistence(timeout: 15))
         add.tap()
-        tapAddPodcastMenuItemIfPresented(in: app)
-        let subscribe = app.buttons["Subscribe"]
-        XCTAssertTrue(subscribe.waitForExistence(timeout: 10))
-        subscribe.tap()
-        XCTAssertTrue(app.activityIndicators["Subscribing"].waitForExistence(timeout: 10))
-        let herd = app.staticTexts["The Herd with Colin Cowherd"].firstMatch
-        XCTAssertTrue(herd.waitForExistence(timeout: 360))
-        herd.tap()
+        tapAddByFeedURLMenuItem(in: app)
+        subscribeInAddByFeedURL(in: app, timeout: 360)
+        goToShowFromAddByFeedURL(in: app)
+        XCTAssertTrue(app.buttons["Podcast Actions"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["The Herd with Colin Cowherd"].firstMatch.exists)
         let count = app.staticTexts.matching(NSPredicate(format: "label MATCHES %@", "[0-9,]+ episodes.*")).firstMatch
         XCTAssertTrue(count.waitForExistence(timeout: 20))
         let value = count.label.components(separatedBy: " episodes")[0].replacingOccurrences(of: ",", with: "")

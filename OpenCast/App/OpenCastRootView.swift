@@ -52,7 +52,8 @@ struct OpenCastRootView: View {
                 selectedTab: $selectedTab,
                 navigationPaths: $navigationPaths,
                 upNextTabSwitch: appModel.appearanceSettings.showsUpNextTab,
-                onAdd: presentAddPodcast,
+                onAddByFeedURL: presentAddByFeedURL,
+                onImportOPMLFile: presentOPMLFileImport,
                 onOpenUpNext: presentUpNextQueue,
                 onPresentNowPlaying: presentNowPlaying
             )
@@ -177,8 +178,17 @@ struct OpenCastRootView: View {
         appModel.isNowPlayingPresented = true
     }
 
-    private func presentAddPodcast() {
-        sheetDestination = .addPodcast
+    private func presentAddByFeedURL() {
+        sheetDestination = .addByFeedURL(onGoToShow: openShowFromAddByFeedURL)
+    }
+
+    private func openShowFromAddByFeedURL(_ feedURL: String) {
+        sheetDestination = nil
+        openRouteInLibrary(.podcastDetail(feedURL: feedURL))
+    }
+
+    private func presentOPMLFileImport(_ url: URL) {
+        sheetDestination = .importOPMLFile(url)
     }
 
     private func presentUpNextQueue() {
@@ -749,7 +759,7 @@ struct OpenCastRootView: View {
             return
         }
 
-        sheetDestination = .importOPMLFile(url)
+        presentOPMLFileImport(url)
     }
 
     private func runVoiceBoostDeviceProbeIfActive() async {
