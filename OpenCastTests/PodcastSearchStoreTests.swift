@@ -99,6 +99,73 @@ struct PodcastSearchStoreTests {
         #expect(await directoryService.requestedSearchQueries() == ["old", "new"])
     }
 
+    @Test("The previous answer stays published while the next query is under way")
+    func previousAnswerStaysPublishedWhileTheNextQueryIsUnderWay() async {
+        let oldResult = DirectoryPodcastResult(id: 1, title: "Old Show", feedURL: URL(string: "https://example.com/old.xml"))
+        let newResult = DirectoryPodcastResult(id: 2, title: "New Show", feedURL: URL(string: "https://example.com/new.xml"))
+        let newAnswer = AsyncTestGate()
+        let directoryService = StubPodcastDirectoryService(responses: [
+            "old": .success([oldResult]),
+            "new": .gated([newResult], newAnswer)
+        ])
+        let store = PodcastSearchStore(directoryService: directoryService, knownPodcasts: KnownPodcastsStore(), debounceDuration: .zero)
+
+        store.query = "old"
+        await store.waitForCurrentSearch()
+        store.query = "new"
+        await directoryService.waitForRequestCount(2)
+
+        #expect(store.state == .results([oldResult]))
+
+        await newAnswer.release()
+        await store.waitForCurrentSearch()
+
+        #expect(store.state == .results([newResult]))
+    }
+
+    @Test("Retrying a failed search runs the query again and publishes its answer")
+    func retryAfterFailedSearchPublishesTheNewAnswer() async {
+        let result = DirectoryPodcastResult(id: 1, title: "Retried Show", feedURL: URL(string: "https://example.com/retried.xml"))
+        let directoryService = StubPodcastDirectoryService(responseSequences: [
+            "flaky": [.failure("Directory unavailable"), .success([result])]
+        ])
+        let store = PodcastSearchStore(directoryService: directoryService, knownPodcasts: KnownPodcastsStore(), debounceDuration: .zero)
+
+        store.query = "flaky"
+        await store.waitForCurrentSearch()
+        store.retrySearch()
+        await store.waitForCurrentSearch()
+
+        #expect(store.state == .results([result]))
+        #expect(await directoryService.requestedSearchQueries() == ["flaky", "flaky"])
+    }
+
+    @Test("A search interrupted before its answer runs again when its surface comes back")
+    func interruptedSearchRunsAgainWhenResumed() async {
+        let jazz = DirectoryPodcastResult(id: 1, title: "Jazz Show", feedURL: URL(string: "https://example.com/jazz.xml"))
+        let piano = DirectoryPodcastResult(id: 2, title: "Jazz Piano Show", feedURL: URL(string: "https://example.com/piano.xml"))
+        let directoryService = StubPodcastDirectoryService(responseSequences: [
+            "jazz": [.success([jazz])],
+            "jazz piano": [.delayedSuccess([piano], duration: .seconds(60)), .success([piano])]
+        ])
+        let store = PodcastSearchStore(directoryService: directoryService, knownPodcasts: KnownPodcastsStore(), debounceDuration: .zero)
+
+        store.query = "jazz"
+        await store.waitForCurrentSearch()
+        store.query = "jazz piano"
+        await directoryService.waitForRequestCount(2)
+        store.cancelSearch()
+
+        #expect(store.answeredQuery == "jazz")
+
+        store.resumeInterruptedSearch()
+        await store.waitForCurrentSearch()
+
+        #expect(store.state == .results([piano]))
+        #expect(store.answeredQuery == "jazz piano")
+        #expect(await directoryService.requestedSearchQueries() == ["jazz", "jazz piano", "jazz piano"])
+    }
+
     @Test("Service error surfaces in search state")
     func serviceErrorSurfacesInSearchState() async {
         let directoryService = StubPodcastDirectoryService(responses: [
@@ -118,6 +185,7 @@ private actor StubPodcastDirectoryService: PodcastDirectoryService {
         case success([DirectoryPodcastResult])
         case failure(String)
         case delayedSuccess([DirectoryPodcastResult], duration: Duration)
+        case gated([DirectoryPodcastResult], AsyncTestGate)
     }
 
     private var responsesByQuery: [String: [Response]]
@@ -126,6 +194,10 @@ private actor StubPodcastDirectoryService: PodcastDirectoryService {
 
     init(responses: [String: Response]) {
         responsesByQuery = responses.mapValues { [$0] }
+    }
+
+    init(responseSequences: [String: [Response]]) {
+        responsesByQuery = responseSequences
     }
 
     func search(query: String) async throws -> [DirectoryPodcastResult] {
@@ -148,6 +220,9 @@ private actor StubPodcastDirectoryService: PodcastDirectoryService {
             throw StubDirectoryError(message: message)
         case .delayedSuccess(let results, let duration):
             try await Task.sleep(for: duration)
+            return results
+        case .gated(let results, let gate):
+            await gate.wait()
             return results
         }
     }

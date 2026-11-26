@@ -7,7 +7,6 @@ struct PodcastPreviewSheet: View {
     @Environment(\.modelContext) private var modelContext
 
     @State private var store: PodcastPreviewStore
-    @State private var detent = PresentationDetent.medium
     @State private var loadAttempt = 0
 
     let request: PodcastPreviewRequest
@@ -46,13 +45,12 @@ struct PodcastPreviewSheet: View {
             sample: store.displayedFeed?.sampleEpisode,
             subscribeFailureMessage: failure?.addID == request.id ? failure?.message : nil,
             isInLibrary: isInLibrary,
-            isExpanded: detent == .large,
             onClose: onClose,
             onRetry: retry,
             onSubscribe: subscribe,
             onGoToShow: goToShow
         )
-        .presentationDetents([.medium, .large], selection: $detent)
+        .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .task(id: loadAttempt) {
             await store.load(request)

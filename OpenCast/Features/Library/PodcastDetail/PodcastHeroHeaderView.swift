@@ -1,3 +1,4 @@
+import OpenCastCore
 import SwiftUI
 
 struct PodcastHeroHeaderView: View {
@@ -55,7 +56,7 @@ struct PodcastHeroHeaderView: View {
                 notificationHealth: notificationHealth
             )
 
-            PodcastDescriptionView(summaryHTML: podcast?.summary)
+            PodcastDescriptionView(summary: podcast?.summary.map(HTMLPlainText.collapsedText(from:)) ?? "")
 
             if let primaryAction {
                 PodcastPrimaryActionButton(action: primaryAction, onPlay: onPlay)

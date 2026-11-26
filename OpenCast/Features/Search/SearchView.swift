@@ -5,11 +5,15 @@ import SwiftUI
 struct SearchView: View {
     @Environment(OpenCastAppModel.self) private var appModel
     @Environment(\.modelContext) private var modelContext
+    @Environment(SceneLibraryLayouts.self) private var sceneLayouts: SceneLibraryLayouts?
 
     @Binding var scope: SearchScope
     @Binding var isSearchPresented: Bool
 
     @State private var query = ""
+    // The field's own state, synced with the tab root's: bound straight to that
+    // state, the X dismissal drops the list about 130 pt, then snaps it back.
+    @State private var isFieldPresented = false
     @State private var searchSession = EpisodeSearchSession()
     @State private var searchStore: PodcastSearchStore
     @State private var subscriptionFlow: DirectorySubscriptionFlowStore
@@ -120,16 +124,19 @@ struct SearchView: View {
                         activePodcastIDs: appModel.library.activePodcastIDs,
                         onPreview: preview,
                         onQuickAdd: quickAdd,
-                        onOpenPodcast: openPodcast
+                        onOpenPodcast: openPodcastFromResults
                     )
                 }
             }
         }
         .scrollDismissesKeyboard(.immediately)
         .navigationTitle("Search")
+        // On a foldable, SwiftUI focuses the toolbar field again just after its
+        // X dismisses it; a field in the navigation bar drawer stays dismissed.
         .searchable(
             text: $query,
-            isPresented: $isSearchPresented,
+            isPresented: $isFieldPresented,
+            placement: sceneLayouts?.isFoldable == true ? .navigationBarDrawer : .automatic,
             prompt: "Podcasts and Episodes"
         )
         .textInputAutocapitalization(.never)
@@ -151,6 +158,12 @@ struct SearchView: View {
         }
         .onChange(of: scope) { _, _ in
             synchronizeDirectorySearch()
+        }
+        .onChange(of: isSearchPresented, initial: true) { _, isPresented in
+            isFieldPresented = isPresented
+        }
+        .onChange(of: isFieldPresented) { _, isPresented in
+            isSearchPresented = isPresented
         }
         .onChange(of: subscriptionFlow.pendingChoice?.id) { _, _ in
             presentHandedOffChoice()
@@ -175,12 +188,21 @@ struct SearchView: View {
                 showNotesProvider: { await library.showNotesHTMLByEpisodeID() }
             )
         }
-        .onAppear(perform: subscriptionFlow.presenterDidAppear)
+        .onAppear(perform: handleAppear)
         .onDisappear(perform: handleDisappear)
     }
 
     private var typedFeedURL: URL? {
         PodcastFeedURLDetector.openableFeedURL(from: query)
+    }
+
+    private var resultsQuery: String {
+        searchStore.answeredQuery ?? query
+    }
+
+    private func handleAppear() {
+        searchStore.resumeInterruptedSearch()
+        subscriptionFlow.presenterDidAppear()
     }
 
     private func handleDisappear() {
@@ -199,7 +221,11 @@ struct SearchView: View {
     }
 
     private func recordRecentSearch() {
-        appModel.recentSearches.record(query, modelContext: modelContext)
+        recordRecentSearch(query)
+    }
+
+    private func recordRecentSearch(_ searchQuery: String) {
+        appModel.recentSearches.record(searchQuery, modelContext: modelContext)
     }
 
     private func handleResultSelection() {
@@ -209,7 +235,7 @@ struct SearchView: View {
 
     private func runRecentQuery(_ recentQuery: String) {
         query = recentQuery
-        appModel.recentSearches.record(recentQuery, modelContext: modelContext)
+        recordRecentSearch(recentQuery)
     }
 
     private func clearRecentSearches() {
@@ -221,9 +247,16 @@ struct SearchView: View {
         onOpenPodcast(feedURLString)
     }
 
+    private func openPodcastFromResults(_ feedURLString: String) {
+        recordRecentSearch(resultsQuery)
+        KeyboardDismissal.dismiss()
+        onOpenPodcast(feedURLString)
+    }
+
     private func preview(_ result: DirectoryPodcastResult) {
         KeyboardDismissal.dismiss()
-        present(PodcastPreviewRequest(subject: .result(result)))
+        let searchQuery = resultsQuery
+        present(PodcastPreviewRequest(subject: .result(result)), onSubscribed: { recordRecentSearch(searchQuery) })
     }
 
     private func openFeed(_ feedURL: URL) {
@@ -235,7 +268,7 @@ struct SearchView: View {
             openPodcast(libraryFeedURL)
         } else {
             KeyboardDismissal.dismiss()
-            present(request)
+            present(request, onSubscribed: recordRecentSearch)
         }
     }
 
@@ -243,15 +276,15 @@ struct SearchView: View {
         guard let request = subscriptionFlow.handOffChoice() else {
             return
         }
-        present(request)
+        present(request, onSubscribed: recordRecentSearch)
     }
 
-    private func present(_ request: PodcastPreviewRequest) {
+    private func present(_ request: PodcastPreviewRequest, onSubscribed: @escaping () -> Void) {
         sheetDestination = .podcastPreview(
             request,
             PodcastPreviewPresenter(
                 addFlow: subscriptionFlow,
-                onSubscribed: recordRecentSearch,
+                onSubscribed: onSubscribed,
                 afterSubscribe: .offersGoToShow(goToShow)
             )
         )
@@ -259,11 +292,12 @@ struct SearchView: View {
 
     private func quickAdd(_ result: DirectoryPodcastResult) {
         KeyboardDismissal.dismiss()
+        let searchQuery = resultsQuery
         subscriptionFlow.subscribe(
             to: result,
             library: appModel.library,
             modelContext: modelContext,
-            onSubscribed: recordRecentSearch
+            onSubscribed: { recordRecentSearch(searchQuery) }
         )
     }
 

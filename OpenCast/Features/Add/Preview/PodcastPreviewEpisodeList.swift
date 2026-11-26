@@ -2,11 +2,10 @@ import OpenCastCore
 import SwiftUI
 
 struct PodcastPreviewEpisodeList: View {
-    let episodes: [Episode]
-    let isExpanded: Bool
+    let episodes: ArraySlice<FeedDigest.EpisodeLine>
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(episodes) { episode in
                 VStack(alignment: .leading, spacing: 0) {
                     Divider()
@@ -14,7 +13,7 @@ struct PodcastPreviewEpisodeList: View {
                         Text(episode.title)
                             .font(.subheadline)
                             .bold()
-                            .lineLimit(isExpanded ? 2 : 1)
+                            .lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
                         Text(PodcastPreviewText.episodeCaption(episode))
                             .font(.caption)

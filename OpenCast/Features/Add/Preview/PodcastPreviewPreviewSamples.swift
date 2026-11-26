@@ -8,9 +8,9 @@ enum PodcastPreviewPreviewSamples {
         state: PodcastPreviewStore.State,
         action: PodcastPreviewActionBar.Action? = nil,
         isInLibrary: Bool = false,
-        isExpanded: Bool = false
+        detent: PresentationDetent = .medium
     ) -> some View {
-        PodcastPreviewSampleSheetHost(detent: isExpanded ? .large : .medium) {
+        PodcastPreviewSampleSheetHost(detent: detent) {
             results([
                 (theSignal, isInLibrary && header.title == theSignal.title ? .justAdded : .addable),
                 (signalAndNoise, .inLibrary),
@@ -23,7 +23,6 @@ enum PodcastPreviewPreviewSamples {
                 selectedFeedID: .constant(nil),
                 action: action,
                 isInLibrary: isInLibrary,
-                isExpanded: isExpanded,
                 onClose: {},
                 onRetry: {},
                 onSubscribe: {},
@@ -99,7 +98,10 @@ enum PodcastPreviewPreviewSamples {
             )
         )
         let digest = FeedDigest(
-            newestEpisodes: newest,
+            episodes: (newest + older).map {
+                FeedDigest.EpisodeLine(id: $0.id, title: $0.title, publishedAt: $0.publishedAt, duration: $0.duration)
+            },
+            newestEpisode: newest.first,
             newestPublishedAt: newest.first?.publishedAt,
             oldestPublishedAt: oldest,
             monthlyEpisodeCounts: monthly,

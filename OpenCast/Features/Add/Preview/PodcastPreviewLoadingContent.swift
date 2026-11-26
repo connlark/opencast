@@ -7,13 +7,7 @@ struct PodcastPreviewLoadingContent: View {
         "A shorter placeholder title",
         "Another placeholder episode title here",
     ].enumerated().map { index, title in
-        Episode(
-            id: EpisodeID(rawValue: "placeholder-\(index)"),
-            podcastID: PodcastID(rawValue: "placeholder"),
-            podcastTitle: "",
-            title: title,
-            duration: 1_440
-        )
+        FeedDigest.EpisodeLine(id: EpisodeID(rawValue: "placeholder-\(index)"), title: title, duration: 1_440)
     }
 
     var body: some View {
@@ -40,7 +34,7 @@ struct PodcastPreviewLoadingContent: View {
                     .redacted(reason: .placeholder)
             }
 
-            PodcastPreviewEpisodeList(episodes: Self.placeholderEpisodes, isExpanded: false)
+            PodcastPreviewEpisodeList(episodes: Self.placeholderEpisodes[...])
                 .redacted(reason: .placeholder)
         }
         .accessibilityElement(children: .ignore)

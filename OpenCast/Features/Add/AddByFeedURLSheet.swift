@@ -78,8 +78,7 @@ struct AddByFeedURLSheet: View {
                                 state: state,
                                 selectedFeedID: $previewStore.selectedFeedID,
                                 isInLibrary: isInLibrary,
-                                isExpanded: false,
-                                onClose: nil,
+                                listsEveryEpisode: false,
                                 onRetry: retry
                             )
                         }

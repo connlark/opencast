@@ -18,14 +18,15 @@ struct SearchDiscoverResultsSection: View {
             Section {
                 Label(errorMessage, systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.red)
+                Button("Try Again", systemImage: "arrow.clockwise", action: searchStore.retrySearch)
             }
         case .loading:
             Section {
-                HStack {
-                    ProgressView()
-                    Text("Searching")
-                        .foregroundStyle(.secondary)
-                }
+                ProgressView()
+                    .accessibilityLabel("Searching")
+                    .frame(maxWidth: .infinity)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
             }
         case .empty:
             Section {
@@ -53,8 +54,6 @@ struct SearchDiscoverResultsSection: View {
                     )
                     .disabled(subscriptionFlow.isBusy && status != .adding)
                 }
-            } header: {
-                Text("Results")
             } footer: {
                 PodcastIndexAttributionFooter(results: results)
             }

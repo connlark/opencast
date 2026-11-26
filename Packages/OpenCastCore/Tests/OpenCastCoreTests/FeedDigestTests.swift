@@ -9,17 +9,19 @@ struct FeedDigestTests {
         return calendar
     }()
 
-    @Test("The newest episodes are the newest by date, ties and then undated ones in feed order", arguments: [
+    @Test("Episodes run newest first by date, ties and then undated ones in feed order", arguments: [
         ([("A", "2026-09-01T09:00:00-07:00"), ("X", nil), ("B", "2026-10-01T09:00:00-07:00"), ("Y", nil),
-          ("C", "2026-11-01T09:00:00-08:00"), ("Z", nil)], 5, ["C", "B", "A", "X", "Y"], "2026-09-01T09:00:00-07:00"),
+          ("C", "2026-11-01T09:00:00-08:00"), ("Z", nil)], ["C", "B", "A", "X", "Y", "Z"], "C", "2026-09-01T09:00:00-07:00"),
         ([("A", "2026-11-01T09:00:00-08:00"), ("B", "2026-11-01T09:00:00-08:00"), ("C", "2026-10-01T09:00:00-07:00")],
-         1, ["A"], "2026-10-01T09:00:00-07:00")
-    ] as [([(String, String?)], Int, [String], String)])
-    func newestEpisodes(feed: [(String, String?)], limit: Int, titles: [String], oldest: String) async throws {
+         ["A", "B", "C"], "A", "2026-10-01T09:00:00-07:00"),
+        ([("X", nil), ("Y", nil)], ["X", "Y"], "X", nil)
+    ] as [([(String, String?)], [String], String, String?)])
+    func episodes(feed: [(String, String?)], titles: [String], newest: String, oldest: String?) async throws {
         let episodes = try feed.map { title, published in (title, try published.map(date)) }
-        let digest = try await digest(episodes, newest: limit, asOf: date("2026-11-23T12:00:00-08:00"))
-        #expect(digest.newestEpisodes.map(\.title) == titles)
-        #expect(try digest.oldestPublishedAt == date(oldest))
+        let digest = try await digest(episodes, asOf: date("2026-11-23T12:00:00-08:00"))
+        #expect(digest.episodes.map(\.title) == titles)
+        #expect(digest.newestEpisode?.title == newest)
+        #expect(try digest.oldestPublishedAt == oldest.map(date))
     }
 
     @Test("Monthly counts cover the caller's twelve calendar months across a year boundary")
@@ -74,7 +76,7 @@ struct FeedDigestTests {
         return try await digest(episodes, asOf: reference)
     }
 
-    private func digest(_ items: [(String, Date?)], newest: Int = 0, asOf reference: Date) async throws -> FeedDigest {
+    private func digest(_ items: [(String, Date?)], asOf reference: Date) async throws -> FeedDigest {
         let podcastID = PodcastID(rawValue: "https://example.com/feed.xml")
         let episodes = items.map { title, date in
             Episode(id: EpisodeID(rawValue: title), podcastID: podcastID, podcastTitle: "Show", title: title,
@@ -82,7 +84,7 @@ struct FeedDigestTests {
         }
         let feed = try PreparedFeed(snapshot: FeedSnapshot(
             podcast: Podcast(id: podcastID, feedURL: URL(string: podcastID.rawValue)!, title: "Show"), episodes: episodes))
-        return try await feed.digest(newest: newest, asOf: reference, timeZone: calendar.timeZone)
+        return try await feed.digest(asOf: reference, timeZone: calendar.timeZone)
     }
 
     private func date(_ iso8601: String) throws -> Date {

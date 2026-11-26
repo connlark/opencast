@@ -35,7 +35,7 @@ enum PodcastPreviewText {
         return feeds.reason == .fullerFeedStale ? "\(archive), no longer updating" : archive
     }
 
-    static func episodeCaption(_ episode: Episode) -> String {
+    static func episodeCaption(_ episode: FeedDigest.EpisodeLine) -> String {
         let age = episode.publishedAt.map { PodcastPreviewAge(of: $0).episodeText }
         let duration = episode.duration
             .flatMap { Int64(exactly: $0.rounded()) }

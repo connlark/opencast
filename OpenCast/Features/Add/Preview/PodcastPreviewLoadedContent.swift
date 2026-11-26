@@ -4,7 +4,7 @@ struct PodcastPreviewLoadedContent: View {
     let feeds: PodcastPreviewFeeds
     @Binding var selectedFeedID: String?
     let isInLibrary: Bool
-    let isExpanded: Bool
+    let listsEveryEpisode: Bool
 
     var body: some View {
         let feed = feeds.feed(id: selectedFeedID)
@@ -12,17 +12,16 @@ struct PodcastPreviewLoadedContent: View {
         VStack(alignment: .leading, spacing: 8) {
             PodcastPreviewRhythmRow(feeds: feeds, selectedFeedID: $selectedFeedID, isInLibrary: isInLibrary)
             if !feed.description.isEmpty {
-                Text(feed.description)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(isExpanded ? nil : 3)
-                    .fixedSize(horizontal: false, vertical: true)
+                PodcastDescriptionView(summary: feed.description)
+                    .id(feed.id)
             }
         }
 
-        PodcastPreviewEpisodeList(
-            episodes: Array(feed.digest.newestEpisodes.prefix(isExpanded ? PodcastPreviewFeed.newestEpisodeLimit : 3)),
-            isExpanded: isExpanded
-        )
+        if listsEveryEpisode {
+            PodcastPreviewPagedEpisodeList(episodes: feed.digest.episodes)
+                .id(feed.id)
+        } else {
+            PodcastPreviewEpisodeList(episodes: feed.digest.episodes.prefix(3))
+        }
     }
 }

@@ -2,8 +2,6 @@ import Foundation
 import OpenCastCore
 
 struct PodcastPreviewFeed: Identifiable {
-    static let newestEpisodeLimit = 8
-
     let candidate: ResolvedFeedCandidate
     let digest: FeedDigest
     let description: String
@@ -23,7 +21,7 @@ struct PodcastPreviewFeed: Identifiable {
     }
 
     var sampleEpisode: Episode? {
-        guard let newest = digest.newestEpisodes.first,
+        guard let newest = digest.newestEpisode,
               let scheme = newest.audioURL?.scheme?.lowercased(),
               scheme == "http" || scheme == "https",
               newest.audioURL?.host()?.isEmpty == false
@@ -34,11 +32,7 @@ struct PodcastPreviewFeed: Identifiable {
     }
 
     static func read(_ candidate: ResolvedFeedCandidate) async throws -> PodcastPreviewFeed {
-        let digest = try await candidate.preparedFeed().digest(
-            newest: newestEpisodeLimit,
-            asOf: .now,
-            timeZone: .current
-        )
+        let digest = try await candidate.preparedFeed().digest(asOf: .now, timeZone: .current)
         return PodcastPreviewFeed(candidate: candidate, digest: digest)
     }
 }

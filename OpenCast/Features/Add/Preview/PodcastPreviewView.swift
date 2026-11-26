@@ -9,30 +9,52 @@ struct PodcastPreviewView: View {
     var sample: Episode?
     var subscribeFailureMessage: String?
     let isInLibrary: Bool
-    let isExpanded: Bool
     let onClose: () -> Void
     let onRetry: () -> Void
     let onSubscribe: () -> Void
     let onGoToShow: () -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                PodcastPreviewContent(
-                    header: header,
-                    state: state,
-                    selectedFeedID: $selectedFeedID,
-                    isInLibrary: isInLibrary,
-                    isExpanded: isExpanded,
-                    onClose: onClose,
-                    onRetry: onRetry
-                )
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    PodcastPreviewContent(
+                        header: header,
+                        state: state,
+                        selectedFeedID: $selectedFeedID,
+                        isInLibrary: isInLibrary,
+                        listsEveryEpisode: true,
+                        onRetry: onRetry
+                    )
+                }
+                .padding(.horizontal, 22)
+                .padding(.top, 6)
             }
-            .padding(.horizontal, 22)
-            .padding(.top, 20)
-        }
-        .scrollBounceBehavior(.basedOnSize)
-        .safeAreaBar(edge: .bottom) {
+            .scrollBounceBehavior(.basedOnSize)
+            .safeAreaBar(edge: .top) {
+                Button("Close", systemImage: "xmark", role: .close, action: onClose)
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .controlSize(.large)
+                    .accessibilityIdentifier("Podcast Preview Close")
+                    .padding(.top, 20)
+                    .padding(.trailing, 22)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            // The automatic style draws no edge effect under a sheet's top bar.
+            .scrollEdgeEffectStyle(.soft, for: .top)
+            .mask {
+                VStack(spacing: 0) {
+                    Rectangle()
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 20)
+                }
+                .ignoresSafeArea()
+            }
+
+            // Under the page, not on a bottom bar: rows scrolled under a bar show
+            // through behind the buttons, whatever the edge style.
             if action != nil || sample != nil {
                 PodcastPreviewActionBar(
                     action: action,
@@ -41,8 +63,12 @@ struct PodcastPreviewView: View {
                     onSubscribe: onSubscribe,
                     onGoToShow: onGoToShow
                 )
+                .padding(.top, 12)
             }
         }
+        // On the glass sheet the standard styles render vibrant, and the swap to the
+        // opaque large sheet changes their brightness in one frame.
+        .environment(\.backgroundMaterial, nil)
     }
 }
 
@@ -54,8 +80,8 @@ struct PodcastPreviewView: View {
     PodcastPreviewPreviewSamples.sheet(header: .signalPath, state: .loaded(.signalPath), action: .subscribe)
 }
 
-#Preview("Expanded") {
-    PodcastPreviewPreviewSamples.sheet(header: .signal, state: .loaded(.signal), action: .subscribe, isExpanded: true)
+#Preview("Large") {
+    PodcastPreviewPreviewSamples.sheet(header: .signal, state: .loaded(.signal), action: .subscribe, detent: .large)
 }
 
 #Preview("Two feeds") {

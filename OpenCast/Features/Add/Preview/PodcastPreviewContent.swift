@@ -5,14 +5,13 @@ struct PodcastPreviewContent: View {
     let state: PodcastPreviewStore.State
     @Binding var selectedFeedID: String?
     let isInLibrary: Bool
-    let isExpanded: Bool
-    let onClose: (() -> Void)?
+    let listsEveryEpisode: Bool
     let onRetry: () -> Void
 
     var body: some View {
         let showsFacts = header.title != nil || !isFailed
-        if showsFacts || onClose != nil {
-            PodcastPreviewHeaderView(header: header, showsFacts: showsFacts, isInLibrary: isInLibrary, onClose: onClose)
+        if showsFacts {
+            PodcastPreviewHeaderView(header: header, isInLibrary: isInLibrary)
         }
 
         switch state {
@@ -23,7 +22,7 @@ struct PodcastPreviewContent: View {
                 feeds: feeds,
                 selectedFeedID: $selectedFeedID,
                 isInLibrary: isInLibrary,
-                isExpanded: isExpanded
+                listsEveryEpisode: listsEveryEpisode
             )
         case .failed(let failure):
             PodcastPreviewFailureView(failure: failure, onRetry: onRetry)

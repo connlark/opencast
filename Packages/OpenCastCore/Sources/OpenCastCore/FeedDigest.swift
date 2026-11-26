@@ -1,7 +1,24 @@
 import Foundation
 
 public struct FeedDigest: Hashable, Sendable {
-    public var newestEpisodes: [Episode]
+    public struct EpisodeLine: Hashable, Identifiable, Sendable {
+        public var id: EpisodeID
+        public var title: String
+        public var publishedAt: Date?
+        public var duration: TimeInterval?
+
+        public init(id: EpisodeID, title: String, publishedAt: Date? = nil, duration: TimeInterval? = nil) {
+            self.id = id
+            self.title = title
+            self.publishedAt = publishedAt
+            self.duration = duration
+        }
+    }
+
+    /// Newest first by publish date, then the undated ones; equal dates keep feed order.
+    public var episodes: [EpisodeLine]
+    /// The first of `episodes`, whole.
+    public var newestEpisode: Episode?
     public var newestPublishedAt: Date?
     public var oldestPublishedAt: Date?
     /// Twelve Gregorian months, oldest first, ending with the reference date's month.
@@ -10,14 +27,16 @@ public struct FeedDigest: Hashable, Sendable {
     public var isStopped: Bool
 
     public init(
-        newestEpisodes: [Episode],
+        episodes: [EpisodeLine],
+        newestEpisode: Episode?,
         newestPublishedAt: Date?,
         oldestPublishedAt: Date?,
         monthlyEpisodeCounts: [Int],
         cadence: FeedCadence?,
         isStopped: Bool
     ) {
-        self.newestEpisodes = newestEpisodes
+        self.episodes = episodes
+        self.newestEpisode = newestEpisode
         self.newestPublishedAt = newestPublishedAt
         self.oldestPublishedAt = oldestPublishedAt
         self.monthlyEpisodeCounts = monthlyEpisodeCounts
@@ -28,7 +47,7 @@ public struct FeedDigest: Hashable, Sendable {
 
 extension PreparedFeed {
     @concurrent
-    public func digest(newest limit: Int, asOf referenceDate: Date, timeZone: TimeZone) async throws -> FeedDigest {
+    public func digest(asOf referenceDate: Date, timeZone: TimeZone) async throws -> FeedDigest {
         var gregorian = Calendar(identifier: .gregorian)
         gregorian.timeZone = timeZone
         // Counted from the day's labels: `ordinality(of: .day, in: .era)` ignores the time zone, and
@@ -45,29 +64,31 @@ extension PreparedFeed {
         let referenceMonth = monthNumber(referenceDate)
         var monthlyCounts = Array(repeating: 0, count: 12)
         var releaseDays: Set<Int> = []
-        var dated: [(date: Date, episode: Episode)] = []
-        var undated: [Episode] = []
+        var lines: [FeedDigest.EpisodeLine] = []
+        lines.reserveCapacity(episodes.count)
+        var newest: Episode?
         var oldest: Date?
         try episodes.forEachBatch { batch in
             for episode in batch {
-                guard let date = episode.publishedAt else {
-                    if dated.count + undated.count < limit { undated.append(episode) }
-                    continue
+                lines.append(FeedDigest.EpisodeLine(
+                    id: episode.id,
+                    title: episode.title,
+                    publishedAt: episode.publishedAt,
+                    duration: episode.duration
+                ))
+                if newest == nil || (episode.publishedAt ?? .distantPast) > (newest?.publishedAt ?? .distantPast) {
+                    newest = episode
                 }
+                guard let date = episode.publishedAt else { continue }
                 oldest = min(oldest ?? date, date)
                 let bar = 11 - referenceMonth + monthNumber(date)
                 if monthlyCounts.indices.contains(bar) {
                     monthlyCounts[bar] += 1
                     releaseDays.insert(dayNumber(date))
                 }
-                let rank = dated.firstIndex { $0.date < date } ?? dated.count
-                guard rank < limit else { continue }
-                dated.insert((date, episode), at: rank)
-                if dated.count + undated.count > limit {
-                    if undated.isEmpty { dated.removeLast() } else { undated.removeLast() }
-                }
             }
         }
+        lines.sort { ($0.publishedAt ?? .distantPast) > ($1.publishedAt ?? .distantPast) }
 
         let days = releaseDays.sorted()
         let gaps = zip(days, days.dropFirst()).map { $1 - $0 }
@@ -75,7 +96,8 @@ extension PreparedFeed {
         let medianGap = sortedGaps.isEmpty ? nil : sortedGaps[(sortedGaps.count - 1) / 2]
         let silence = episodes.newestPublishedAt.map { dayNumber(referenceDate) - dayNumber($0) }
         return FeedDigest(
-            newestEpisodes: dated.map(\.episode) + undated,
+            episodes: lines,
+            newestEpisode: newest,
             newestPublishedAt: episodes.newestPublishedAt,
             oldestPublishedAt: oldest,
             monthlyEpisodeCounts: monthlyCounts,
