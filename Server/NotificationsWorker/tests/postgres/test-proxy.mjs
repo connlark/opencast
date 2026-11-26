@@ -498,7 +498,7 @@ const polling=fileURLToPath(new URL('../../../FeedPollingWorker/',import.meta.ur
 const packaged=(dir,entry)=>[{type:'ESModule',path:dir+entry},{type:'ESModule',path:dir+'adapter/index.js'},{type:'ESModule',path:dir+'build/index.js'},{type:'CompiledWasm',path:dir+'build/index_bg.wasm'}];
 await test('entries: arming forwarded by PROXY_NAMES, state answers fall back, counters fill the traces',async()=>{
  const workers=[
-  {name:'entry-polling',modulesRoot:polling,modules:packaged(polling,'tests/entry.mjs'),compatibilityDate:'2026-09-30',compatibilityFlags:['enable_request_signal'],
+  {name:'entry-polling',modulesRoot:polling,modules:packaged(polling,'tests/entry.mjs'),compatibilityDate:'2026-11-16',compatibilityFlags:['enable_request_signal'],
    r2Buckets:{FEED_SNAPSHOTS:'entries'},queueProducers:{POLL_QUEUE:'entries-poll'},bindings:{NOTIFICATION_ENVIRONMENT:'development',TEST_REAL_QUEUE:'false'}},
   {name:'entry-observation',modulesRoot:root,modules:packaged(root,'tests/observation-entry.mjs'),compatibilityDate,compatibilityFlags,r2Buckets:{FEED_SNAPSHOTS:'entries'},bindings:{NOTIFICATION_ENVIRONMENT:'development'}},
   {name:'entry-delivery',modulesRoot:root,modules:packaged(root,'tests/delivery-entry.mjs'),compatibilityDate,compatibilityFlags,bindings:{NOTIFICATION_ENVIRONMENT:'development'}},
@@ -556,7 +556,7 @@ await test('a Worker declaring d1Databases is refused at bind, before Miniflare 
 const TOKEN=randomBytes(16).toString('hex');
 const fixtureMf=new Miniflare(convertV4MiniflareOptions({cf:false,inspectorPort:0,workers:[storage.bind({name:'fixture',modulesRoot:FIXTURE_BUILD,
  modules:[{type:'ESModule',path:FIXTURE_BUILD+'/index.js'},{type:'CompiledWasm',path:FIXTURE_BUILD+'/index_bg.wasm'}],
- compatibilityDate:'2026-09-30',compatibilityFlags:['enable_request_signal'],bindings:{SLICE_TOKEN:TOKEN}},{hooks:'polling'})]}));
+ compatibilityDate:'2026-11-16',compatibilityFlags:['enable_request_signal'],bindings:{SLICE_TOKEN:TOKEN}},{hooks:'polling'})]}));
 const fixture=storage.testStorage('fixture'),fixtureAlias=proxy.alias(storage.alias('fixture'));
 // RecordPollStat (A13) through Server/NotificationsWorker/src/database/fixture.rs
 // with no deadline_in_ms:

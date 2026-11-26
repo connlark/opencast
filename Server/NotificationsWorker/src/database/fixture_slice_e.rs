@@ -127,7 +127,9 @@ async fn collect_event(env: &worker::Env, event: serde_json::Value) -> worker::R
     init.with_method(worker::Method::Post)
         .with_body(Some(wasm_bindgen::JsValue::from_str(&event.to_string())));
     let request = worker::Request::new_with_init("https://fixture.invalid/gc-event", &init)?;
-    let mut response = env.service("GC_DIAG")?.fetch_request(request).await?;
+    let mut response = crate::service_binding::service(env, "GC_DIAG")?
+        .fetch_request(request)
+        .await?;
     if response.status_code() != 200 {
         return Err(worker::Error::RustError(response.text().await?));
     }

@@ -473,9 +473,13 @@ export default class extends Worker {
 //      counted from the arming, reject without reaching the binding (as the
 //      platform's invocation limit would refuse them); each is a witness
 //      `refuse_events` record. An empty body disarms.
+//  /test/service-stub on  NOTIFICATION_EVENTS answers `constructor` with a
+//      class named ServiceStub, as the edge's service bindings do, and still
+//      fetches through the binding. An empty body disarms.
 function fixtureHooks({ totals, now, fault, setFault, hang }) {
   const witness = totals.hooks = { batches: [], retries: [], r2: [], service: [], outbound: [] };
-  let retryDelay = 1, refuse = null;
+  let retryDelay = 1, refuse = null, serviceStub = false;
+  class ServiceStub {}
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   const scoped = (name, key) => {
     const value = fault(), m = typeof value === 'string' && typeof key === 'string' && (name === 'slow_get' ? /^slow_get:(\d+):(.+)$/ : /^hang_get:(.+)$/).exec(value);
@@ -499,7 +503,7 @@ function fixtureHooks({ totals, now, fault, setFault, hang }) {
     instrument(env) {
       const events = env.NOTIFICATION_EVENTS;
       if (events) env.NOTIFICATION_EVENTS = new Proxy(events, { get(target, key) {
-        if (key === 'constructor') return target.constructor;
+        if (key === 'constructor') return serviceStub ? ServiceStub : target.constructor;
         if (key === 'fetch') return async (...args) => {
           if (refuse) {
             const k = ++refuse.seen;
@@ -549,6 +553,10 @@ function fixtureHooks({ totals, now, fault, setFault, hang }) {
         const text = await request.text(); const body = text ? JSON.parse(text) : null;
         refuse = body ? { from: body.from, count: body.count, seen: 0 } : null;
         return Response.json({ refuse });
+      }
+      if (path === '/test/service-stub') {
+        serviceStub = (await request.text()) === 'on';
+        return Response.json({ service_stub: serviceStub });
       }
       if (path !== '/test/retry-delay') return undefined;
       const text = (await request.text()).trim(), seconds = Number(text);

@@ -4,7 +4,10 @@ let version=1;
 const h=await harness(()=>new Response(rss([item('base',h.now-100),...(version>1?[item('future',h.now+3600)]:[])]),{headers:{etag:`"v${version}"`}}));
 try{
   const feed=await h.add('https://future.example.com/feed');
-  await h.invoke('test/dispatch');await h.drain();
+  await h.invoke('test/service-stub','on');
+  const tick=await h.instance.dispatchFetch('http://localhost/cdn-cgi/local/scheduled?cron='+encodeURIComponent('* * * * *'));
+  assert.equal(tick.status,200,await tick.text());await h.drain();
+  console.log('PASS the one-minute cron dispatches with a NOTIFICATION_EVENTS whose constructor is ServiceStub');
   version=2;await h.run('UPDATE n_feed SET due_at=?',h.now);await h.invoke('test/dispatch');await h.drain();
   assert.equal((await h.first("SELECT COUNT(*) AS n FROM n_episode_release WHERE state='pending_future'")).n,1);
   // The publisher is backing off and not due. Maintenance is admitted from

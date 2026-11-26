@@ -119,7 +119,7 @@ async function main(argv) {
     const configPath = join(configDirectory, "wrangler.json");
     writeFileSync(configPath, JSON.stringify({
       name: "analysis-policy-publisher",
-      compatibility_date: "2026-09-30",
+      compatibility_date: "2026-11-16",
       r2_buckets: [{ binding: "BUCKET", bucket_name: bucketName, remote: true }],
     }));
     const { getPlatformProxy } = await import("wrangler");

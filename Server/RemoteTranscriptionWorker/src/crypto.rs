@@ -90,6 +90,16 @@ mod tests {
     }
 
     #[test]
+    fn decrypts_an_envelope_sealed_by_an_earlier_build() {
+        let key = resolve_key(None, true).expect("dev fallback key");
+        let sealed = "BwcHBwcHBwcHBwcHe5Wz5LZ8WRFEifSuPP7M9tWxT1Oq+RDy4n7h/6wx3pUpQgdcN2U+EbPpR1I0bsUFkUer5va2Bg==";
+        assert_eq!(
+            decrypt_string(sealed, &key).expect("decrypts"),
+            "https://example.com/feed.mp3?tok=s3cret"
+        );
+    }
+
+    #[test]
     fn key_resolution_fails_closed_outside_development() {
         assert_eq!(resolve_key(None, false), Err(CryptoError::InvalidKey));
         assert!(resolve_key(Some("zz"), false).is_err());

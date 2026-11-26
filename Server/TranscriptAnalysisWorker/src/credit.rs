@@ -485,8 +485,7 @@ struct PurchaseErrorBody {
 
 impl PurchaseAuthority {
     pub fn from_env(env: &Env) -> Result<Self, CreditError> {
-        let fetcher = env
-            .service(PURCHASE_WORKER_BINDING)
+        let fetcher = crate::service_binding::service(env, PURCHASE_WORKER_BINDING)
             .map_err(|_| CreditError::Internal("PURCHASE_WORKER binding missing".to_string()))?;
         Ok(Self { fetcher })
     }

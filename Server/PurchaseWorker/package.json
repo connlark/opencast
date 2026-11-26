@@ -21,10 +21,8 @@
   "devDependencies": {
     "@cloudflare/vitest-plugin": "catalog:",
     "@cloudflare/workers-types": "catalog:",
-    "@vitest/runner": "catalog:",
-    "@vitest/snapshot": "catalog:",
     "jsonwebtoken": "catalog:",
-    "typescript": "^5.6.0",
+    "typescript": "catalog:",
     "vitest": "catalog:",
     "wrangler": "catalog:"
   }

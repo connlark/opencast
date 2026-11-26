@@ -12,11 +12,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "postal-mime": "4.0.2"
+    "postal-mime": "4.2.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:",
-    "typescript": "^5.9.3",
+    "typescript": "catalog:",
     "vitest": "catalog:",
     "wrangler": "catalog:"
   }

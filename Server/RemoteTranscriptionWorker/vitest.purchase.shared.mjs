@@ -115,7 +115,7 @@ export async function makePurchaseConfig({ include, extraBindings = {} }) {
             {
               name: "opencast-purchase",
               modules: [purchaseWorkerModule()],
-              compatibilityDate: "2026-09-30",
+              compatibilityDate: "2026-11-16",
               compatibilityFlags: ["nodejs_compat"],
               d1Databases: { PURCHASE_DB: PURCHASE_TEST_DB_ID },
               durableObjects: {

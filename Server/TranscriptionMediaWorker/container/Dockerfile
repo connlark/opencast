@@ -1,16 +1,16 @@
 # Pinned base image: the linux/amd64 manifest of
-# docker.io/library/python:3.12-alpine (resolved 2026-08-04), used for both
+# docker.io/library/python:3.12-alpine, used for both
 # stages. Cloudflare Containers run amd64 only, and pinning a platform
 # manifest (not the multi-arch list) means a mis-targeted build fails instead
 # of silently packing arm64 binaries under an amd64 label. Build with
 # --platform=linux/amd64.
 #
 # ffmpeg/ffprobe are compiled in the build stage from the pinned, GPG-verified
-# ffmpeg 9.0 release tarball with everything disabled except the exact
+# ffmpeg release tarball with everything disabled except the exact
 # components media_server.py invokes. SBOM.md records the configure line and
 # the security-update tracking note: upstream ffmpeg releases are now OURS to
 # watch — there are no distro backports here.
-FROM docker.io/library/python:3.12-alpine@sha256:aa679aa4eed6eb56c1dc6ad3f1b98b7d2d788fd961596779d188fdedad97fb38 AS build
+FROM docker.io/library/python:3.12-alpine@sha256:a61cbd76a882645de7f91423329fe43a67eed60d7da24f9e5331414bb3618b20 AS build
 
 RUN apk add --no-cache build-base nasm tar xz
 
@@ -30,14 +30,12 @@ RUN echo "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e  /tmp
     && make -j"$(nproc)" \
     && make install
 
-# ffmpeg 9.0 "Lei" (released 2026-08-03, from ffmpeg.org/releases/).
-# Signature verified 2026-08-04 against the FFmpeg release signing key
-# FCF986EA15E6E293A5644F10B4322F04D67658D8 (detached signature vendored
-# alongside as vendor/ffmpeg-9.0.tar.xz.asc for re-verification); the sha256
-# below pins that exact verified tarball.
-COPY vendor/ffmpeg-9.0.tar.xz /tmp/ffmpeg-9.0.tar.xz
-RUN echo "7f607a00dd0d28a729d5a4811205812eef01cf6ef6155025febb6f36a9062d52  /tmp/ffmpeg-9.0.tar.xz" | sha256sum -c - \
-    && tar -xJf /tmp/ffmpeg-9.0.tar.xz -C /tmp
+# The sha256 pins the tarball whose detached signature (vendored beside it)
+# verifies against the FFmpeg release signing key
+# FCF986EA15E6E293A5644F10B4322F04D67658D8.
+COPY vendor/ffmpeg-9.0.2.tar.xz /tmp/ffmpeg-9.0.2.tar.xz
+RUN echo "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e  /tmp/ffmpeg-9.0.2.tar.xz" | sha256sum -c - \
+    && tar -xJf /tmp/ffmpeg-9.0.2.tar.xz -C /tmp
 
 # Minimal configure: start from --disable-everything and enable ONLY what
 # media_server.py runs — mp3 demux/mux/parse/decode, libmp3lame encode, the
@@ -47,7 +45,7 @@ RUN echo "7f607a00dd0d28a729d5a4811205812eef01cf6ef6155025febb6f36a9062d52  /tmp
 # off: no network, no autodetected external libs, no other codecs or
 # protocols, no ffplay/avdevice/swscale. This list must stay derived from
 # media_server.py; SBOM.md carries the canonical copy of the configure line.
-RUN cd /tmp/ffmpeg-9.0 \
+RUN cd /tmp/ffmpeg-9.0.2 \
     && ./configure \
         --prefix=/opt/ffmpeg \
         --disable-everything \
@@ -74,7 +72,7 @@ RUN cd /tmp/ffmpeg-9.0 \
     && make install \
     && strip /opt/ffmpeg/bin/ffmpeg /opt/ffmpeg/bin/ffprobe
 
-FROM docker.io/library/python:3.12-alpine@sha256:aa679aa4eed6eb56c1dc6ad3f1b98b7d2d788fd961596779d188fdedad97fb38
+FROM docker.io/library/python:3.12-alpine@sha256:a61cbd76a882645de7f91423329fe43a67eed60d7da24f9e5331414bb3618b20
 
 COPY --from=build /opt/ffmpeg/bin/ffmpeg /opt/ffmpeg/bin/ffprobe /usr/local/bin/
 COPY media_server.py /srv/media_server.py

@@ -16,6 +16,8 @@ pub mod origin;
 pub mod repair_budget;
 pub mod result_validation;
 pub mod route;
+#[cfg(target_arch = "wasm32")]
+mod service_binding;
 pub mod sigv4;
 pub mod stitch;
 #[cfg(any(target_arch = "wasm32", test))]

@@ -1,8 +1,6 @@
-// @cloudflare/vite-plugin pins wrangler, miniflare and workerd exactly, and
-// @cloudflare/vitest-plugin pins wrangler and miniflare exactly. Those must be
-// the versions the root catalog installs, or the tree grows a second workerd
-// and the compatibility-date ceiling splits (docs/build.md). Bump both plugins
-// and the catalog together.
+// Both plugins pin wrangler and miniflare exactly, and wrangler pins workerd:
+// each must be what the catalog installs, or a second workerd splits the
+// compatibility-date ceiling (docs/build.md). Bump them together.
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,11 +36,17 @@ describe("vitest plugin toolchain pins", () => {
 describe("vite plugin toolchain pins", () => {
   const plugin = manifest("@cloudflare/vite-plugin");
 
-  it.each(["wrangler", "miniflare", "workerd"])("pins the installed %s", (name) => {
+  it.each(["wrangler", "miniflare"])("pins the installed %s", (name) => {
     expect(plugin.dependencies[name]).toBe(manifest(name).version);
   });
 
   it("is the version the workspace declares", () => {
     expect(JSON.parse(readFileSync(path.join(workerDir, "package.json"), "utf8")).devDependencies["@cloudflare/vite-plugin"]).toBe(plugin.version);
+  });
+});
+
+describe("wrangler toolchain pins", () => {
+  it("pins the installed workerd", () => {
+    expect(manifest("wrangler").dependencies.workerd).toBe(manifest("workerd").version);
   });
 });

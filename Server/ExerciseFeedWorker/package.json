@@ -10,8 +10,6 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "catalog:",
-    "@vitest/runner": "catalog:",
-    "@vitest/snapshot": "catalog:",
     "vitest": "catalog:",
     "wrangler": "catalog:"
   }

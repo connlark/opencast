@@ -171,7 +171,7 @@ export async function parseMail(raw: ArrayBuffer | Uint8Array | string, envelope
 }
 
 // The oversized and failed-parse path: everything comes from the top-level
-// headers Email Routing already decoded, and there is no body.
+// headers, and there is no body.
 export function summarizeHeaders(headers: Headers, envelopeFrom?: string): MailSummary {
   const get = (name: string) => headers.get(name);
   const decode = (value: string | null) => {
@@ -184,7 +184,9 @@ export function summarizeHeaders(headers: Headers, envelopeFrom?: string): MailS
   };
   let from = { name: "", address: "" };
   try {
-    from = mailbox(addressParser(decode(get("from")))[0]);
+    // The parser takes the header undecoded and decodes the display name
+    // itself: decoded first, an encoded name can supply the mailbox.
+    from = mailbox(addressParser(get("from") ?? "")[0]);
   } catch {
     // An unparseable From leaves the sender blank; the push falls back to
     // the envelope sender below.

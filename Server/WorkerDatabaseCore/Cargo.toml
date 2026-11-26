@@ -2,7 +2,7 @@
 name = "opencast-worker-database-core"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.99"
+rust-version = "1.100"
 publish = false
 
 [features]

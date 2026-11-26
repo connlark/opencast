@@ -3315,9 +3315,7 @@ impl TranscriptionJob {
         path: &str,
         body: String,
     ) -> std::result::Result<(u16, Vec<u8>), AdAnalysisCallFailure> {
-        let service = self
-            .env
-            .service(ad_analysis::AD_ANALYSIS_BINDING)
+        let service = crate::service_binding::service(&self.env, ad_analysis::AD_ANALYSIS_BINDING)
             .map_err(|_| AdAnalysisCallFailure::BindingMissing)?;
         let request = internal_post(
             &format!("{}{path}", ad_analysis::AD_ANALYSIS_INTERNAL_ORIGIN),
@@ -4280,7 +4278,7 @@ impl TranscriptionJob {
     /// Best-effort container wake (A3). Errors are logged and ignored: the
     /// staging path already tolerates cold starts with retryable backoff.
     async fn media_wake(&self) {
-        let Ok(service) = self.env.service(MEDIA_BINDING) else {
+        let Ok(service) = crate::service_binding::service(&self.env, MEDIA_BINDING) else {
             return;
         };
         let Ok(request) = internal_post(
@@ -4299,9 +4297,7 @@ impl TranscriptionJob {
         path: &str,
         body: &T,
     ) -> std::result::Result<R, media::MediaCallFailure> {
-        let service = self
-            .env
-            .service(MEDIA_BINDING)
+        let service = crate::service_binding::service(&self.env, MEDIA_BINDING)
             .map_err(|_| media::MediaCallFailure::Fatal(types::ERROR_INTERNAL))?;
         let headers = Headers::new();
         headers.set("content-type", JSON_CONTENT_TYPE).ok();

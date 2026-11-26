@@ -2,7 +2,7 @@
 name = "opencast-app-attest-core"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.91"
+rust-version = "1.100"
 publish = false
 
 [dependencies]

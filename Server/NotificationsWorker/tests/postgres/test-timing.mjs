@@ -473,7 +473,7 @@ const TOKEN=randomBytes(16).toString('hex');
 const ENTRY=readFileSync(new URL('./fixture-entry.mjs',import.meta.url));
 const fixtureMf=new Miniflare(convertV4MiniflareOptions({cf:false,inspectorPort:0,workers:[storage.bind({name:'fixture',modulesRoot:FIXTURE_BUILD,
  modules:[{type:'ESModule',path:FIXTURE_BUILD+'/fixture-entry.mjs',contents:ENTRY},{type:'ESModule',path:FIXTURE_BUILD+'/index.js'},{type:'CompiledWasm',path:FIXTURE_BUILD+'/index_bg.wasm'}],
- compatibilityDate:'2026-09-30',compatibilityFlags:['enable_request_signal'],bindings:{SLICE_TOKEN:TOKEN}})]}));
+ compatibilityDate:'2026-11-16',compatibilityFlags:['enable_request_signal'],bindings:{SLICE_TOKEN:TOKEN}})]}));
 const fixture=storage.testStorage('fixture');
 const redeliveries=async t=>(await owner.query('SELECT redeliveries FROM n_poll_stat WHERE bucket=$1',[Math.floor(t/3600)])).rows[0]?.redeliveries??0;
 const bodyOf=text=>{try{return JSON.parse(text);}catch{return text;}};

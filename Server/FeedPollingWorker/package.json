@@ -9,6 +9,7 @@
     "typecheck": "cargo check --locked --target wasm32-unknown-unknown"
   },
   "devDependencies": {
+    "miniflare": "catalog:",
     "wrangler": "catalog:"
   }
 }

@@ -125,7 +125,7 @@ pub async fn deliver(
         ("apns-collapse-id", string(&row, "collapse_id").to_owned()),
         ("apns-id", string(&row, "apns_id").to_owned()),
     ]);
-    let fetcher = match env.service("APNS_CERT") {
+    let fetcher = match crate::service_binding::service(env, "APNS_CERT") {
         Ok(f) => f,
         Err(_) => {
             pause(db, "binding_missing").await?;
@@ -366,7 +366,7 @@ pub(crate) async fn diagnostic(
     token_hash: &str,
     request: apns::PushRequest,
 ) -> Result<Option<Outcome>> {
-    let fetcher = match env.service("APNS_CERT") {
+    let fetcher = match crate::service_binding::service(env, "APNS_CERT") {
         Ok(f) => f,
         Err(_) => {
             pause(db, "binding_missing").await?;

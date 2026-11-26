@@ -72,10 +72,10 @@ const clone = async () => {
   clones.push(name);
   return { name, ...await run(['sql', 'postgres'], { input: `CREATE DATABASE ${name} TEMPLATE opencast_template OWNER ${owner};` }) };
 };
-const INDEX = 'sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336';
-// The 18.6 index's children for the two platforms a contributor or runner runs.
-const CHILD = { 'linux/arm64': 'sha256:a63b24165ea0eacced7585766d790ac08bbaefe10a1841f87783a4505d29a69c',
-  'linux/amd64': 'sha256:885953109528ad3dfc90362b1a6f50a78620b5315be19f187753d267e484dc5b' };
+const INDEX = 'sha256:e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61';
+// The 18.7 index's children for the two platforms a contributor or runner runs.
+const CHILD = { 'linux/arm64': 'sha256:c8ef910c2dda25b4e3aeeb11c915caf6cfcf94ab2e3dc4c45f2f8fdb221ef606',
+  'linux/amd64': 'sha256:12060a1464f232e4f8c721538b342687c6f17cead32a389586cd683262b1d848' };
 // The container CLI the script selects (OPENCAST_CONTAINER_RUNTIME, else podman,
 // else docker on PATH), read from the script, as an absolute path.
 const selectedRuntime = async (env = {}) => {
@@ -83,21 +83,24 @@ const selectedRuntime = async (env = {}) => {
   assert.equal(r.code, 0, r.stderr);
   return execFileSync('/bin/sh', ['-c', 'command -v "$1"', 'sh', r.stdout.trim()], { encoding: 'utf8', env: withEnv(env) }).trim();
 };
-// What the container runs, read through the runtime without the script and
-// reduced by the marker's rule: Podman records the container's own digest;
-// Docker has none, so the image's RepoDigests less the index must leave one child.
+// What the container runs, read through the runtime without the script. Podman
+// records the index itself after a pull by the index digest; then, and for
+// Docker, the image's RepoDigests less the index must leave one child.
 const runtimeDigest = (cli, env = {}) => {
   const kind = basename(cli), environment = withEnv(env), name = environment.OPENCAST_PG_CONTAINER ?? 'opencast-postgres-local';
   assert.ok(['podman', 'docker'].includes(kind), `a podman or docker CLI, not ${cli}`);
   const inspect = (...args) => execFileSync(cli, args, { encoding: 'utf8', env: environment }).trim();
-  if (kind === 'podman') return inspect('container', 'inspect', '--format', '{{.ImageDigest}}', name);
+  if (kind === 'podman') {
+    const own = inspect('container', 'inspect', '--format', '{{.ImageDigest}}', name);
+    if (own !== INDEX) return own;
+  }
   const listed = JSON.parse(inspect('image', 'inspect', '--format', '{{json .RepoDigests}}',
     inspect('container', 'inspect', '--format', '{{.Image}}', name))) ?? [];
   const children = [...new Set(listed.map(r => r.slice(r.lastIndexOf('@') + 1)))].filter(d => /^sha256:[0-9a-f]{64}$/.test(d) && d !== INDEX);
-  assert.equal(children.length, 1, `docker RepoDigests less the index must name one child, not ${JSON.stringify(listed)}`);
+  assert.equal(children.length, 1, `${kind} RepoDigests less the index must name one child, not ${JSON.stringify(listed)}`);
   return children[0];
 };
-// The marker against the runtime's own answer, and for the 18.6 index the child
+// The marker against the runtime's own answer, and for the 18.7 index the child
 // of the marker's platform.
 const provenanceAgrees = (marker, cli, env = {}) => {
   assert.equal(marker.image_resolved, runtimeDigest(cli, env), 'the digest this test reads through the runtime');
@@ -229,8 +232,8 @@ try {
     for (const [role, expected] of Object.entries(timeouts)) {
       const values = await sql(fresh, shows.map(s => `SHOW ${s};`).join('\n'), role);
       serverVersion = values.pop();
-      assert.match(serverVersion, /^18\.6( |$)/, role);
-      assert.deepEqual(values, ['opencast, pg_catalog', ...expected, 'read committed', '4MB', 'scram-sha-256', '180006'], role);
+      assert.match(serverVersion, /^18\.7( |$)/, role);
+      assert.deepEqual(values, ['opencast, pg_catalog', ...expected, 'read committed', '4MB', 'scram-sha-256', '180007'], role);
     }
     assert.deepEqual(await sql('postgres', `SELECT datname, datcollate, datctype, datlocprovider, pg_encoding_to_char(encoding) FROM pg_database
       WHERE datname IN ('opencast_template', '${fresh}') ORDER BY datname = 'opencast_template';`),
@@ -505,7 +508,7 @@ async function runtimeStubs(marker, real) {
         const created = await stub(kind, live(kind, { exists: false, running: false }), ['up']);
         assert.equal(created.code, 0, created.stderr);
         assert.ok(created.ops.includes('run') && created.ops.includes('port'), created.ops.join(','));
-        assert.match(created.stderr, new RegExp(`creating ${container} from docker\\.io/library/postgres@sha256:74935e72`));
+        assert.match(created.stderr, new RegExp(`creating ${container} from docker\\.io/library/postgres@sha256:e754b839`));
         const stopped = await stub(kind, live(kind, { running: false, requestedKnown: false }), ['up']);
         assert.equal(stopped.code, 0, stopped.stderr);
         assert.ok(stopped.ops.includes('image pull') && stopped.ops.includes('start') && !stopped.ops.includes('run'), stopped.ops.join(','));

@@ -11,7 +11,7 @@
 # OPENCAST_PG_PORT           published on 127.0.0.1 only (55432)
 # OPENCAST_PG_HOST           the host transport's server (127.0.0.1); the container
 #                            transport publishes on loopback and refuses any other
-# OPENCAST_PG_IMAGE          PostgreSQL 18.6's multi-platform index by default; the marker
+# OPENCAST_PG_IMAGE          PostgreSQL 18.7's multi-platform index by default; the marker
 #                            records the platform image the runtime runs
 # OPENCAST_PG_PSQL           container: psql in the container over its Unix socket as postgres;
 #                            host: the host's psql over TCP to OPENCAST_PG_HOST:OPENCAST_PG_PORT (CI)
@@ -26,8 +26,8 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 container=${OPENCAST_PG_CONTAINER:-opencast-postgres-local}
 port=${OPENCAST_PG_PORT:-55432}
-# PostgreSQL 18.6's index: each runtime selects its own platform's image from it.
-index_digest=sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+# PostgreSQL 18.7's index: each runtime selects its own platform's image from it.
+index_digest=sha256:e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61
 image=${OPENCAST_PG_IMAGE:-docker.io/library/postgres@$index_digest}
 pg_host=${OPENCAST_PG_HOST:-127.0.0.1}
 transport=${OPENCAST_PG_PSQL:-container}

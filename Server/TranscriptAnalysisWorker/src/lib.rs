@@ -14,6 +14,8 @@ pub mod job;
 pub mod prompt;
 pub mod retry;
 pub mod route;
+#[cfg(target_arch = "wasm32")]
+mod service_binding;
 #[cfg(any(target_arch = "wasm32", test))]
 pub use opencast_app_attest_core::app_attest_storage as storage;
 pub mod thinking;

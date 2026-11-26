@@ -1,0 +1,3 @@
+disallowed-methods = [
+  { path = "worker::Env::service", reason = "It refuses a service binding whose class is not named Fetcher; use service_binding::service." },
+]

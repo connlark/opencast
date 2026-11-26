@@ -17,8 +17,6 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "catalog:",
-    "@vitest/runner": "catalog:",
-    "@vitest/snapshot": "catalog:",
     "miniflare": "catalog:",
     "vitest": "catalog:",
     "wrangler": "catalog:"

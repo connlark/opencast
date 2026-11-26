@@ -47,7 +47,7 @@ const mf=new Miniflare(convertV4MiniflareOptions({cf:false,inspectorPort:0,
  handleStructuredLogs:({message})=>{try{const event=JSON.parse(message);if(event?.event)logs.push(event);}catch{}},
  workers:[storage.bind({name:'fixture',modulesRoot:FIXTURE_BUILD,
   modules:[{type:'ESModule',path:FIXTURE_BUILD+'/fixture-entry.mjs',contents:ENTRY},{type:'ESModule',path:FIXTURE_BUILD+'/index.js'},{type:'CompiledWasm',path:FIXTURE_BUILD+'/index_bg.wasm'}],
-  compatibilityDate:'2026-09-30',compatibilityFlags:['enable_request_signal'],bindings:{SLICE_TOKEN:TOKEN}})]}));
+  compatibilityDate:'2026-11-16',compatibilityFlags:['enable_request_signal'],bindings:{SLICE_TOKEN:TOKEN}})]}));
 const fixture=storage.testStorage('fixture');
 const post=async(path,body,headers={})=>{const worker=await mf.getWorker('fixture');const r=await worker.fetch('https://fixture.invalid'+path,{method:'POST',headers:{authorization:`Bearer ${TOKEN}`,...headers},body:typeof body==='string'?body:JSON.stringify(body)});const text=await r.text();let parsed;try{parsed=JSON.parse(text);}catch{parsed=text;}return {status:r.status,body:parsed};};
 

@@ -14,30 +14,30 @@
     "typecheck": "tsc --noEmit && tsc -p worker --noEmit"
   },
   "dependencies": {
-    "@heroui/react": "^3.2.6",
-    "@heroui/styles": "^3.2.6",
+    "@heroui/react": "^3.2.7",
+    "@heroui/styles": "^3.2.7",
     "@internationalized/date": "^3.12.4",
     "@react-aria/i18n": "^3.13.1",
     "@react-aria/ssr": "^3.10.1",
     "@react-aria/utils": "^3.34.1",
-    "lucide-react": "^1.49.0",
-    "next": "16.3.8",
-    "react": "19.3.0",
-    "react-aria": "^3.52.1",
-    "react-aria-components": "^1.21.1",
-    "react-dom": "19.3.0"
+    "lucide-react": "^1.73.0",
+    "next": "16.4.6",
+    "react": "19.3.1",
+    "react-aria": "^3.53.1",
+    "react-aria-components": "^1.22.1",
+    "react-dom": "19.3.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:",
-    "@tailwindcss/postcss": "^4.3.3",
-    "@types/node": "^26",
+    "@tailwindcss/postcss": "^4.3.5",
+    "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "eslint": "^9.39.5",
-    "eslint-config-next": "16.3.8",
+    "eslint-config-next": "16.4.6",
     "sharp": "^0.35.5",
-    "tailwindcss": "^4.3.3",
-    "typescript": "^5.9.3",
+    "tailwindcss": "^4.3.5",
+    "typescript": "catalog:",
     "wrangler": "catalog:"
   }
 }

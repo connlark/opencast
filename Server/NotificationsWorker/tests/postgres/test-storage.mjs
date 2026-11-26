@@ -110,7 +110,7 @@ for(const [counter,target,key] of [['connect',net,'connect'],['createConnection'
  const original=target[key];target[key]=function(...args){if(pgPorts.has(portOf(args)))contacts[counter]++;return original.apply(this,args);};
 }`;
 const PROBE="export default {fetch(request,env){return Response.json({authority:env.STORAGE_AUTHORITY??null,db:'DB' in env,database:env.DB?.database??null,d1:'APP_ATTEST_DB' in env});}};";
-const probeWorker=name=>({name,modulesRoot:dirname(probePath),modules:[{type:'ESModule',path:probePath,contents:PROBE}],compatibilityDate:'2026-09-30'});
+const probeWorker=name=>({name,modulesRoot:dirname(probePath),modules:[{type:'ESModule',path:probePath,contents:PROBE}],compatibilityDate:'2026-11-16'});
 const closedPort=async()=>{const s=net.createServer();await new Promise(r=>s.listen(0,'127.0.0.1',r));const p=s.address().port;await new Promise(r=>s.close(r));return p;};
 const TRANSIENT_CHILD=`
 import {openStorage} from '${storageUrl}';

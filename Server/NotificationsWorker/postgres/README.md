@@ -87,10 +87,10 @@ and its grants re-created first (0007's header). Both take the maintenance
 gate below before any application object and are idempotent. A fresh install
 applies all of them in the order above; so does the local topology's template.
 
-Local topology: `local/local-postgres.sh up` runs one PostgreSQL 18.6 container
+Local topology: `local/local-postgres.sh up` runs one PostgreSQL 18.7 container
 on 127.0.0.1:55432 (Podman first; Docker Desktop through
 `OPENCAST_CONTAINER_RUNTIME=docker`, a path not yet verified on a Docker daemon)
-from the 18.6 multi-platform index, and installs these same files, in the production order above with one runtime role, into the template
+from the 18.7 multi-platform index, and installs these same files, in the production order above with one runtime role, into the template
 `opencast_template`. The template accepts no connections and its marker records
 the files' hash and the image the runtime runs (`image_requested`, `image_resolved`,
 `platform`; `provenance` prints them read-only and `status` refuses an unresolved

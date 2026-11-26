@@ -74,6 +74,11 @@ describe("summarizeHeaders", () => {
     expect(mail.signals.list_unsubscribe).toBe(true);
   });
 
+  it("keeps the header's own mailbox when the encoded display name holds another", () => {
+    const headers = new Headers({ from: `=?utf-8?b?${btoa("Apple <support@apple.example>, ")}?= <sender@other.example>` });
+    expect(summarizeHeaders(headers).fromAddress).toBe("sender@other.example");
+  });
+
   it("uses the envelope sender when From is missing", () => {
     expect(summarizeHeaders(new Headers(), "x@example.com").fromAddress).toBe("x@example.com");
   });

@@ -213,8 +213,7 @@ pub async fn outbox(db: &crate::database::Authority, env: &Env, feed_id: &str) -
             continue;
         }
         // No endpoint is derived from feed metadata; only the named private binding.
-        let service = env
-            .service("NOTIFICATION_EVENTS")
+        let service = crate::service_binding::service(env, "NOTIFICATION_EVENTS")
             .map_err(|_| fault("notification_events_binding_missing"))?;
         let mut init = RequestInit::new();
         init.with_method(Method::Post)

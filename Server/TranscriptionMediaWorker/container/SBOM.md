@@ -1,18 +1,17 @@
 # Media Container SBOM
 
-Regenerated 2026-08-05 for a linux/amd64 image. Every layer below the
-application layer is byte-identical to the previous image revision (the
-Alpine + hand-compiled ffmpeg 9.0 hardening/size pass, 574 MB → 55 MB): the
-sole change is `media_server.py` installing a SIGTERM handler so the container
-actually stops when the Container SDK's `sleepAfter` idle timer fires.
+Regenerated 2026-11-26 for a linux/amd64 image: a refreshed base digest
+and the ffmpeg 9.0.2 point release. The configure line, lame 3.100 and
+`media_server.py` are unchanged from the previous image revision.
 
 - Image: registry.cloudflare.com/REPLACE_WITH_ACCOUNT_HASH/your-transcription-media-container:REPLACE_WITH_TAG@sha256:REPLACE_WITH_IMAGE_DIGEST
-- Base (both stages): docker.io/library/python:3.12-alpine@sha256:aa679aa4eed6eb56c1dc6ad3f1b98b7d2d788fd961596779d188fdedad97fb38
-  (linux/amd64 manifest; Alpine 3.24.1, Python 3.12.13)
+- Base (both stages): docker.io/library/python:3.12-alpine@sha256:a61cbd76a882645de7f91423329fe43a67eed60d7da24f9e5331414bb3618b20
+  (linux/amd64 manifest of index `sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89`,
+  read 2026-11-26; image created 2026-11-05; Alpine 3.24.4, Python 3.12.16)
 - Image build: `podman build --format=docker --platform=linux/amd64 container`
-- ffmpeg: 9.0 "Lei", compiled from source in the builder stage (gcc 15.2.0,
-  nasm; static ffmpeg libs, `-static-libgcc`). Only ffmpeg + ffprobe ship
-  (2,132,080 / 1,910,832 bytes stripped); linked libraries are
+- ffmpeg: 9.0.2 (9.0 "Lei" branch), compiled from source in the builder
+  stage (gcc 15.2.0, nasm; static ffmpeg libs, `-static-libgcc`). Only ffmpeg + ffprobe ship
+  (2,127,984 / 1,910,832 bytes stripped); linked libraries are
   avutil/avcodec/avformat/avfilter/swresample only — no avdevice, no
   swscale, no postproc (removed upstream in 9.0), no ffplay.
 - libmp3lame: lame 3.100, compiled static in the builder stage — the same
@@ -23,7 +22,7 @@ actually stops when the Container SDK's `sleepAfter` idle timer fires.
 
 | Source | sha256 | Verification |
 |---|---|---|
-| `ffmpeg-9.0.tar.xz` | `7f607a00dd0d28a729d5a4811205812eef01cf6ef6155025febb6f36a9062d52` | GPG signature verified 2026-08-04 against the FFmpeg release signing key `FCF986EA15E6E293A5644F10B4322F04D67658D8` (detached sig vendored as `vendor/ffmpeg-9.0.tar.xz.asc`) |
+| `ffmpeg-9.0.2.tar.xz` | `8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e` | Released 2026-09-18 on ffmpeg.org/releases/. GPG signature (made 2026-09-18 02:46:02 UTC) verified 2026-11-26 against the FFmpeg release signing key `FCF986EA15E6E293A5644F10B4322F04D67658D8` (detached sig vendored as `vendor/ffmpeg-9.0.2.tar.xz.asc`) |
 | `lame-3.100.tar.gz` | `ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e` | sha512 cross-checked byte-identical against the Alpine aports `main/lame` pin 2026-08-04 |
 
 Both sha256s are re-verified inside the image build (`sha256sum -c`), so a
@@ -61,8 +60,10 @@ demux/parse/decode for probe + packet-sum measurement, mp3 mux + stream copy
 for chunking, libmp3lame + aresample/aformat/anull (abuffer/abuffersink are
 linked unconditionally by configure) for the `-ac 1 -ar 44100` normalize
 path, and the `file` protocol only. Everything else — every other codec,
-demuxer, protocol, filter, device, and all network code — is compiled out,
-not flagged off. (`test_media_server.py` runs on the HOST's ffmpeg and may
+demuxer, protocol, device, and all network code — is compiled out, not
+flagged off. Beyond those three filters, configure links the ones the
+`ffmpeg` tool selects for itself (atrim, crop, format, hflip, null, rotate,
+transpose, trim, vflip) and the buffer sources and sinks. (`test_media_server.py` runs on the HOST's ffmpeg and may
 use lavfi there; the container binary deliberately has no lavfi.)
 
 ## Security updates require active tracking
@@ -90,42 +91,42 @@ untrusted media, so point releases should be adopted promptly.
 ## apk packages (runtime stage, `apk list --installed`)
 
 ```
-.python-rundeps-20260616.002526
+.python-rundeps-20261105.193119
 alpine-baselayout-3.7.2-r1
 alpine-baselayout-data-3.7.2-r1
 alpine-keys-2.6-r0
-alpine-release-3.24.1-r0
-apk-tools-3.0.6-r0
+alpine-release-3.24.4-r0
+apk-tools-3.0.9-r0
 busybox-1.37.0-r31
 busybox-binsh-1.37.0-r31
-ca-certificates-20260611-r0
-ca-certificates-bundle-20260611-r0
+ca-certificates-20261020-r0
+ca-certificates-bundle-20261020-r0
 gdbm-1.26-r0
 keyutils-libs-1.6.3-r4
 krb5-conf-1.0-r2
 krb5-libs-1.22.2-r1
-libapk-3.0.6-r0
+libapk-3.0.9-r0
 libbz2-1.0.8-r6
 libcom_err-1.47.4-r0
-libcrypto3-3.5.7-r0
+libcrypto3-3.5.9-r0
 libffi-3.5.2-r1
 libintl-1.0-r0
 libncursesw-6.6_p20260516-r0
 libnsl-2.0.1-r2
 libpanelw-6.6_p20260516-r0
-libssl3-3.5.7-r0
+libssl3-3.5.9-r0
 libtirpc-1.3.5-r1
 libtirpc-conf-1.3.5-r1
-libuuid-2.42-r0
+libuuid-2.42.3-r1
 libverto-0.3.2-r2
-musl-1.2.6-r2
-musl-utils-1.2.6-r2
+musl-1.2.6-r3
+musl-utils-1.2.6-r3
 ncurses-terminfo-base-6.6_p20260516-r0
 readline-8.3.3-r1
 scanelf-1.3.9-r1
-sqlite-libs-3.53.2-r0
+sqlite-libs-3.53.4-r0
 ssl_client-1.37.0-r31
-tzdata-2026b-r0
-xz-libs-5.8.3-r0
-zlib-1.3.2-r0
+tzdata-2026f-r0
+xz-libs-5.8.4-r0
+zlib-1.3.2-r1
 ```

@@ -1,0 +1,4 @@
+# Resolution skips crate versions published less than seven days ago.
+# Builds with --locked never consult it.
+[registry]
+global-min-publish-age = "7 days"

@@ -2,7 +2,7 @@
 name = "opencast-remote-transcription-worker"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.91"
+rust-version = "1.100"
 publish = false
 
 [lib]
@@ -11,7 +11,6 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 aes-gcm = "0.10"
 base64 = "0.23"
-futures-util = "0.3"
 hex = "0.4"
 hmac = "0.12"
 opencast-app-attest-core = { path = "../AppAttestCore" }
@@ -23,9 +22,9 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.10"
 url = "2"
 worker = { version = "0.8", features = ["d1"] }
-worker-macros = "0.8"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+futures-util = "0.3"
 getrandom = { version = "0.2", features = ["js"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

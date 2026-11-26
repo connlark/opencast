@@ -52,6 +52,8 @@ pub mod route;
 pub mod rss;
 #[cfg(target_arch = "wasm32")]
 mod runtime_diagnostics;
+#[cfg(target_arch = "wasm32")]
+mod service_binding;
 
 #[cfg(any(target_arch = "wasm32", test))]
 mod feed_scan_admission;

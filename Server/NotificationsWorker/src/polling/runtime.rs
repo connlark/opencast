@@ -34,7 +34,7 @@ pub(super) async fn enabled(env: &Env, db: &crate::database::Authority) -> Resul
         .first()
         .is_some_and(|v| wire::int(&v, "enabled") == 1);
     if enabled {
-        env.service("NOTIFICATION_EVENTS")
+        crate::service_binding::service(env, "NOTIFICATION_EVENTS")
             .map_err(|_| Error::RustError("notification_events_binding_missing".into()))?;
     }
     Ok(enabled)
