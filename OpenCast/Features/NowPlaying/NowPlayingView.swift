@@ -644,6 +644,10 @@ struct NowPlayingView: View {
                 episode: presentedEpisodeSnapshot,
                 hasTranscript: hasCompletedTranscript,
                 canShowDescription: canOpenCurrentEpisode,
+                descriptionOpensEpisode: NowPlayingSecondaryRoute(
+                    destination: .showDescription,
+                    paneStyle: arrangement.paneStyle
+                ) == .openEpisode,
                 canShowShow: canOpenCurrentPodcast,
                 playlistSourceName: appModel.currentPlaylistSource?.name,
                 showsPrivateNotes: appModel.playbackSettings.showsPrivateNoteButtons,

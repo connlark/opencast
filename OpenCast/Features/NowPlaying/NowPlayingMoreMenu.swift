@@ -4,6 +4,7 @@ struct NowPlayingMoreMenu: View {
     let episode: EpisodeListItemSnapshot?
     let hasTranscript: Bool
     let canShowDescription: Bool
+    let descriptionOpensEpisode: Bool
     let canShowShow: Bool
     let playlistSourceName: String?
     let showsPrivateNotes: Bool
@@ -23,7 +24,7 @@ struct NowPlayingMoreMenu: View {
                 }
             }
             Button(
-                hasTranscript ? "Show Transcript" : "Generate Transcript",
+                hasTranscript ? "View Transcript" : "Generate Transcript",
                 systemImage: "text.quote",
                 action: onTranscriptAction
             )
@@ -31,9 +32,13 @@ struct NowPlayingMoreMenu: View {
                 Button("Private Notes", systemImage: "note.text", action: onShowNotes)
                     .accessibilityIdentifier("Menu Private Notes")
             }
-            Button("Show Description", systemImage: "info.circle", action: onShowDescription)
-                .disabled(!canShowDescription)
-            Button("Show Show", systemImage: "rectangle.stack", action: onShowShow)
+            Button(
+                descriptionOpensEpisode ? "Go to Episode" : NowPlayingSecondaryPane.showNotes.title,
+                systemImage: descriptionOpensEpisode ? "info.circle" : NowPlayingSecondaryPane.showNotes.systemImage,
+                action: onShowDescription
+            )
+            .disabled(!canShowDescription)
+            Button("Go to Show", systemImage: "rectangle.stack", action: onShowShow)
                 .disabled(!canShowShow)
             if let playlistSourceName {
                 Button(

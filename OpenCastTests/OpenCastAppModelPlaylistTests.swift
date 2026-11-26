@@ -1261,7 +1261,6 @@ struct OpenCastAppModelPlaylistTests {
                 == "Play Next puts an episode ahead of the rest of Commute."
         )
         #expect(PlaylistPlaybackSourceText.pillLabel(name: "Commute") == "Playing from Commute")
-        #expect(PlaylistPlaybackSourceText.showPlaylistMenuTitle(name: "Commute") == "Show Commute")
     }
 
     @Test("A chosen playlist sort order survives a relaunch")

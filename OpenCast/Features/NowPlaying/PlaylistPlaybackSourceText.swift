@@ -36,6 +36,6 @@ enum PlaylistPlaybackSourceText {
     }
 
     static func showPlaylistMenuTitle(name: String) -> String {
-        String(localized: "Show \(name)")
+        String(localized: "Go to \(name)")
     }
 }

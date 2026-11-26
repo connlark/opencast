@@ -4546,9 +4546,9 @@ final class OpenCastUITests: XCTestCase {
         let moreMenuButton = app.buttons["More Actions"]
         assertExists(moreMenuButton, named: "now playing more actions menu")
         moreMenuButton.tap()
-        let showTranscriptItem = app.buttons["Show Transcript"]
-        assertExists(showTranscriptItem, named: "Show Transcript action")
-        showTranscriptItem.tap()
+        let viewTranscriptItem = app.buttons["View Transcript"]
+        assertExists(viewTranscriptItem, named: "View Transcript action")
+        viewTranscriptItem.tap()
         assertExists(app.staticTexts["Transcript"], named: "transcript sheet title")
         assertExists(app.buttons["Welcome to a deterministic transcript."], named: "transcript sheet line")
         attachSmokeScreenshot(named: "now_playing_transcript_sheet")
@@ -7502,14 +7502,14 @@ final class OpenCastUITests: XCTestCase {
         let moreActions = app.buttons["More Actions"].firstMatch
         assertHittable(moreActions, named: "Now Playing More Actions menu")
         moreActions.tap()
-        let showPlaylist = app.buttons["Show Seeded Commute"].firstMatch
-        assertHittable(showPlaylist, named: "Show Seeded Commute More item")
+        let showPlaylist = app.buttons["Go to Seeded Commute"].firstMatch
+        assertHittable(showPlaylist, named: "Go to Seeded Commute More item")
         attachSmokeScreenshot(named: "playlists_source_more_menu")
         showPlaylist.tap()
 
         XCTAssertTrue(
             nowPlayingOverlay(in: app).waitForNonExistence(timeout: 5),
-            "Show Seeded Commute should dismiss Now Playing"
+            "Go to Seeded Commute should dismiss Now Playing"
         )
         assertScreen("Seeded Commute", named: "Seeded Commute detail from the More menu", in: app)
         assertExists(
@@ -7604,14 +7604,14 @@ final class OpenCastUITests: XCTestCase {
         let moreActions = app.buttons["More Actions"].firstMatch
         assertHittable(moreActions, named: "Now Playing More Actions menu")
         moreActions.tap()
-        let showPlaylist = app.buttons["Show Seeded Commute"].firstMatch
-        assertExists(showPlaylist, named: "Show Seeded Commute More item at Accessibility XXXL")
+        let showPlaylist = app.buttons["Go to Seeded Commute"].firstMatch
+        assertExists(showPlaylist, named: "Go to Seeded Commute More item at Accessibility XXXL")
         attachSmokeScreenshot(named: "playlists_source_more_menu_accessibility_xxxl")
         showPlaylist.tap()
 
         XCTAssertTrue(
             nowPlayingOverlay(in: app).waitForNonExistence(timeout: 5),
-            "Show Seeded Commute should dismiss Now Playing"
+            "Go to Seeded Commute should dismiss Now Playing"
         )
         assertScreen("Seeded Commute", named: "Seeded Commute detail from the More menu", in: app)
     }
