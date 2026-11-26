@@ -141,7 +141,7 @@ message against `opencast-notification-{event,episode,job}-<lane>` and this
 Worker's queues pair with them, so keep the names and choose only the lane
 suffix.
 
-The compatibility date is `2026-09-18`, matching the pinned local workerd.
+The compatibility date is `2026-11-16`, matching the pinned local workerd.
 Advance it only together with the pinned toolchain.
 
 ### Enablement

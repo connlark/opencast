@@ -66,9 +66,10 @@ Worker name with underscores), and points
 the package scripts, which run both steps under the same `CLOUDFLARE_ENV`;
 never combine `--env` with an explicit `-c` on the generated config.
 
-`@cloudflare/vite-plugin` pins wrangler, miniflare and workerd exactly, and
-those pins must equal the repository's catalog versions (`test/unit/toolchain.spec.mjs`
-fails on drift). Bump the plugin and the catalog together.
+`@cloudflare/vite-plugin` pins wrangler and miniflare exactly, and wrangler
+pins workerd; those must equal the repository's catalog versions
+(`test/unit/toolchain.spec.mjs` fails on drift). Bump the plugin and the
+catalog together.
 
 ## Deploy
 

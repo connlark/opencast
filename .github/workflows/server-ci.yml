@@ -104,11 +104,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install stable Rust
+      - name: Install the pinned Rust toolchain
         shell: bash
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          # rust-toolchain.toml names the channel, components and targets.
+          rustup toolchain install
 
       - name: Install the WebAssembly target
         if: matrix.wasm
@@ -188,21 +188,21 @@ jobs:
         with:
           node-version: "26"
 
-      - name: Activate Yarn 4.18.0
+      - name: Activate Yarn 4.18.1
         shell: bash
         run: |
-          npm install --global corepack@0.35.0
+          npm install --global corepack@0.36.0
           corepack enable
-          corepack install --global yarn@4.18.0
+          corepack install --global yarn@4.18.1
           node --version
           corepack --version
           yarn --version
 
-      - name: Install stable Rust and the WebAssembly target
+      - name: Install the pinned Rust toolchain and the WebAssembly target
         shell: bash
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          # rust-toolchain.toml names the channel, components and targets.
+          rustup toolchain install
           rustup target add wasm32-unknown-unknown
 
       - name: Install dependencies
@@ -346,7 +346,7 @@ jobs:
 
   # NotificationsWorker and FeedPollingWorker keep all storage in PostgreSQL.
   # Their suites run on clones of the local test topology's template, installed
-  # with the host psql into a PostgreSQL 18.6 service container pinned to the
+  # with the host psql into a PostgreSQL 18.7 service container pinned to the
   # multi-platform index digest (the runner pulls its own platform's entry).
   # Matrix entries share no filesystem, so each one prepares all of its inputs.
   postgres-integration:
@@ -367,7 +367,7 @@ jobs:
             directory: Server/FeedPollingWorker
     services:
       postgres:
-        image: docker.io/library/postgres@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+        image: docker.io/library/postgres@sha256:e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61
         env:
           # The local topology's fixed superuser password, not a secret.
           POSTGRES_PASSWORD: opencast-local-postgres
@@ -384,7 +384,7 @@ jobs:
       OPENCAST_PG_PORT: "55432"
       # The host transport cannot inspect the service container, so the install
       # marker records this reference as requested.
-      OPENCAST_PG_IMAGE: docker.io/library/postgres@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+      OPENCAST_PG_IMAGE: docker.io/library/postgres@sha256:e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -394,21 +394,21 @@ jobs:
         with:
           node-version: "26"
 
-      - name: Activate Yarn 4.18.0
+      - name: Activate Yarn 4.18.1
         shell: bash
         run: |
-          npm install --global corepack@0.35.0
+          npm install --global corepack@0.36.0
           corepack enable
-          corepack install --global yarn@4.18.0
+          corepack install --global yarn@4.18.1
           node --version
           corepack --version
           yarn --version
 
-      - name: Install stable Rust and the WebAssembly target
+      - name: Install the pinned Rust toolchain and the WebAssembly target
         shell: bash
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          # rust-toolchain.toml names the channel, components and targets.
+          rustup toolchain install
           rustup target add wasm32-unknown-unknown
 
       - name: Install the PostgreSQL client
@@ -565,12 +565,12 @@ jobs:
         with:
           node-version: "26"
 
-      - name: Activate Yarn 4.18.0
+      - name: Activate Yarn 4.18.1
         shell: bash
         run: |
-          npm install --global corepack@0.35.0
+          npm install --global corepack@0.36.0
           corepack enable
-          corepack install --global yarn@4.18.0
+          corepack install --global yarn@4.18.1
           node --version
           corepack --version
           yarn --version
