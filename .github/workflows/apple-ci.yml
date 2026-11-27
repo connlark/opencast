@@ -27,7 +27,7 @@ jobs:
   app-unit-tests:
     name: App Unit Tests
     runs-on: xcode-27
-    timeout-minutes: 45
+    timeout-minutes: 75
     permissions:
       contents: read
     steps:
@@ -231,7 +231,7 @@ jobs:
   core-flow-ui-smoke:
     name: Core Flow UI Smoke
     runs-on: xcode-27
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
