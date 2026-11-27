@@ -530,7 +530,7 @@ struct EpisodeDetailView: View {
         case .started:
             break
         case .rejected(let message):
-            showEpisodeActionError(message, title: "Couldn’t Resume Remote Transcript")
+            showEpisodeActionError(message, title: "Couldn’t Resume Remote Transcription")
         }
     }
 

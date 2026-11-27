@@ -101,20 +101,20 @@ struct EpisodeMoreMenu: View {
         case .ready:
             Button("Generate Transcript", systemImage: "text.quote", action: generateTranscript)
         case .running:
-            Button("Cancel Transcript", systemImage: "xmark.circle", action: cancelTranscript)
+            Button("Cancel Transcription", systemImage: "xmark.circle", action: cancelTranscript)
         case .completed:
             if downloadRecord?.state == .completed {
                 Button("Regenerate Transcript", systemImage: "arrow.clockwise", action: generateTranscript)
             }
             Button("Delete Transcript", systemImage: "trash", role: .destructive, action: deleteTranscript)
         case .failed, .cancelled:
-            Button("Retry Transcript", systemImage: "arrow.clockwise", action: generateTranscript)
+            Button("Retry Transcription", systemImage: "arrow.clockwise", action: generateTranscript)
             Button("Delete Partial Transcript", systemImage: "trash", role: .destructive, action: deleteTranscript)
         case .interrupted(let record):
             if record.isAppleSpeechTranscript {
-                Button("Retry Transcript", systemImage: "arrow.clockwise", action: generateTranscript)
+                Button("Retry Transcription", systemImage: "arrow.clockwise", action: generateTranscript)
             } else {
-                Button("Resume Transcript", systemImage: "play.circle", action: generateTranscript)
+                Button("Resume Transcription", systemImage: "play.circle", action: generateTranscript)
             }
             Button("Delete Partial Transcript", systemImage: "trash", role: .destructive, action: deleteTranscript)
         }
@@ -129,14 +129,14 @@ struct EpisodeMoreMenu: View {
                !phase.isTerminal {
                 Label("Remote: \(phase.displayText)", systemImage: "cloud")
                 if phase.isParked {
-                    Button("Resume Remote Transcript", systemImage: "play.circle", action: resumeRemoteTranscript)
+                    Button("Resume Remote Transcription", systemImage: "play.circle", action: resumeRemoteTranscript)
                 }
-                Button("Cancel Remote Transcript", systemImage: "xmark.circle", action: cancelRemoteTranscript)
+                Button("Cancel Remote Transcription", systemImage: "xmark.circle", action: cancelRemoteTranscript)
             } else if RemoteTranscriptionStatusPresentation.make(
                 phase: appModel.remoteTranscription.store.phase(for: episode.episodeID)
             )?.offersRetry == true {
                 // Resume, so the same reference re-runs where one is kept.
-                Button("Retry Remote Transcript", systemImage: "arrow.clockwise", action: resumeRemoteTranscript)
+                Button("Retry Remote Transcription", systemImage: "arrow.clockwise", action: resumeRemoteTranscript)
             } else {
                 // Disabled while a cloud detect pass owns this episode — it
                 // already delivers the transcript when it lands.

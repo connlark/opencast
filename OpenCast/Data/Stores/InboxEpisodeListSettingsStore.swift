@@ -127,7 +127,7 @@ final class InboxEpisodeListSettingsStore {
             String(groupsByPodcast),
             forKey: Self.groupsByPodcastPreferenceKey,
             modelContext: modelContext,
-            failureDescription: "Unable to update Group by Podcast"
+            failureDescription: "Unable to update Group by Show"
         ) else {
             return false
         }
@@ -156,7 +156,7 @@ final class InboxEpisodeListSettingsStore {
     }
 
     /// One transaction, so a failed save cannot leave one setting changed. The view choices
-    /// (Show Archived, Group by Podcast) stay as they are.
+    /// (Show Archived, Group by Show) stay as they are.
     @discardableResult
     func resetFilterAndHideUpNext(modelContext: ModelContext) -> Bool {
         guard filter != .all || hidesQueuedEpisodes else {

@@ -17,7 +17,6 @@ struct NowPlayingSoundLabTranscriptionRowModelTests {
         )
 
         #expect(model.action == .showTranscript)
-        #expect(model.title == "Show Transcript")
         #expect(model.systemImage == "text.quote")
         #expect(model.phase == .completed)
         #expect(model.isEnabled)

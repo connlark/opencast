@@ -294,7 +294,7 @@ final class OpenCastUITests: XCTestCase {
         // The shared context-menu helper expects a Download action, which the
         // seeded completed download replaces; open the detail directly.
         inboxEpisode.press(forDuration: 1.2)
-        let detailsAction = app.buttons["View Episode Details"]
+        let detailsAction = app.buttons["Go to Episode"]
         assertExists(detailsAction, named: "seeded inbox episode details context action")
         detailsAction.tap()
         assertExists(app.buttons["Play Episode"], named: "seeded episode detail")
@@ -1026,11 +1026,11 @@ final class OpenCastUITests: XCTestCase {
         let podcastRow = seededSubscriptionRow(in: app)
         assertExists(podcastRow, named: "seeded library podcast row")
         podcastRow.swipeLeft()
-        let removeButton = app.buttons["Remove"]
-        assertExists(removeButton, named: "Remove swipe action")
+        let removeButton = app.buttons["Remove Podcast Swipe Action"]
+        assertExists(removeButton, named: "Unsubscribe swipe action")
         removeButton.tap()
-        let confirmButton = app.buttons["Remove Podcast"]
-        assertExists(confirmButton, named: "Remove Podcast confirmation action")
+        let confirmButton = unsubscribeConfirmationButton(in: app)
+        assertExists(confirmButton, named: "Unsubscribe confirmation action")
         confirmButton.tap()
 
         assertExists(app.staticTexts["No Subscriptions"], named: "empty Library after removing its only show")
@@ -1266,7 +1266,7 @@ final class OpenCastUITests: XCTestCase {
         podcastEpisode.press(forDuration: 1.2)
         assertExists(app.buttons["Unarchive"], named: "show page row Unarchive context action")
         assertDoesNotExist(app.buttons["Archive"], named: "show page row Archive context action", timeout: 1)
-        let detailsAction = app.buttons["View Episode Details"]
+        let detailsAction = app.buttons["Go to Episode"]
         assertHittable(detailsAction, named: "show page row details context action")
         detailsAction.tap()
 
@@ -2004,7 +2004,7 @@ final class OpenCastUITests: XCTestCase {
         assertExists(episodeRow, named: "Inbox episode row before grouping")
         assertDoesNotExist(inboxLayoutMenu(in: app), named: "Inbox layout menu before grouping")
 
-        toggleInboxMenuItem("Group by Podcast", in: app)
+        toggleInboxMenuItem("Group by Show", in: app)
         assertExists(list, named: "grouped Inbox list")
         assertDoesNotExist(episodeRow, named: "Inbox episode row while grouping", timeout: 5)
         assertValue(of: mainShow, becomes: "10 episodes", named: "UI Test Show group under All Episodes")
@@ -2066,7 +2066,7 @@ final class OpenCastUITests: XCTestCase {
         assertValue(of: mainShow, becomes: "6 episodes", named: "UI Test Show tile")
         attachSmokeScreenshot(named: "inbox_grouped_grid")
 
-        toggleInboxMenuItem("Group by Podcast", in: app)
+        toggleInboxMenuItem("Group by Show", in: app)
         assertDoesNotExist(grid, named: "grouped Inbox grid after ungrouping", timeout: 5)
         assertDoesNotExist(inboxLayoutMenu(in: app), named: "Inbox layout menu after ungrouping")
         assertExists(episodeRow, named: "Inbox episode row after ungrouping")
@@ -2122,7 +2122,7 @@ final class OpenCastUITests: XCTestCase {
 
         openInbox(in: app)
         let mainShow = inboxPodcastGroup(Self.seededFeedURL, in: app)
-        toggleInboxMenuItem("Group by Podcast", in: app)
+        toggleInboxMenuItem("Group by Show", in: app)
         assertValue(of: mainShow, becomes: "4 episodes", named: "UI Test Show group before archiving")
 
         // Archiving on the show a group opens takes the row off that list too.
@@ -2506,13 +2506,13 @@ final class OpenCastUITests: XCTestCase {
         assertExists(podcastRow, named: "seeded library podcast row")
 
         podcastRow.swipeLeft()
-        let removeButton = app.buttons["Remove"]
-        assertExists(removeButton, named: "Remove swipe action")
+        let removeButton = app.buttons["Remove Podcast Swipe Action"]
+        assertExists(removeButton, named: "Unsubscribe swipe action")
         attachSmokeScreenshot(named: "library_swipe_remove")
         removeButton.tap()
 
-        let confirmButton = app.buttons["Remove Podcast"]
-        assertExists(confirmButton, named: "Remove Podcast confirmation action")
+        let confirmButton = unsubscribeConfirmationButton(in: app)
+        assertExists(confirmButton, named: "Unsubscribe confirmation action")
         attachSmokeScreenshot(named: "library_remove_confirmation")
         confirmButton.tap()
 
@@ -2583,8 +2583,8 @@ final class OpenCastUITests: XCTestCase {
         // Compact tiles are too narrow for a swipe action; removal stays
         // reachable from the context menu.
         aardvark.press(forDuration: 1.2)
-        let removeAction = app.buttons["Remove Podcast"].firstMatch
-        assertHittable(removeAction, named: "compact grid tile Remove Podcast context action")
+        let removeAction = app.buttons["Unsubscribe"].firstMatch
+        assertHittable(removeAction, named: "compact grid tile Unsubscribe context action")
         dismissContextualMenu(in: app)
         assertDoesNotExist(removeAction, named: "dismissed grid tile context menu", timeout: 5)
 
@@ -3011,7 +3011,7 @@ final class OpenCastUITests: XCTestCase {
         detectAction.tap()
 
         // First manual tap with no stored mode: the cloud-or-device dialog.
-        let deviceChoice = app.buttons["Detect On This Device"]
+        let deviceChoice = app.buttons["Detect on This Device"]
         assertExists(deviceChoice, named: "mode dialog device choice", timeout: 10)
         assertExists(app.buttons["Use Cloud Credits"], named: "mode dialog cloud choice")
         attachSmokeScreenshot(named: "admode_dialog_first_tap")
@@ -3516,12 +3516,9 @@ final class OpenCastUITests: XCTestCase {
         for (control, name) in [
             (voiceBoost, "Voice Boost"),
             (adAction, "Skip Promos & Ads"),
-            (remoteAction, "Show Transcript")
+            (remoteAction, "View Transcript")
         ] {
             assertExists(control, named: "\(name) Sound Lab control")
-            if name == "Show Transcript" {
-                XCTAssertEqual(control.label, name)
-            }
             XCTAssertTrue(control.isHittable, "\(name) should be hittable")
             XCTAssertGreaterThanOrEqual(
                 control.frame.height,
@@ -3529,7 +3526,7 @@ final class OpenCastUITests: XCTestCase {
                 "\(name) should keep the 44-point tap target"
             )
         }
-        for title in ["Skip Promos & Ads", "Show Transcript"] {
+        for title in ["Skip Promos & Ads", "View Transcript"] {
             let label = app.staticTexts[title]
             assertExists(label, named: "complete \(title) label")
             let intrinsicWidth = (title as NSString).size(
@@ -3595,8 +3592,7 @@ final class OpenCastUITests: XCTestCase {
         let showTranscript = app.buttons.matching(
             identifier: Self.soundLabTranscriptActionIdentifier
         ).firstMatch
-        assertHittable(showTranscript, named: "Show Transcript Sound Lab row")
-        XCTAssertEqual(showTranscript.label, "Show Transcript")
+        assertHittable(showTranscript, named: "View Transcript Sound Lab row")
         showTranscript.tap()
 
         assertExists(app.staticTexts["Transcript"], named: "transcript sheet title")
@@ -3627,7 +3623,7 @@ final class OpenCastUITests: XCTestCase {
             named: "local transcription progress toast"
         )
         expectation(
-            for: NSPredicate(format: "label == %@", "Show Transcript"),
+            for: NSPredicate(format: "label == %@", "View Transcript"),
             evaluatedWith: transcriptAction
         )
         waitForExpectations(timeout: 10)
@@ -3988,8 +3984,8 @@ final class OpenCastUITests: XCTestCase {
         // A plain row tap starts playback; the context menu reaches the detail
         // view without touching the saved position.
         episodeRow.press(forDuration: 1.0)
-        let viewDetails = app.buttons["View Episode Details"].firstMatch
-        assertExists(viewDetails, named: "View Episode Details menu item", timeout: 5)
+        let viewDetails = app.buttons["Go to Episode"].firstMatch
+        assertExists(viewDetails, named: "Go to Episode menu item", timeout: 5)
         viewDetails.tap()
 
         // Reset progress so playback starts ahead of the intro pod (0:51-2:21).
@@ -4585,12 +4581,12 @@ final class OpenCastUITests: XCTestCase {
         // Analysis runs on the device whatever the route, so a current
         // analysis offers a rerun beside Delete.
         openTranscriptOptionsMenu(in: app)
-        let reanalyzeButton = app.buttons["Reanalyze Promos & Ads"]
+        let reanalyzeButton = app.buttons["Detect Ads Again"]
         assertExists(reanalyzeButton, named: "Reanalyze action for a current analysis")
         XCTAssertTrue(reanalyzeButton.isEnabled, "Reanalyze should be offered without a key")
-        assertDoesNotExist(app.buttons["Analyze Promos & Ads"], named: "Analyze action for a current analysis", timeout: 1)
-        assertDoesNotExist(app.buttons["Retry Promo/Ad Analysis"], named: "Retry action for a current analysis", timeout: 1)
-        assertExists(app.buttons["Delete Promo/Ad Analysis"], named: "Delete saved promo/ad analysis")
+        assertDoesNotExist(app.buttons["Detect Ads"], named: "Analyze action for a current analysis", timeout: 1)
+        assertDoesNotExist(app.buttons["Retry Ad Detection"], named: "Retry action for a current analysis", timeout: 1)
+        assertExists(app.buttons["Delete Ad Analysis"], named: "Delete saved promo/ad analysis")
         dismissTranscriptOptionsMenu(in: app)
     }
 
@@ -4672,7 +4668,7 @@ final class OpenCastUITests: XCTestCase {
 
         assertExists(app.staticTexts["Transcript"], named: "Transcript route title")
         openTranscriptOptionsMenu(in: app)
-        assertExists(app.buttons["Delete Promo/Ad Analysis"], named: "Delete saved live Worker promo/ad analysis")
+        assertExists(app.buttons["Delete Ad Analysis"], named: "Delete saved live Worker promo/ad analysis")
         dismissTranscriptOptionsMenu(in: app)
 
         let cancerResearchRow = app.buttons.matching(NSPredicate(
@@ -4785,7 +4781,7 @@ final class OpenCastUITests: XCTestCase {
         assertExists(episode, named: "seeded word-boundary episode")
         episode.press(forDuration: 1.2)
         assertExists(app.buttons["Ads Detected"], named: "accepted saved v3 analysis")
-        app.buttons["View Episode Details"].tap()
+        app.buttons["Go to Episode"].tap()
         let readTranscript = app.buttons["Read Transcript"]
         scrollUntilHittable(readTranscript, in: app)
         readTranscript.tap()
@@ -4828,7 +4824,7 @@ final class OpenCastUITests: XCTestCase {
         // The artifact seed saves a current analysis but no download, so the
         // analysis is detached: the menu offers Detect Ads Again.
         assertExists(app.buttons["Detect Ads Again"], named: "accepted saved v3 analysis without its download")
-        let details = app.buttons["View Episode Details"]
+        let details = app.buttons["Go to Episode"]
         assertExists(details, named: "saved word-boundary episode details action")
         details.tap()
 
@@ -4887,9 +4883,9 @@ final class OpenCastUITests: XCTestCase {
         attachSmokeScreenshot(named: "episode_transcript_stale_ad_analysis_no_badges")
 
         openTranscriptOptionsMenu(in: app)
-        assertExists(app.buttons["Analyze Promos & Ads"], named: "Analyze action for a stale analysis")
-        assertDoesNotExist(app.buttons["Reanalyze Promos & Ads"], named: "Reanalyze action for a stale analysis", timeout: 1)
-        let deleteAnalysisButton = app.buttons["Delete Promo/Ad Analysis"]
+        assertExists(app.buttons["Detect Ads"], named: "Analyze action for a stale analysis")
+        assertDoesNotExist(app.buttons["Detect Ads Again"], named: "Reanalyze action for a stale analysis", timeout: 1)
+        let deleteAnalysisButton = app.buttons["Delete Ad Analysis"]
         assertExists(deleteAnalysisButton, named: "Delete stale promo/ad analysis")
 
         deleteAnalysisButton.tap()
@@ -4903,10 +4899,10 @@ final class OpenCastUITests: XCTestCase {
             "The stale banner should clear after deleting the analysis."
         )
         openTranscriptOptionsMenu(in: app)
-        let analyzeItem = app.buttons["Analyze Promos & Ads"]
+        let analyzeItem = app.buttons["Detect Ads"]
         assertExists(analyzeItem, named: "Analyze action after deleting stale analysis")
         XCTAssertTrue(analyzeItem.isEnabled, "Analyze should be offered after deleting the analysis")
-        assertDoesNotExist(app.buttons["Delete Promo/Ad Analysis"], named: "Delete action after deleting stale analysis", timeout: 1)
+        assertDoesNotExist(app.buttons["Delete Ad Analysis"], named: "Delete action after deleting stale analysis", timeout: 1)
         dismissTranscriptOptionsMenu(in: app)
         assertExists(app.buttons["This row is brought to you by Seed Sponsor."], named: "transcript line after deleting stale promo/ad analysis")
     }
@@ -8236,7 +8232,7 @@ final class OpenCastUITests: XCTestCase {
         let inboxEpisode = seededEpisodeRow(in: app)
         assertExists(inboxEpisode, named: "seeded inbox episode")
         inboxEpisode.press(forDuration: 1.2)
-        let detailsAction = app.buttons["View Episode Details"]
+        let detailsAction = app.buttons["Go to Episode"]
         assertExists(detailsAction, named: "seeded inbox episode details context action")
         detailsAction.tap()
         assertExists(app.buttons["Play Episode"], named: "seeded episode detail")
@@ -8737,7 +8733,7 @@ final class OpenCastUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }
 
-    /// A show in the Group by Podcast Inbox, as a list row or grid tile; its
+    /// A show in the Group by Show Inbox, as a list row or grid tile; its
     /// value carries the show's count of matching episodes.
     @MainActor
     private func inboxPodcastGroup(_ feedURL: String, in app: XCUIApplication) -> XCUIElement {
@@ -9195,7 +9191,7 @@ final class OpenCastUITests: XCTestCase {
         assertExists(row, named: "\(name) row", file: file, line: line)
         row.press(forDuration: 1.2)
 
-        let detailsAction = app.buttons["View Episode Details"]
+        let detailsAction = app.buttons["Go to Episode"]
         assertExists(detailsAction, named: "\(name) details context action", file: file, line: line)
         if expectsGoToShow {
             assertExists(

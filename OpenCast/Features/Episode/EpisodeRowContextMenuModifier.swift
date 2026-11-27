@@ -23,7 +23,7 @@ struct EpisodeRowContextMenuModifier: ViewModifier {
             Section {
                 EpisodeShareMenu(episode: episode)
             }
-            Button("View Episode Details", systemImage: "info.circle", action: viewDetails)
+            Button("Go to Episode", systemImage: "info.circle", action: viewDetails)
             if showsGoToShow {
                 TwoPaneRootLink(route: .podcastDetail(feedURL: episode.podcastID), selectionStyle: .menuItem) {
                     Label("Go to Show", systemImage: "rectangle.stack")

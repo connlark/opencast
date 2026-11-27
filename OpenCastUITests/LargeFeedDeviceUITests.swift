@@ -184,7 +184,7 @@ final class LargeFeedDeviceUITests: XCTestCase {
         attach(app, "Herd-retry-header-recycled")
         let episodeRow = try XCTUnwrap(episodeRows.allElementsBoundByIndex.first(where: \.isHittable))
         episodeRow.press(forDuration: 1.2)
-        let viewDetails = app.buttons["View Episode Details"].firstMatch
+        let viewDetails = app.buttons["Go to Episode"].firstMatch
         XCTAssertTrue(viewDetails.waitForExistence(timeout: 5))
         viewDetails.tap()
         XCTAssertTrue(app.buttons["Episode Actions"].waitForExistence(timeout: 15))

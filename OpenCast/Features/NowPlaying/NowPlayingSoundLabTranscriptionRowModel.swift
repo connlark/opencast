@@ -19,7 +19,7 @@ nonisolated struct NowPlayingSoundLabTranscriptionRowModel: Equatable {
     ) {
         if hasCompletedTranscript {
             action = .showTranscript
-            title = String(localized: "Show Transcript")
+            title = String(localized: "View Transcript")
             systemImage = "text.quote"
             phase = .completed
             isEnabled = true

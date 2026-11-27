@@ -12,6 +12,14 @@ import XCTest
 /// resolves exactly today's query. The Duo's open poses are not probed yet;
 /// there the helpers keep today's behaviour.
 extension XCTestCase {
+    /// The Library row's swipe action has the same label as the dialog's button.
+    @MainActor
+    func unsubscribeConfirmationButton(in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(
+            NSPredicate(format: "label == %@ AND identifier != %@", "Unsubscribe", "Remove Podcast Swipe Action")
+        ).firstMatch
+    }
+
     /// Opens a Settings hub row and waits for its sub-screen. A second tap on
     /// the Settings tab pops any pushed stack back to the hub first.
     @MainActor

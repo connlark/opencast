@@ -14,20 +14,20 @@ struct SettingsDeleteDataView: View {
         Form {
             Section {
                 Button(
-                    "Clear History for Unfollowed Shows",
+                    "Clear History for Unsubscribed Shows",
                     systemImage: "clock.badge.xmark",
                     role: .destructive,
                     action: confirmClearUnfollowedHistory
                 )
                 .confirmationDialog(
-                    "Clear history for unfollowed shows?",
+                    "Clear history for unsubscribed shows?",
                     isPresented: $isConfirmingClearUnfollowedHistory,
                     titleVisibility: .visible
                 ) {
                     Button("Clear History", role: .destructive, action: clearUnfollowedHistory)
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("Played status and playback positions for every show you don't currently follow will be removed, and the change syncs to your other devices.")
+                    Text("Played status and playback positions for every show you're not subscribed to will be removed, and the change syncs to your other devices.")
                 }
 
                 Button("Delete All Private Notes", systemImage: "note.text", role: .destructive) {

@@ -1,6 +1,6 @@
 import XCTest
 
-/// Analyze Promos & Ads from the transcript's menu waits behind the one-time
+/// Detect Ads from the transcript's menu waits behind the one-time
 /// key notice like every other analysis start: OK runs the held analysis
 /// once, and the notice never shows again. With no key saved the analysis
 /// runs on the free analyses through the app's fixture transport; no request
@@ -20,8 +20,8 @@ final class TranscriptAnalyzeKeyNoticeUITests: XCTestCase {
         openSeededTranscript(in: app)
 
         openTranscriptOptions(in: app)
-        let analyze = app.buttons["Analyze Promos & Ads"]
-        assertExists(analyze, named: "Analyze Promos & Ads", timeout: 5)
+        let analyze = app.buttons["Detect Ads"]
+        assertExists(analyze, named: "Detect Ads", timeout: 5)
         analyze.tap()
 
         let ok = app.buttons["AI Key Notice OK"]
@@ -41,8 +41,8 @@ final class TranscriptAnalyzeKeyNoticeUITests: XCTestCase {
 
         // The notice shows once: the next analysis starts at once.
         openTranscriptOptions(in: app)
-        let reanalyze = app.buttons["Reanalyze Promos & Ads"]
-        assertExists(reanalyze, named: "Reanalyze Promos & Ads", timeout: 5)
+        let reanalyze = app.buttons["Detect Ads Again"]
+        assertExists(reanalyze, named: "Detect Ads Again", timeout: 5)
         reanalyze.tap()
         assertDoesNotExist(app.buttons["AI Key Notice OK"], named: "notice on the second analysis", timeout: 3)
     }
@@ -75,8 +75,8 @@ final class TranscriptAnalyzeKeyNoticeUITests: XCTestCase {
         let row = app.buttons.matching(identifier: Self.seededEpisodeRowIdentifier).firstMatch
         assertExists(row, named: "seeded inbox episode", timeout: 10, file: file, line: line)
         row.press(forDuration: 1.2)
-        let details = app.buttons["View Episode Details"]
-        assertExists(details, named: "View Episode Details context action", file: file, line: line)
+        let details = app.buttons["Go to Episode"]
+        assertExists(details, named: "Go to Episode context action", file: file, line: line)
         details.tap()
         let readTranscript = app.buttons["Read Transcript"]
         for _ in 0..<8 where !(readTranscript.exists && readTranscript.isHittable) {

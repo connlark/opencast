@@ -96,7 +96,7 @@ struct NowPlayingSoundLabTitledFitTests {
         "At the Closed row area every title is whole in the done state and the idle long titles too",
         arguments: [
             (title: "Reanalyze", phase: EpisodeAdFreePassPresentationPhase.completed),
-            (title: "Show Transcript", phase: .completed),
+            (title: "View Transcript", phase: .completed),
             (title: "Skip Promos & Ads", phase: .idle),
             (title: "Detect Ads Again", phase: .idle),
             (title: "Transcribe", phase: .idle),

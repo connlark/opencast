@@ -35,7 +35,7 @@ struct NowPlayingSoundLabLayoutTests {
     }
 
     @MainActor
-    @Test("Idle action rows fit the threshold at the default text size", arguments: ["Skip Promos & Ads", "Show Transcript"])
+    @Test("Idle action rows fit the threshold at the default text size", arguments: ["Skip Promos & Ads", "View Transcript"])
     func idleActionRowsFitThreshold(title: String) {
         let row = NowPlayingSoundLabActionRow(
             title: title,

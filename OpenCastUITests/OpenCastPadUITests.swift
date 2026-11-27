@@ -174,12 +174,12 @@ final class OpenCastPadUITests: XCTestCase {
         assertExists(tile, named: "seeded library tile")
         tile.press(forDuration: 1.2)
 
-        let menuRemove = app.buttons["Remove Podcast"].firstMatch
-        assertExists(menuRemove, named: "tile Remove Podcast context action")
+        let menuRemove = app.buttons["Unsubscribe"].firstMatch
+        assertExists(menuRemove, named: "tile Unsubscribe context action")
         menuRemove.tap()
 
-        let confirmationRemove = app.buttons["Remove Podcast"].firstMatch
-        assertExists(confirmationRemove, named: "tile Remove Podcast confirmation")
+        let confirmationRemove = app.buttons["Unsubscribe"].firstMatch
+        assertExists(confirmationRemove, named: "tile Unsubscribe confirmation")
         confirmationRemove.tap()
 
         assertExists(app.staticTexts["No Subscriptions"], named: "empty Library after tile removal")
@@ -194,7 +194,7 @@ final class OpenCastPadUITests: XCTestCase {
         let tile = seededSubscriptionTile(in: app)
         assertHittable(tile, named: "library tile before swipe")
         tile.swipeLeft()
-        let confirmation = app.buttons["Remove & Clear History"]
+        let confirmation = app.buttons["Unsubscribe & Clear History"]
         if !confirmation.waitForExistence(timeout: 2) {
             app.buttons["Remove Podcast Swipe Action"].firstMatch.tap()
         }
@@ -215,7 +215,7 @@ final class OpenCastPadUITests: XCTestCase {
             app.buttons["Remove Podcast Swipe Action"].firstMatch.tap()
         }
         assertExists(confirmation, named: "second tile removal confirmation")
-        app.buttons["Remove Podcast"].firstMatch.tap()
+        unsubscribeConfirmationButton(in: app).tap()
         assertExists(app.staticTexts["No Subscriptions"], named: "empty Library after confirmed swipe removal")
     }
 
@@ -363,9 +363,9 @@ final class OpenCastPadUITests: XCTestCase {
         assertHittable(filterMenu, named: "Inbox filter menu")
         filterMenu.tap()
         let groupToggle = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label == %@", "Group by Podcast"))
+            .matching(NSPredicate(format: "label == %@", "Group by Show"))
             .firstMatch
-        assertExists(groupToggle, named: "Group by Podcast toggle")
+        assertExists(groupToggle, named: "Group by Show toggle")
         groupToggle.tap()
 
         // Automatic resolves to the grid at regular width.
@@ -946,7 +946,7 @@ final class OpenCastPadUITests: XCTestCase {
         assertExists(row, named: "\(name) row", file: file, line: line)
         row.press(forDuration: 1.2)
 
-        let detailsAction = app.buttons["View Episode Details"]
+        let detailsAction = app.buttons["Go to Episode"]
         assertExists(detailsAction, named: "\(name) details context action", file: file, line: line)
         detailsAction.tap()
         assertExists(app.buttons["Play Episode"], named: "\(name) episode detail", file: file, line: line)

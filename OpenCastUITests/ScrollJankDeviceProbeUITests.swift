@@ -148,7 +148,7 @@ final class ScrollJankDeviceProbeUITests: XCTestCase {
             return false
         }
 
-        let onDevice = app.buttons["Detect On This Device"]
+        let onDevice = app.buttons["Detect on This Device"]
         if onDevice.waitForExistence(timeout: 4) {
             onDevice.tap()
         }
@@ -179,7 +179,7 @@ final class ScrollJankDeviceProbeUITests: XCTestCase {
 
         for _ in 0..<2 {
             row.press(forDuration: 1.2)
-            if app.buttons["View Episode Details"].waitForExistence(timeout: 4) {
+            if app.buttons["Go to Episode"].waitForExistence(timeout: 4) {
                 break
             }
         }

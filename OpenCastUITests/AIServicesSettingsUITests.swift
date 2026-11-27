@@ -389,18 +389,18 @@ final class AIServicesSettingsUITests: XCTestCase {
         let ok = app.buttons["AI Key Notice OK"]
         assertHittable(ok, named: "notice OK button", timeout: 10)
         assertExists(app.buttons["AI Key Notice Learn More"], named: "notice Learn More button")
-        assertDoesNotExist(app.buttons["Detect On This Device"], named: "mode dialog while the notice holds the tap")
+        assertDoesNotExist(app.buttons["Detect on This Device"], named: "mode dialog while the notice holds the tap")
         attachSmokeScreenshot(named: "analysis_key_notice")
 
         ok.tap()
         assertDoesNotExist(ok, named: "notice after OK", timeout: 5)
-        assertExists(app.buttons["Detect On This Device"], named: "mode dialog after OK", timeout: 10)
+        assertExists(app.buttons["Detect on This Device"], named: "mode dialog after OK", timeout: 10)
         dismissDialog(in: app)
-        assertDoesNotExist(app.buttons["Detect On This Device"], named: "mode dialog after dismissal", timeout: 5)
+        assertDoesNotExist(app.buttons["Detect on This Device"], named: "mode dialog after dismissal", timeout: 5)
 
         assertHittable(makeAdFree, named: "Make Ad-Free for the second tap")
         makeAdFree.tap()
-        assertExists(app.buttons["Detect On This Device"], named: "mode dialog on the second tap", timeout: 10)
+        assertExists(app.buttons["Detect on This Device"], named: "mode dialog on the second tap", timeout: 10)
         XCTAssertFalse(app.buttons["AI Key Notice OK"].exists, "The notice shows once")
     }
 
@@ -684,8 +684,8 @@ final class AIServicesSettingsUITests: XCTestCase {
         let row = app.buttons.matching(identifier: Self.seededEpisodeRowIdentifier).firstMatch
         assertExists(row, named: "seeded inbox episode", timeout: 10, file: file, line: line)
         row.press(forDuration: 1.2)
-        let details = app.buttons["View Episode Details"]
-        assertExists(details, named: "View Episode Details context action", file: file, line: line)
+        let details = app.buttons["Go to Episode"]
+        assertExists(details, named: "Go to Episode context action", file: file, line: line)
         details.tap()
         assertExists(app.buttons["Episode Playback Control"], named: "seeded episode detail", timeout: 10, file: file, line: line)
     }

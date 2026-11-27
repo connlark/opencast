@@ -9,7 +9,7 @@ struct TranscriptAdAnalysisBanner: View {
             HStack(spacing: 10) {
                 ProgressView()
                     .controlSize(.small)
-                Text("Analyzing Promos & Ads")
+                Text("Detecting Ads")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -17,7 +17,7 @@ struct TranscriptAdAnalysisBanner: View {
         case .failed(let record, let isStale):
             VStack(alignment: .leading, spacing: 2) {
                 Label(
-                    isStale ? EpisodeAdAnalysisControlsView.outdatedStatusTitle : "Promo/Ad Analysis Failed",
+                    isStale ? EpisodeAdAnalysisControlsView.outdatedStatusTitle : "Ad Detection Failed",
                     systemImage: "exclamationmark.triangle"
                 )
                 .font(.footnote)

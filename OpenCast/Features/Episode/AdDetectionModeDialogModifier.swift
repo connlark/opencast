@@ -23,7 +23,7 @@ struct AdDetectionModeDialogModifier: ViewModifier {
             titleVisibility: .visible
         ) {
             Button("Use Cloud Credits", action: chooseCloud)
-            Button("Detect On This Device", action: chooseOnDevice)
+            Button("Detect on This Device", action: chooseOnDevice)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(

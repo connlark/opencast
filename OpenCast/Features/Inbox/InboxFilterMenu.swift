@@ -22,7 +22,7 @@ struct InboxFilterMenu: View {
             Divider()
             // Not the Automatic layout's glyph, which sits in the next menu.
             Toggle(isOn: groupsByPodcastBinding) {
-                Label("Group by Podcast", systemImage: "square.stack")
+                Label("Group by Show", systemImage: "square.stack")
             }
         } label: {
             // The title carries the state: the toolbar shows the icon only, and a toolbar menu

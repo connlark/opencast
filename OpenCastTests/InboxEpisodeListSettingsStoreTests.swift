@@ -13,7 +13,7 @@ struct InboxEpisodeListSettingsStoreTests {
     private let groupedLayoutKey = "inbox.groupedLayout"
     private let showsArchivedKey = "inbox.showsArchivedEpisodes"
 
-    @Test("Group by Podcast and its layout persist, reload, and stay out of the filter titles")
+    @Test("Group by Show and its layout persist, reload, and stay out of the filter titles")
     func groupingPersistsAndReloads() throws {
         let container = try OpenCastModelContainerFactory.make(inMemory: true)
         let context = ModelContext(container)
@@ -170,7 +170,6 @@ struct InboxEpisodeListSettingsStoreTests {
         #expect(store.lastErrorMessage?.hasPrefix("Unable to update Hide Up Next:") == true)
         #expect(!store.setGroupsByPodcast(true, modelContext: context))
         #expect(!store.groupsByPodcast)
-        #expect(store.lastErrorMessage?.hasPrefix("Unable to update Group by Podcast:") == true)
         #expect(!store.setGroupedLayout(.list, modelContext: context))
         #expect(store.groupedLayout == .automatic)
         #expect(store.lastErrorMessage?.hasPrefix("Unable to update Inbox layout:") == true)

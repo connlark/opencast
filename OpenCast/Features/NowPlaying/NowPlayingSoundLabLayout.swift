@@ -65,7 +65,7 @@ nonisolated struct NowPlayingSoundLabLayout {
         ActionTitle(title: "Retry", width: 37),
         ActionTitle(title: "Transcribe", width: 73),
         ActionTitle(title: "Transcribe Remotely", width: 141),
-        ActionTitle(title: "Show Transcript", width: 111)
+        ActionTitle(title: "View Transcript", width: 107)
     ]
 
     static let glyphActionRowFixedWidth: CGFloat = 2 * (controlHorizontalPadding + nativeGlassButtonSideChrome)

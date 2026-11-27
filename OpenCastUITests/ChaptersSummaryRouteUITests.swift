@@ -168,8 +168,8 @@ final class ChaptersSummaryRouteUITests: XCTestCase {
         let row = app.buttons.matching(identifier: Self.seededEpisodeRowIdentifier).firstMatch
         assertExists(row, named: "seeded inbox episode", timeout: 10, file: file, line: line)
         row.press(forDuration: 1.2)
-        let details = app.buttons["View Episode Details"]
-        assertExists(details, named: "View Episode Details context action", file: file, line: line)
+        let details = app.buttons["Go to Episode"]
+        assertExists(details, named: "Go to Episode context action", file: file, line: line)
         details.tap()
         assertExists(app.buttons["Episode Playback Control"], named: "seeded episode detail", timeout: 10, file: file, line: line)
     }

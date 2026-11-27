@@ -568,12 +568,12 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
             }
             dragIntoReach(row, named: "library row to remove", in: app)
             row.swipeLeft()
-            let removeAction = app.buttons["Remove"].firstMatch
+            let removeAction = app.buttons["Remove Podcast Swipe Action"].firstMatch
             guard removeAction.waitForExistence(timeout: 6) else {
                 continue
             }
             removeAction.tap()
-            let confirm = app.buttons["Remove & Clear History"].firstMatch
+            let confirm = app.buttons["Unsubscribe & Clear History"].firstMatch
             if confirm.waitForExistence(timeout: 8) {
                 confirm.tap()
                 sleep(2)
@@ -789,7 +789,7 @@ final class TranscriptAnalysisDeviceE2EUITests: XCTestCase {
         for _ in 0..<3 {
             dragIntoReach(row, named: "episode row", in: app)
             row.press(forDuration: 1.2)
-            let detailsButton = app.buttons["View Episode Details"]
+            let detailsButton = app.buttons["Go to Episode"]
             if detailsButton.waitForExistence(timeout: 4) {
                 detailsButton.tap()
                 break

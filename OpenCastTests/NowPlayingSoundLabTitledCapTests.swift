@@ -44,7 +44,7 @@ struct NowPlayingSoundLabTitledCapTests {
             (title: "Transcribe", phase: .running),
             (title: "Transcribe Remotely", phase: .checking),
             (title: "Transcribe Remotely", phase: .running),
-            (title: "Show Transcript", phase: .completed)
+            (title: "View Transcript", phase: .completed)
         ]
     )
     func glyphStates(title: String, phase: EpisodeAdFreePassPresentationPhase) throws {

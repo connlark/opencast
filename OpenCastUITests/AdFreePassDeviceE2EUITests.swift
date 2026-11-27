@@ -451,8 +451,8 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
     private func resetEpisodeAnalysis(for episodeTitle: String, in app: XCUIApplication) {
         let row = searchEpisodeRow(for: episodeTitle, in: app)
         row.press(forDuration: 1.2)
-        let detailsButton = app.buttons["View Episode Details"]
-        assertExists(detailsButton, named: "View Episode Details for \(episodeTitle)", timeout: 10)
+        let detailsButton = app.buttons["Go to Episode"]
+        assertExists(detailsButton, named: "Go to Episode for \(episodeTitle)", timeout: 10)
         detailsButton.tap()
 
         let episodeActionsButton = app.buttons["Episode Actions"]
@@ -481,7 +481,7 @@ final class AdFreePassDeviceE2EUITests: XCTestCase {
             let identifier = row.identifier
             for _ in 0..<2 {
                 row.press(forDuration: 1.2)
-                if app.buttons["View Episode Details"].waitForExistence(timeout: 4) {
+                if app.buttons["Go to Episode"].waitForExistence(timeout: 4) {
                     break
                 }
             }

@@ -78,7 +78,7 @@ struct EpisodeTranscriptMenu: View {
         ) {
             Button("Delete Transcript", role: .destructive, action: onDeleteTranscript)
         } message: {
-            Text("This also deletes the promo/ad analysis for this episode.")
+            Text("This also deletes the ad analysis for this episode.")
         }
         .confirmationDialog(
             "Improve Transcript with Apple Speech?",
@@ -95,28 +95,28 @@ struct EpisodeTranscriptMenu: View {
     private var adAnalysisActions: some View {
         switch adAnalysisState {
         case .unavailable:
-            Button("Analyze Promos & Ads", systemImage: "megaphone", action: onAnalyzeAds)
+            Button("Detect Ads", systemImage: "megaphone", action: onAnalyzeAds)
                 .disabled(true)
         case .ready:
-            Button("Analyze Promos & Ads", systemImage: "megaphone", action: onAnalyzeAds)
+            Button("Detect Ads", systemImage: "megaphone", action: onAnalyzeAds)
                 .disabled(!canAnalyze)
         case .running:
-            Button("Analyzing Promos & Ads…", systemImage: "megaphone", action: onAnalyzeAds)
+            Button("Detecting Ads…", systemImage: "megaphone", action: onAnalyzeAds)
                 .disabled(true)
         case .completed(_, let isStale):
             if canAnalyze {
                 Button(
-                    isStale ? "Analyze Promos & Ads" : "Reanalyze Promos & Ads",
+                    isStale ? "Detect Ads" : "Detect Ads Again",
                     systemImage: "arrow.clockwise",
                     action: onAnalyzeAds
                 )
             }
-            Button("Delete Promo/Ad Analysis", systemImage: "trash", role: .destructive, action: onDeleteAdAnalysis)
+            Button("Delete Ad Analysis", systemImage: "trash", role: .destructive, action: onDeleteAdAnalysis)
         case .failed:
             if canAnalyze {
-                Button("Retry Promo/Ad Analysis", systemImage: "arrow.clockwise", action: onAnalyzeAds)
+                Button("Retry Ad Detection", systemImage: "arrow.clockwise", action: onAnalyzeAds)
             }
-            Button("Delete Promo/Ad Analysis", systemImage: "trash", role: .destructive, action: onDeleteAdAnalysis)
+            Button("Delete Ad Analysis", systemImage: "trash", role: .destructive, action: onDeleteAdAnalysis)
         }
     }
 

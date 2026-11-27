@@ -746,7 +746,7 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
     /// confirmation shape as the podcast actions menu.
     @MainActor
     private func unsubscribeExercisePodcast(clearingHistory: Bool, in app: XCUIApplication) {
-        let confirmTitle = clearingHistory ? "Remove & Clear History" : "Remove Podcast"
+        let confirmTitle = clearingHistory ? "Unsubscribe & Clear History" : "Unsubscribe"
         for _ in 0..<3 {
             guard libraryHasExercisePodcast(in: app) else {
                 continue
@@ -756,12 +756,14 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
                 continue
             }
             row.swipeLeft()
-            let removeAction = app.buttons["Remove"].firstMatch
+            let removeAction = app.buttons["Remove Podcast Swipe Action"].firstMatch
             guard removeAction.waitForExistence(timeout: 6) else {
                 continue
             }
             removeAction.tap()
-            let confirm = app.buttons[confirmTitle].firstMatch
+            let confirm = clearingHistory
+                ? app.buttons[confirmTitle].firstMatch
+                : unsubscribeConfirmationButton(in: app)
             if confirm.waitForExistence(timeout: 8) {
                 confirm.tap()
                 sleep(2)
@@ -795,12 +797,12 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
                 continue
             }
             row.swipeLeft()
-            let removeAction = app.buttons["Remove"].firstMatch
+            let removeAction = app.buttons["Remove Podcast Swipe Action"].firstMatch
             guard removeAction.waitForExistence(timeout: 6) else {
                 continue
             }
             removeAction.tap()
-            let confirm = app.buttons["Remove & Clear History"].firstMatch
+            let confirm = app.buttons["Unsubscribe & Clear History"].firstMatch
             if confirm.waitForExistence(timeout: 8) {
                 confirm.tap()
                 sleep(2)
@@ -1106,7 +1108,7 @@ final class SyncBehaviorsDeviceE2EUITests: XCTestCase {
         deleteDataRow.tap()
         XCTAssertTrue(waitForScreen("Delete Data", in: app, timeout: 10), "Delete Data screen should push")
 
-        let clearButton = app.buttons["Clear History for Unfollowed Shows"].firstMatch
+        let clearButton = app.buttons["Clear History for Unsubscribed Shows"].firstMatch
         XCTAssertTrue(clearButton.waitForExistence(timeout: 10), "manual clear action should exist")
         clearButton.tap()
 

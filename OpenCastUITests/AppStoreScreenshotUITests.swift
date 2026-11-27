@@ -1142,13 +1142,13 @@ final class AppStoreScreenshotUITests: XCTestCase {
     private func openEpisodeDetailFromContextMenu(episodeID: String, in app: XCUIApplication) {
         let row = episodeRow(episodeID, in: app)
         scrollUntilHittable(row, in: app)
-        let detailsAction = app.buttons["View Episode Details"].firstMatch
+        let detailsAction = app.buttons["Go to Episode"].firstMatch
         for attempt in 0..<2 {
             row.press(forDuration: 1.3)
             if detailsAction.waitForExistence(timeout: 4) {
                 break
             }
-            XCTAssertEqual(attempt, 0, "View Episode Details context action should exist")
+            XCTAssertEqual(attempt, 0, "Go to Episode context action should exist")
             gestureSurface(in: app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08)).tap()
             Thread.sleep(forTimeInterval: 0.8)
         }
@@ -1360,9 +1360,9 @@ final class AppStoreScreenshotUITests: XCTestCase {
 
     @MainActor
     private func assertCompletedTranscriptReady(in app: XCUIApplication) {
-        let control = app.descendants(matching: .any)["Show Transcript"].firstMatch
-        assertExists(control, named: "Show Transcript control")
-        XCTAssertTrue(control.isEnabled, "Show Transcript control should be ready to open")
+        let control = app.descendants(matching: .any)["View Transcript"].firstMatch
+        assertExists(control, named: "View Transcript control")
+        XCTAssertTrue(control.isEnabled, "View Transcript control should be ready to open")
     }
 
     @MainActor

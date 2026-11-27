@@ -15,7 +15,7 @@ struct SubscriptionRemovalModifier: ViewModifier {
     func body(content: Content) -> some View {
         decoratedContent(content)
             .alert(
-                "Remove Podcast",
+                "Couldn’t Unsubscribe",
                 item: $removalErrorMessage
             ) { _ in
             } message: { message in
@@ -35,7 +35,7 @@ struct SubscriptionRemovalModifier: ViewModifier {
                     swipeRemoveButton
                 }
                 .confirmationDialog(
-                    "Remove \(subscription.title)?",
+                    "Unsubscribe from \(subscription.title)?",
                     isPresented: $isConfirmingRemoval,
                     titleVisibility: .visible
                 ) {
@@ -49,7 +49,7 @@ struct SubscriptionRemovalModifier: ViewModifier {
                     swipeRemoveButton
                 }
                 .confirmationDialog(
-                    "Remove \(subscription.title)?",
+                    "Unsubscribe from \(subscription.title)?",
                     isPresented: $isConfirmingRemoval,
                     titleVisibility: .visible
                 ) {
@@ -63,7 +63,7 @@ struct SubscriptionRemovalModifier: ViewModifier {
                     contextMenuRemoveButton
                 }
                 .confirmationDialog(
-                    "Remove \(subscription.title)?",
+                    "Unsubscribe from \(subscription.title)?",
                     isPresented: $isConfirmingRemoval,
                     titleVisibility: .visible
                 ) {
@@ -74,7 +74,7 @@ struct SubscriptionRemovalModifier: ViewModifier {
         case (false, false):
             content
                 .confirmationDialog(
-                    "Remove \(subscription.title)?",
+                    "Unsubscribe from \(subscription.title)?",
                     isPresented: $isConfirmingRemoval,
                     titleVisibility: .visible
                 ) {
@@ -86,20 +86,20 @@ struct SubscriptionRemovalModifier: ViewModifier {
     }
 
     private var swipeRemoveButton: some View {
-        Button("Remove", systemImage: "trash", action: confirmRemoval)
+        Button("Unsubscribe", systemImage: "trash", action: confirmRemoval)
             .tint(.red)
-            .accessibilityLabel("Remove")
+            .accessibilityLabel("Unsubscribe")
             .accessibilityIdentifier("Remove Podcast Swipe Action")
     }
 
     private var contextMenuRemoveButton: some View {
-        Button("Remove Podcast", systemImage: "trash", role: .destructive, action: confirmRemoval)
+        Button("Unsubscribe", systemImage: "trash", role: .destructive, action: confirmRemoval)
     }
 
     @ViewBuilder
     private var removalDialogButtons: some View {
-        Button("Remove Podcast", role: .destructive, action: removePodcast)
-        Button("Remove & Clear History", role: .destructive, action: removePodcastAndClearHistory)
+        Button("Unsubscribe", role: .destructive, action: removePodcast)
+        Button("Unsubscribe & Clear History", role: .destructive, action: removePodcastAndClearHistory)
         Button("Cancel", role: .cancel) {}
     }
 

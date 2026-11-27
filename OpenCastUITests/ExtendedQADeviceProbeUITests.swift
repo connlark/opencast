@@ -516,12 +516,12 @@ final class ExtendedQADeviceProbeUITests: XCTestCase {
 
         for _ in 0..<2 {
             row.press(forDuration: 1.2)
-            if app.buttons["View Episode Details"].waitForExistence(timeout: 4) {
+            if app.buttons["Go to Episode"].waitForExistence(timeout: 4) {
                 break
             }
         }
-        let detailButton = app.buttons["View Episode Details"]
-        XCTAssertTrue(detailButton.exists, "context menu must offer View Episode Details")
+        let detailButton = app.buttons["Go to Episode"]
+        XCTAssertTrue(detailButton.exists, "context menu must offer Go to Episode")
         detailButton.tap()
         XCTAssertTrue(
             app.buttons["Episode Actions"].waitForExistence(timeout: 10),
